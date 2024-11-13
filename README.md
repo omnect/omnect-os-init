@@ -1,0 +1,1 @@
+# omnect-os-init
