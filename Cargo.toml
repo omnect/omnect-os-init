@@ -1,0 +1,19 @@
+[package]
+authors = ["omnect@conplement.de"]
+build = "src/build.rs"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "omnect-os-init"
+repository = "git@github.com:omnect/omnect-os-init.git"
+version = "0.0.1"
+
+[dependencies]
+anyhow = "1"
+kernlog = "0"
+lazy_static = "1"
+log = "0"
+sys-mount = { version = "2", default-features = false }
+
+[features]
+ptable_gpt = []
+ptable_msdos = []
