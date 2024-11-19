@@ -70,6 +70,15 @@ fn setup_data() -> Result<()> {
         .mount("/rootfs/mnt/data/local", "/rootfs/usr/local")
         .with_context(|| "/rootfs/mnt/data/local -> /rootfs/usr/local")?;
 
+    #[cfg(feature = "persistent_var_log")]
+    {
+        create_dir_all("/rootfs/mnt/data/log").with_context(|| "/rootfs/mnt/data/log")?;
+        Mount::builder()
+            .flags(MountFlags::BIND)
+            .mount("/rootfs/mnt/data/log", "/rootfs/var/log")
+            .with_context(|| "/rootfs/mnt/data/log -> /rootfs/var/log")?;
+    }
+
     Ok(())
 }
 

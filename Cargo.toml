@@ -17,3 +17,4 @@ sys-mount = { version = "2", default-features = false }
 [features]
 ptable_gpt = []
 ptable_msdos = []
+persistent_var_log = []
