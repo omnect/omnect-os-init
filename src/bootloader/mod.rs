@@ -1,0 +1,185 @@
+//! Bootloader abstraction module
+//!
+//! This module provides a trait-based abstraction over different bootloaders
+//! (GRUB and U-Boot) to allow unified access to bootloader environment variables.
+
+mod grub;
+mod types;
+mod uboot;
+
+pub use grub::GrubBootloader;
+pub use types::BootloaderType;
+pub use uboot::UBootBootloader;
+
+use crate::error::Result;
+use std::path::Path;
+
+/// Trait for bootloader environment access
+///
+/// This trait abstracts the differences between GRUB and U-Boot bootloader
+/// environment access, allowing the rest of the codebase to work with
+/// bootloader variables in a unified way.
+pub trait Bootloader: Send + Sync {
+    /// Get the value of a bootloader environment variable
+    ///
+    /// Returns `Ok(None)` if the variable doesn't exist.
+    /// Returns `Err` if there was an error accessing the bootloader environment.
+    fn get_env(&self, key: &str) -> Result<Option<String>>;
+
+    /// Set or delete a bootloader environment variable
+    ///
+    /// Pass `Some(value)` to set the variable, or `None` to delete it.
+    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()>;
+
+    /// Save fsck status to bootloader environment
+    ///
+    /// The status is compressed (gzip) and base64 encoded before storage.
+    fn save_fsck_status(&mut self, partition: &str, output: &str, code: i32) -> Result<()>;
+
+    /// Get fsck status from bootloader environment
+    ///
+    /// Returns the decompressed fsck output if it exists.
+    fn get_fsck_status(&self, partition: &str) -> Result<Option<String>>;
+
+    /// Clear fsck status from bootloader environment
+    fn clear_fsck_status(&mut self, partition: &str) -> Result<()>;
+
+    /// Get the bootloader type
+    fn bootloader_type(&self) -> BootloaderType;
+}
+
+/// Create the appropriate bootloader implementation based on the rootfs
+///
+/// Detects whether to use GRUB or U-Boot based on the presence of
+/// grub-editenv in the rootfs.
+pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
+    // Check for GRUB by looking for grub-editenv
+    let grub_editenv = rootfs_dir.join("usr/bin/grub-editenv");
+    
+    if grub_editenv.exists() {
+        log::info!("Detected GRUB bootloader (found grub-editenv)");
+        Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
+    } else {
+        log::info!("Detected U-Boot bootloader (no grub-editenv found)");
+        Ok(Box::new(UBootBootloader::new()?))
+    }
+}
+
+/// Create a mock bootloader for testing
+#[cfg(test)]
+pub fn create_mock_bootloader() -> MockBootloader {
+    MockBootloader::new()
+}
+
+/// Mock bootloader for testing
+#[cfg(test)]
+pub struct MockBootloader {
+    env: std::collections::HashMap<String, String>,
+}
+
+#[cfg(test)]
+impl MockBootloader {
+    pub fn new() -> Self {
+        Self {
+            env: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_env(mut self, key: &str, value: &str) -> Self {
+        self.env.insert(key.to_string(), value.to_string());
+        self
+    }
+}
+
+#[cfg(test)]
+impl Bootloader for MockBootloader {
+    fn get_env(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.env.get(key).cloned())
+    }
+
+    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => {
+                self.env.insert(key.to_string(), v.to_string());
+            }
+            None => {
+                self.env.remove(key);
+            }
+        }
+        Ok(())
+    }
+
+    fn save_fsck_status(&mut self, partition: &str, output: &str, _code: i32) -> Result<()> {
+        let key = format!("omnect_fsck_{}", partition);
+        let encoded = types::compress_and_encode(output)?;
+        self.env.insert(key, encoded);
+        Ok(())
+    }
+
+    fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {
+        let key = format!("omnect_fsck_{}", partition);
+        match self.env.get(&key) {
+            Some(encoded) => Ok(Some(types::decode_and_decompress(encoded)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
+        let key = format!("omnect_fsck_{}", partition);
+        self.env.remove(&key);
+        Ok(())
+    }
+
+    fn bootloader_type(&self) -> BootloaderType {
+        BootloaderType::Mock
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mock_bootloader_get_set() {
+        let mut bl = MockBootloader::new();
+        
+        // Test set and get
+        bl.set_env("test-key", Some("test-value")).unwrap();
+        assert_eq!(bl.get_env("test-key").unwrap(), Some("test-value".to_string()));
+        
+        // Test delete
+        bl.set_env("test-key", None).unwrap();
+        assert_eq!(bl.get_env("test-key").unwrap(), None);
+    }
+
+    #[test]
+    fn test_mock_bootloader_with_env() {
+        let bl = MockBootloader::new()
+            .with_env("factory-reset", r#"{"mode":1}"#)
+            .with_env("flash-mode", "1");
+
+        assert_eq!(bl.get_env("factory-reset").unwrap(), Some(r#"{"mode":1}"#.to_string()));
+        assert_eq!(bl.get_env("flash-mode").unwrap(), Some("1".to_string()));
+        assert_eq!(bl.get_env("nonexistent").unwrap(), None);
+    }
+
+    #[test]
+    fn test_mock_bootloader_fsck_status() {
+        let mut bl = MockBootloader::new();
+        
+        let fsck_output = "fsck from util-linux 2.37.2\n/dev/sda1: clean";
+        bl.save_fsck_status("boot", fsck_output, 0).unwrap();
+        
+        let retrieved = bl.get_fsck_status("boot").unwrap();
+        assert_eq!(retrieved, Some(fsck_output.to_string()));
+        
+        bl.clear_fsck_status("boot").unwrap();
+        assert_eq!(bl.get_fsck_status("boot").unwrap(), None);
+    }
+
+    #[test]
+    fn test_bootloader_type() {
+        let bl = MockBootloader::new();
+        assert_eq!(bl.bootloader_type(), BootloaderType::Mock);
+    }
+}
