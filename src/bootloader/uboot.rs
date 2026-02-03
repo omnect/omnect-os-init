@@ -1,62 +1,90 @@
 //! U-Boot bootloader implementation
 //!
-//! This module provides bootloader environment access for U-Boot-based systems
-//! (typically ARM). It uses the `fw_printenv` and `fw_setenv` commands to read
-//! and write environment variables.
-//!
-//! Note: A future improvement could use libubootenv bindings for direct access.
+//! This module provides access to U-Boot bootloader environment variables
+//! using `fw_printenv` and `fw_setenv` commands.
 
-use super::types::{compress_and_encode, decode_and_decompress, BootloaderType};
-use super::Bootloader;
-use crate::error::{BootloaderError, Result};
+use std::io::{Read, Write};
 use std::process::Command;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+
+use crate::bootloader::{Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result};
+use crate::error::BootloaderError;
+
+/// Command to read U-Boot environment variables
+const FW_PRINTENV_CMD: &str = "fw_printenv";
+
+/// Command to write U-Boot environment variables
+const FW_SETENV_CMD: &str = "fw_setenv";
+
+/// Compression level for fsck output (balance between size and speed)
+const COMPRESSION_LEVEL: u32 = 6;
+
 /// U-Boot bootloader implementation
+///
+/// Uses `fw_printenv` and `fw_setenv` to access environment variables.
+/// Fsck status is compressed (gzip) and base64 encoded to fit in the
+/// limited U-Boot environment space.
 pub struct UBootBootloader {
-    // No state needed - fw_printenv/fw_setenv handle everything
+    // No state needed - commands access environment directly
 }
 
 impl UBootBootloader {
-    /// Create a new UBootBootloader instance
+    /// Create a new U-Boot bootloader instance
     pub fn new() -> Result<Self> {
-        // Verify fw_printenv is available (suppress output)
-        let output = Command::new("which")
-            .arg("fw_printenv")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map_err(|e| BootloaderError::CommandFailed {
-                command: "which fw_printenv".to_string(),
-                reason: e.to_string(),
-            })?;
-
-        if !output.success() {
-            log::warn!("fw_printenv not found in PATH, U-Boot operations may fail");
-        }
-
         Ok(Self {})
     }
 
+    /// Compress and base64 encode data for storage
+    fn compress_and_encode(data: &str) -> Result<String> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::new(COMPRESSION_LEVEL));
+        encoder
+            .write_all(data.as_bytes())
+            .map_err(|e| BootloaderError::CompressionFailed(e.to_string()))?;
+
+        let compressed = encoder
+            .finish()
+            .map_err(|e| BootloaderError::CompressionFailed(e.to_string()))?;
+
+        Ok(BASE64_STANDARD.encode(&compressed))
+    }
+
+    /// Decode and decompress base64-encoded data
+    fn decode_and_decompress(encoded: &str) -> Result<String> {
+        let compressed = BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|e| BootloaderError::DecompressionFailed(e.to_string()))?;
+
+        let mut decoder = GzDecoder::new(&compressed[..]);
+        let mut decompressed = String::new();
+        decoder
+            .read_to_string(&mut decompressed)
+            .map_err(|e| BootloaderError::DecompressionFailed(e.to_string()))?;
+
+        Ok(decompressed)
+    }
+
     /// Run fw_printenv to get a variable
-    fn run_fw_printenv(&self, var_name: &str) -> Result<Option<String>> {
-        let output = Command::new("fw_printenv")
+    fn run_fw_printenv(&self, var: &str) -> Result<Option<String>> {
+        let output = Command::new(FW_PRINTENV_CMD)
             .arg("-n")
-            .arg(var_name)
+            .arg(var)
             .output()
             .map_err(|e| BootloaderError::CommandFailed {
-                command: "fw_printenv".to_string(),
+                command: FW_PRINTENV_CMD.to_string(),
                 reason: e.to_string(),
             })?;
 
+        // Exit code 1 typically means variable not found
         if !output.status.success() {
-            // fw_printenv returns non-zero if variable doesn't exist
             return Ok(None);
         }
 
-        let value = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
-
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if value.is_empty() {
             Ok(None)
         } else {
@@ -64,29 +92,26 @@ impl UBootBootloader {
         }
     }
 
-    /// Run fw_setenv to set or delete a variable
-    fn run_fw_setenv(&self, var_name: &str, value: Option<&str>) -> Result<()> {
-        let status = match value {
-            Some(v) => Command::new("fw_setenv")
-                .arg(var_name)
-                .arg(v)
-                .status(),
-            None => Command::new("fw_setenv")
-                .arg(var_name)
-                .status(),
-        };
+    /// Run fw_setenv to set or unset a variable
+    fn run_fw_setenv(&self, var: &str, value: Option<&str>) -> Result<()> {
+        let mut cmd = Command::new(FW_SETENV_CMD);
+        cmd.arg(var);
 
-        let status = status.map_err(|e| BootloaderError::CommandFailed {
-            command: "fw_setenv".to_string(),
+        if let Some(v) = value {
+            cmd.arg(v);
+        }
+
+        let output = cmd.output().map_err(|e| BootloaderError::CommandFailed {
+            command: FW_SETENV_CMD.to_string(),
             reason: e.to_string(),
         })?;
 
-        if !status.success() {
-            return Err(BootloaderError::WriteFailed {
-                name: var_name.to_string(),
-                reason: format!("fw_setenv returned exit code {}", status.code().unwrap_or(-1)),
-            }
-            .into());
+        if !output.status.success() {
+            return Err(BootloaderError::CommandExitCode {
+                command: FW_SETENV_CMD.to_string(),
+                code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
         }
 
         Ok(())
@@ -102,24 +127,24 @@ impl Bootloader for UBootBootloader {
         self.run_fw_setenv(key, value)
     }
 
-    fn save_fsck_status(&mut self, partition: &str, output: &str, _code: i32) -> Result<()> {
-        let key = format!("omnect_fsck_{}", partition);
-        let encoded = compress_and_encode(output)?;
-        self.run_fw_setenv(&key, Some(&encoded))
+    fn save_fsck_status(&mut self, partition: &str, output: &str, code: i32) -> Result<()> {
+        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
+        let value = format!("{}:{}", code, output);
+        let encoded = Self::compress_and_encode(&value)?;
+        self.run_fw_setenv(&var_name, Some(&encoded))
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {
-        let key = format!("omnect_fsck_{}", partition);
-        
-        match self.run_fw_printenv(&key)? {
-            Some(encoded) => Ok(Some(decode_and_decompress(&encoded)?)),
+        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
+        match self.run_fw_printenv(&var_name)? {
+            Some(encoded) => Ok(Some(Self::decode_and_decompress(&encoded)?)),
             None => Ok(None),
         }
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        let key = format!("omnect_fsck_{}", partition);
-        self.run_fw_setenv(&key, None)
+        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
+        self.run_fw_setenv(&var_name, None)
     }
 
     fn bootloader_type(&self) -> BootloaderType {
@@ -131,22 +156,23 @@ impl Bootloader for UBootBootloader {
 mod tests {
     use super::*;
 
-    // Note: These tests require fw_printenv/fw_setenv to be available
-    // They are disabled by default and run only in integration tests
-
     #[test]
-    fn test_uboot_bootloader_type() {
-        // This test doesn't require the actual commands
-        let bl = UBootBootloader {};
-        assert_eq!(bl.bootloader_type(), BootloaderType::UBoot);
+    fn test_compress_decompress_roundtrip() {
+        let original = "fsck from util-linux 2.37.2\n/dev/sda1: clean, 100/1000 files";
+
+        let encoded = UBootBootloader::compress_and_encode(original).unwrap();
+        let decoded = UBootBootloader::decode_and_decompress(&encoded).unwrap();
+
+        assert_eq!(original, decoded);
     }
 
     #[test]
-    fn test_fsck_key_format() {
-        // Verify the key format matches the bash script
-        let partition = "data";
-        let expected_key = "omnect_fsck_data";
-        let actual_key = format!("omnect_fsck_{}", partition);
-        assert_eq!(actual_key, expected_key);
+    fn test_compress_reduces_size() {
+        let original = "a]".repeat(1000);
+
+        let encoded = UBootBootloader::compress_and_encode(&original).unwrap();
+
+        // Compressed + base64 should still be smaller than original for repetitive data
+        assert!(encoded.len() < original.len());
     }
 }

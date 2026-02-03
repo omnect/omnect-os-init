@@ -7,12 +7,30 @@ mod grub;
 mod types;
 mod uboot;
 
-pub use grub::GrubBootloader;
-pub use types::BootloaderType;
-pub use uboot::UBootBootloader;
-
-use crate::error::Result;
 use std::path::Path;
+
+use crate::error::BootloaderError;
+
+pub use self::grub::GrubBootloader;
+pub use self::types::BootloaderType;
+pub use self::uboot::UBootBootloader;
+
+pub type Result<T> = std::result::Result<T, BootloaderError>;
+
+/// Bootloader environment variable names
+pub mod vars {
+    pub const FACTORY_RESET: &str = "factory-reset";
+    pub const FLASH_MODE: &str = "flash-mode";
+    pub const FLASH_MODE_DEVPATH: &str = "flash-mode-devpath";
+    pub const FLASH_MODE_URL: &str = "flash-mode-url";
+    pub const OMNECT_ROOTBLK: &str = "omnect_rootblk";
+    pub const RESIZED_DATA: &str = "resized-data";
+    pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
+    pub const DATA_MOUNT_OPTIONS: &str = "data-mount-options";
+}
+
+/// Prefix for fsck status variables in bootloader environment
+pub const FSCK_VAR_PREFIX: &str = "omnect_fsck_";
 
 /// Trait for bootloader environment access
 ///
@@ -48,19 +66,17 @@ pub trait Bootloader: Send + Sync {
     fn bootloader_type(&self) -> BootloaderType;
 }
 
-/// Create the appropriate bootloader implementation based on the rootfs
+/// Creates the appropriate bootloader implementation based on available tools.
 ///
-/// Detects whether to use GRUB or U-Boot based on the presence of
-/// grub-editenv in the rootfs.
+/// Detection logic:
+/// - If `grub-editenv` exists in the rootfs, use GRUB
+/// - Otherwise, use U-Boot (assumes fw_printenv/fw_setenv available)
 pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
-    // Check for GRUB by looking for grub-editenv
-    let grub_editenv = rootfs_dir.join("usr/bin/grub-editenv");
-    
-    if grub_editenv.exists() {
-        log::info!("Detected GRUB bootloader (found grub-editenv)");
+    const GRUB_EDITENV_PATH: &str = "usr/bin/grub-editenv";
+
+    if rootfs_dir.join(GRUB_EDITENV_PATH).exists() {
         Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
     } else {
-        log::info!("Detected U-Boot bootloader (no grub-editenv found)");
         Ok(Box::new(UBootBootloader::new()?))
     }
 }
@@ -142,11 +158,14 @@ mod tests {
     #[test]
     fn test_mock_bootloader_get_set() {
         let mut bl = MockBootloader::new();
-        
+
         // Test set and get
         bl.set_env("test-key", Some("test-value")).unwrap();
-        assert_eq!(bl.get_env("test-key").unwrap(), Some("test-value".to_string()));
-        
+        assert_eq!(
+            bl.get_env("test-key").unwrap(),
+            Some("test-value".to_string())
+        );
+
         // Test delete
         bl.set_env("test-key", None).unwrap();
         assert_eq!(bl.get_env("test-key").unwrap(), None);
@@ -158,7 +177,10 @@ mod tests {
             .with_env("factory-reset", r#"{"mode":1}"#)
             .with_env("flash-mode", "1");
 
-        assert_eq!(bl.get_env("factory-reset").unwrap(), Some(r#"{"mode":1}"#.to_string()));
+        assert_eq!(
+            bl.get_env("factory-reset").unwrap(),
+            Some(r#"{"mode":1}"#.to_string())
+        );
         assert_eq!(bl.get_env("flash-mode").unwrap(), Some("1".to_string()));
         assert_eq!(bl.get_env("nonexistent").unwrap(), None);
     }
@@ -166,13 +188,13 @@ mod tests {
     #[test]
     fn test_mock_bootloader_fsck_status() {
         let mut bl = MockBootloader::new();
-        
+
         let fsck_output = "fsck from util-linux 2.37.2\n/dev/sda1: clean";
         bl.save_fsck_status("boot", fsck_output, 0).unwrap();
-        
+
         let retrieved = bl.get_fsck_status("boot").unwrap();
         assert_eq!(retrieved, Some(fsck_output.to_string()));
-        
+
         bl.clear_fsck_status("boot").unwrap();
         assert_eq!(bl.get_fsck_status("boot").unwrap(), None);
     }

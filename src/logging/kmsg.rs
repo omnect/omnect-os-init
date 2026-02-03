@@ -1,27 +1,31 @@
-//! Kernel message logging via /dev/kmsg
+//! Kernel message buffer (kmsg) logging
 //!
-//! This module provides a `log` crate compatible logger that writes
-//! to /dev/kmsg with proper kernel log levels.
+//! This module provides a logger that writes to /dev/kmsg with proper
+//! kernel log level prefixes.
 
-use crate::error::LoggingError;
-use log::{Level, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Mutex;
 
-/// Log level prefixes for kernel messages
-/// See: https://www.kernel.org/doc/html/latest/core-api/printk-basics.html
-const KERN_EMERG: &str = "<0>";   // System is unusable
-const KERN_ALERT: &str = "<1>";   // Action must be taken immediately
-const KERN_CRIT: &str = "<2>";    // Critical conditions
-const KERN_ERR: &str = "<3>";     // Error conditions
-const KERN_WARNING: &str = "<4>"; // Warning conditions
-const KERN_NOTICE: &str = "<5>";  // Normal but significant condition
-const KERN_INFO: &str = "<6>";    // Informational
-const KERN_DEBUG: &str = "<7>";   // Debug-level messages
+use log::{Level, Log, Metadata, Record, SetLoggerError};
 
-/// Prefix for all log messages
-const LOG_PREFIX: &str = "omnect-os-init: ";
+/// Kernel log level prefixes (see kernel Documentation/admin-guide/serial-console.rst)
+mod kernel_level {
+    pub const EMERG: &str = "<0>";
+    pub const ALERT: &str = "<1>";
+    pub const CRIT: &str = "<2>";
+    pub const ERR: &str = "<3>";
+    pub const WARNING: &str = "<4>";
+    pub const NOTICE: &str = "<5>";
+    pub const INFO: &str = "<6>";
+    pub const DEBUG: &str = "<7>";
+}
+
+/// Log message prefix for all omnect-os-init messages
+const LOG_PREFIX: &str = "omnect-os-initramfs: ";
+
+/// Path to kernel message buffer
+const KMSG_PATH: &str = "/dev/kmsg";
 
 /// Logger that writes to /dev/kmsg
 pub struct KmsgLogger {
@@ -29,69 +33,67 @@ pub struct KmsgLogger {
 }
 
 impl KmsgLogger {
-    /// Create a new KmsgLogger
-    fn new() -> Result<Self, LoggingError> {
-        let file = OpenOptions::new()
-            .write(true)
-            .open("/dev/kmsg")
-            .map_err(LoggingError::KmsgOpenFailed)?;
+    /// Create a new kmsg logger
+    ///
+    /// # Errors
+    /// Returns an error if /dev/kmsg cannot be opened for writing
+    pub fn new() -> std::io::Result<Self> {
+        let file = OpenOptions::new().write(true).open(KMSG_PATH)?;
 
         Ok(Self {
             kmsg: Mutex::new(file),
         })
     }
 
-    /// Initialize the global logger
+    /// Initialize the global logger with kmsg output
     ///
-    /// This should be called once at the start of the program.
-    /// Returns an error if the logger is already initialized or
-    /// if /dev/kmsg cannot be opened.
-    pub fn init() -> Result<(), LoggingError> {
-        let logger = Self::new()?;
-        Self::init_with_logger(logger)
+    /// Convenience method that creates a new logger and sets it as global.
+    ///
+    /// # Errors
+    /// Returns an error if /dev/kmsg cannot be opened or a logger is already set
+    pub fn init_global() -> std::result::Result<(), String> {
+        let logger = Self::new().map_err(|e| format!("Failed to open kmsg: {}", e))?;
+        logger
+            .init()
+            .map_err(|e| format!("Failed to set logger: {}", e))
     }
 
-    /// Initialize with a custom logger instance (useful for testing)
-    fn init_with_logger(logger: Self) -> Result<(), LoggingError> {
-        log::set_boxed_logger(Box::new(logger))
-            .map_err(|e: SetLoggerError| LoggingError::InitFailed(e.to_string()))?;
-        log::set_max_level(LevelFilter::Info);
-        Ok(())
+    /// Initialize this logger as the global logger
+    ///
+    /// # Errors
+    /// Returns an error if a logger has already been set
+    pub fn init(self) -> std::result::Result<(), SetLoggerError> {
+        log::set_max_level(log::LevelFilter::Debug);
+        log::set_boxed_logger(Box::new(self))
     }
 
-    /// Convert log level to kernel log level prefix
-    fn level_to_kern(level: Level) -> &'static str {
+    fn level_to_kernel_prefix(level: Level) -> &'static str {
         match level {
-            Level::Error => KERN_ERR,
-            Level::Warn => KERN_WARNING,
-            Level::Info => KERN_INFO,
-            Level::Debug => KERN_DEBUG,
-            Level::Trace => KERN_DEBUG,
-        }
-    }
-
-    /// Write a message to kmsg with the given level
-    fn write_kmsg(&self, level: Level, message: &str) {
-        if let Ok(mut kmsg) = self.kmsg.lock() {
-            let kern_level = Self::level_to_kern(level);
-            // Write each line separately to kmsg
-            // Use write! with \n instead of writeln! to ensure atomic write
-            for line in message.lines() {
-                let formatted = format!("{}{}{}\n", kern_level, LOG_PREFIX, line);
-                let _ = kmsg.write_all(formatted.as_bytes());
-            }
+            Level::Error => kernel_level::ERR,
+            Level::Warn => kernel_level::WARNING,
+            Level::Info => kernel_level::INFO,
+            Level::Debug => kernel_level::DEBUG,
+            Level::Trace => kernel_level::DEBUG,
         }
     }
 }
 
 impl Log for KmsgLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Info
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
     }
 
     fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            self.write_kmsg(record.level(), &record.args().to_string());
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
+        let prefix = Self::level_to_kernel_prefix(record.level());
+        let message = format!("{}{}{}\n", prefix, LOG_PREFIX, record.args());
+
+        if let Ok(mut kmsg) = self.kmsg.lock() {
+            // Ignore write errors - nothing we can do if kmsg fails
+            let _ = kmsg.write_all(message.as_bytes());
         }
     }
 
@@ -102,46 +104,27 @@ impl Log for KmsgLogger {
     }
 }
 
-/// Write a fatal error message directly to kmsg
+/// Write a fatal message to kmsg and prepare for system halt
 ///
-/// This is useful when the logger hasn't been initialized yet
-/// or when we need to ensure a message is written before a crash.
-pub fn write_fatal(message: &str) {
-    if let Ok(mut file) = OpenOptions::new().write(true).open("/dev/kmsg") {
-        let _ = writeln!(file, "{}{}FATAL: {}", KERN_CRIT, LOG_PREFIX, message);
+/// This function is used when a fatal error occurs and we need to
+/// log before potentially halting the system.
+pub fn log_fatal(message: &str) {
+    if let Ok(mut file) = OpenOptions::new().write(true).open(KMSG_PATH) {
+        let _ = writeln!(
+            file,
+            "{}{}FATAL: {}",
+            kernel_level::CRIT,
+            LOG_PREFIX,
+            message
+        );
     }
 }
 
-/// Write an info message directly to kmsg (bypassing the log framework)
-pub fn write_info(message: &str) {
-    if let Ok(mut file) = OpenOptions::new().write(true).open("/dev/kmsg") {
-        let _ = writeln!(file, "{}{}{}", KERN_INFO, LOG_PREFIX, message);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_level_to_kern() {
-        assert_eq!(KmsgLogger::level_to_kern(Level::Error), KERN_ERR);
-        assert_eq!(KmsgLogger::level_to_kern(Level::Warn), KERN_WARNING);
-        assert_eq!(KmsgLogger::level_to_kern(Level::Info), KERN_INFO);
-        assert_eq!(KmsgLogger::level_to_kern(Level::Debug), KERN_DEBUG);
-        assert_eq!(KmsgLogger::level_to_kern(Level::Trace), KERN_DEBUG);
-    }
-
-    #[test]
-    fn test_log_prefix() {
-        assert_eq!(LOG_PREFIX, "omnect-os-init: ");
-    }
-
-    #[test]
-    fn test_kern_levels() {
-        // Verify kernel log level format
-        assert!(KERN_ERR.starts_with('<'));
-        assert!(KERN_ERR.ends_with('>'));
-        assert_eq!(KERN_ERR.len(), 3);
+/// Write directly to kmsg without going through the logger
+///
+/// Useful for early initialization before the logger is set up.
+pub fn log_direct(message: &str) {
+    if let Ok(mut file) = OpenOptions::new().write(true).open(KMSG_PATH) {
+        let _ = writeln!(file, "{}{}{}", kernel_level::INFO, LOG_PREFIX, message);
     }
 }

@@ -1,9 +1,7 @@
-//! Logging module for omnect-os-init
+//! Logging infrastructure for initramfs
 //!
-//! Provides logging to /dev/kmsg with proper kernel log levels.
-//! All messages are prefixed with "omnect-os-init:" to make them
-//! identifiable in the kernel log.
+//! This module provides logging to /dev/kmsg with kernel log levels.
 
 mod kmsg;
 
-pub use kmsg::KmsgLogger;
+pub use self::kmsg::{KmsgLogger, log_direct, log_fatal};

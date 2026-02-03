@@ -42,14 +42,14 @@ impl Config {
     /// Load configuration from all sources
     pub fn load() -> Result<Self> {
         let cmdline_params = Self::parse_cmdline()?;
-        
+
         // Get rootfs_dir from environment or use default
         let rootfs_dir = std::env::var("ROOTFS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/rootfs"));
 
         // Parse os-release if available
-        let (is_release_image, machine_features, distro_features) = 
+        let (is_release_image, machine_features, distro_features) =
             Self::parse_os_release(&rootfs_dir).unwrap_or((false, vec![], vec![]));
 
         Ok(Self {
@@ -98,20 +98,17 @@ impl Config {
         for line in content.lines() {
             if let Some((key, value)) = line.split_once('=') {
                 let value = value.trim_matches('"');
-                
+
                 match key {
                     "OMNECT_RELEASE_IMAGE" => {
                         is_release = value == "1";
                     }
                     "MACHINE_FEATURES" => {
-                        machine_features = value.split_whitespace()
-                            .map(|s| s.to_string())
-                            .collect();
+                        machine_features =
+                            value.split_whitespace().map(|s| s.to_string()).collect();
                     }
                     "DISTRO_FEATURES" => {
-                        distro_features = value.split_whitespace()
-                            .map(|s| s.to_string())
-                            .collect();
+                        distro_features = value.split_whitespace().map(|s| s.to_string()).collect();
                     }
                     _ => {}
                 }
@@ -193,7 +190,7 @@ mod tests {
     fn test_has_distro_feature() {
         let mut config = Config::default();
         config.distro_features = vec!["flash-mode-2".to_string(), "resize-data".to_string()];
-        
+
         assert!(config.has_distro_feature("flash-mode-2"));
         assert!(config.has_distro_feature("resize-data"));
         assert!(!config.has_distro_feature("flash-mode-3"));
@@ -203,7 +200,7 @@ mod tests {
     fn test_has_machine_feature() {
         let mut config = Config::default();
         config.machine_features = vec!["efi".to_string(), "tpm2".to_string()];
-        
+
         assert!(config.has_efi());
         assert!(config.has_machine_feature("tpm2"));
         assert!(!config.has_machine_feature("nonexistent"));
@@ -228,8 +225,10 @@ mod tests {
     fn test_quiet_mode() {
         let mut config = Config::default();
         assert!(!config.is_quiet());
-        
-        config.cmdline_params.insert("quiet".to_string(), String::new());
+
+        config
+            .cmdline_params
+            .insert("quiet".to_string(), String::new());
         assert!(config.is_quiet());
     }
 }

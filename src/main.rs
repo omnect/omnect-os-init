@@ -9,8 +9,7 @@
 //! - omnect-device-service integration
 
 use omnect_os_init::{
-    Config, InitramfsError, KmsgLogger, Result,
-    bootloader::create_bootloader,
+    Config, InitramfsError, KmsgLogger, Result, bootloader::create_bootloader, logging::log_fatal,
     mount_essential_filesystems,
 };
 
@@ -30,15 +29,14 @@ fn main() {
         }
     }
 
-    // Initialize logging to /dev/kmsg (now available after mounting /dev)
-    if let Err(e) = KmsgLogger::init() {
-        // If we can't initialize logging, try to write directly to kmsg
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/kmsg")
-        {
-            use std::io::Write;
-            let _ = writeln!(f, "<3>omnect-os-initramfs: Failed to initialize logger: {}", e);
+    match KmsgLogger::new() {
+        Ok(logger) => {
+            if let Err(e) = logger.init() {
+                log_fatal(&format!("Logger initialization failed: {}", e));
+            }
+        }
+        Err(e) => {
+            log_fatal(&format!("Failed to open kmsg: {}", e));
         }
     }
 
@@ -53,7 +51,10 @@ fn run() -> Result<()> {
 
     // Load configuration from kernel cmdline and environment
     let config = Config::load()?;
-    info!("Configuration loaded: rootfs_dir={}", config.rootfs_dir.display());
+    info!(
+        "Configuration loaded: rootfs_dir={}",
+        config.rootfs_dir.display()
+    );
 
     // Create bootloader abstraction
     let bootloader = create_bootloader(&config.rootfs_dir)?;
@@ -83,7 +84,7 @@ fn handle_fatal_error(error: InitramfsError) -> ! {
     } else {
         // Debug image: spawn a shell for debugging
         warn!("Debug mode: spawning shell due to error: {}", error);
-        
+
         // Try to spawn bash for debugging
         let status = process::Command::new("/bin/bash")
             .arg("--init-file")
