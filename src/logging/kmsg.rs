@@ -75,8 +75,10 @@ impl KmsgLogger {
         if let Ok(mut kmsg) = self.kmsg.lock() {
             let kern_level = Self::level_to_kern(level);
             // Write each line separately to kmsg
+            // Use write! with \n instead of writeln! to ensure atomic write
             for line in message.lines() {
-                let _ = writeln!(kmsg, "{}{}{}", kern_level, LOG_PREFIX, line);
+                let formatted = format!("{}{}{}\n", kern_level, LOG_PREFIX, line);
+                let _ = kmsg.write_all(formatted.as_bytes());
             }
         }
     }
