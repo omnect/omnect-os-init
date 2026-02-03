@@ -41,6 +41,10 @@ pub enum InitramfsError {
     #[error("Logging error: {0}")]
     Logging(#[from] LoggingError),
 
+    /// Early mount setup failed
+    #[error("Mount setup failed: {0}")]
+    MountSetupFailed(String),
+
     /// Generic I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

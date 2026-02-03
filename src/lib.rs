@@ -5,11 +5,13 @@
 
 pub mod bootloader;
 pub mod config;
+pub mod early_init;
 pub mod error;
 pub mod logging;
 
 // Re-export main types for convenience
 pub use bootloader::{Bootloader, BootloaderType, create_bootloader};
 pub use config::Config;
+pub use early_init::mount_essential_filesystems;
 pub use error::{InitramfsError, Result};
 pub use logging::KmsgLogger;

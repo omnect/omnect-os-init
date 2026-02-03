@@ -11,13 +11,26 @@
 use omnect_os_init::{
     Config, InitramfsError, KmsgLogger, Result,
     bootloader::create_bootloader,
+    mount_essential_filesystems,
 };
 
 use log::{error, info, warn};
 use std::process;
 
 fn main() {
-    // Initialize logging to /dev/kmsg
+    // Mount essential filesystems first (/dev, /proc, /sys)
+    // This must happen before anything else, including logging
+    if let Err(e) = mount_essential_filesystems() {
+        // We can't log yet, so try to write to console
+        eprintln!("FATAL: Failed to mount essential filesystems: {}", e);
+        // Try emergency shell if available
+        let _ = process::Command::new("/bin/sh").status();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+
+    // Initialize logging to /dev/kmsg (now available after mounting /dev)
     if let Err(e) = KmsgLogger::init() {
         // If we can't initialize logging, try to write directly to kmsg
         if let Ok(mut f) = std::fs::OpenOptions::new()
