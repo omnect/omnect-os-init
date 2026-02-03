@@ -19,16 +19,18 @@ pub struct UBootBootloader {
 impl UBootBootloader {
     /// Create a new UBootBootloader instance
     pub fn new() -> Result<Self> {
-        // Verify fw_printenv is available
-        let status = Command::new("which")
+        // Verify fw_printenv is available (suppress output)
+        let output = Command::new("which")
             .arg("fw_printenv")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| BootloaderError::CommandFailed {
                 command: "which fw_printenv".to_string(),
                 reason: e.to_string(),
             })?;
 
-        if !status.success() {
+        if !output.success() {
             log::warn!("fw_printenv not found in PATH, U-Boot operations may fail");
         }
 
