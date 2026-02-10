@@ -15,7 +15,7 @@ use omnect_os_init::{
     config::Config,
     error::InitramfsError,
     filesystem::{
-        MountManager, MountOptions, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
+        MountManager, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
         setup_etc_overlay, setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
@@ -84,7 +84,7 @@ fn run() -> Result<()> {
     create_omnect_symlinks(&layout)?;
 
     // Create bootloader abstraction
-    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
+    let bootloader = create_bootloader(&config.rootfs_dir)?;
     info!("Bootloader type: {}", bootloader.bootloader_type());
 
     // Initialize ODS status
