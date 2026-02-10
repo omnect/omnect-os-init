@@ -1,34 +1,40 @@
 //! omnect-os-init - Rust-based init process for omnect-os initramfs
 //!
 //! This binary replaces the bash-based initramfs scripts with a type-safe
-//! Rust implementation that handles:
-//! - Root device detection and partition symlinks
-//! - Filesystem mounting with overlayfs
-//! - Factory reset
-//! - Flash modes
-//! - omnect-device-service integration
+//! Rust implementation.
 
-use omnect_os_init::{
-    Config, InitramfsError, KmsgLogger, Result, bootloader::create_bootloader, logging::log_fatal,
-    mount_essential_filesystems,
-};
+use std::process;
+use std::thread;
+use std::time::Duration;
 
 use log::{error, info, warn};
-use std::process;
+
+use omnect_os_init::{
+    Result,
+    bootloader::create_bootloader,
+    config::Config,
+    error::InitramfsError,
+    filesystem::{
+        MountManager, MountOptions, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
+        setup_etc_overlay, setup_raw_rootfs_mount,
+    },
+    logging::{KmsgLogger, log_fatal},
+    mount_essential_filesystems,
+    partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
+    runtime::{OdsStatus, create_fs_links, create_ods_runtime_files, switch_root},
+};
+
+/// Sleep duration for fatal error loop (seconds)
+const FATAL_ERROR_SLEEP_SECS: u64 = 60;
 
 fn main() {
-    // Mount essential filesystems first (/dev, /proc, /sys)
-    // This must happen before anything else, including logging
+    // Mount essential filesystems first (/dev, /proc, /sys, /run)
     if let Err(e) = mount_essential_filesystems() {
-        // We can't log yet, so try to write to console
         eprintln!("FATAL: Failed to mount essential filesystems: {}", e);
-        // Try emergency shell if available
-        let _ = process::Command::new("/bin/sh").status();
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-        }
+        spawn_emergency_shell();
     }
 
+    // Initialize logging
     match KmsgLogger::new() {
         Ok(logger) => {
             if let Err(e) = logger.init() {
@@ -40,6 +46,7 @@ fn main() {
         }
     }
 
+    // Run main initialization
     if let Err(e) = run() {
         error!("Initramfs failed: {}", e);
         handle_fatal_error(e);
@@ -49,27 +56,147 @@ fn main() {
 fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
-    // Load configuration from kernel cmdline and environment
+    // Load configuration
     let config = Config::load()?;
     info!(
-        "Configuration loaded: rootfs_dir={}",
-        config.rootfs_dir.display()
+        "Configuration loaded: rootfs_dir={}, release={}",
+        config.rootfs_dir.display(),
+        config.is_release_image
     );
 
-    // Create bootloader abstraction
-    let bootloader = create_bootloader(&config.rootfs_dir)?;
-    info!("Bootloader type: {:?}", bootloader.bootloader_type());
+    // Initialize mount manager for tracking
+    let mut mount_manager = MountManager::new();
 
-    // TODO: Phase 2 - Device detection and partition symlinks
-    // TODO: Phase 3 - Filesystem mounting
-    // TODO: Phase 4 - Overlayfs setup
-    // TODO: Phase 5 - ODS integration and switch_root
+    // Detect root device
+    info!("Detecting root device...");
+    let root_device = detect_root_device()?;
+    info!(
+        "Root device: {} (partition {})",
+        root_device.path.display(),
+        root_device.root_partition
+    );
+
+    // Detect partition layout
+    let layout = PartitionLayout::detect(&root_device)?;
+    info!("Partition table: {}", layout.table_type);
+
+    // Create /dev/omnect/* symlinks
+    create_omnect_symlinks(&layout)?;
+
+    // Create bootloader abstraction
+    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
+    info!("Bootloader type: {}", bootloader.bootloader_type());
+
+    // Initialize ODS status
+    let mut ods_status = OdsStatus::new();
+
+    // Run fsck on partitions and mount them
+    mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
+
+    // Setup raw rootfs mount (before overlays)
+    setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;
+
+    // Setup overlays
+    let overlay_config = OverlayConfig::new(&config.rootfs_dir)
+        .with_persistent_var_log(config.has_persistent_var_log());
+
+    setup_etc_overlay(&mut mount_manager, &overlay_config)?;
+    setup_data_overlay(&mut mount_manager, &overlay_config)?;
+
+    // Create fs-links
+    create_fs_links(&config.rootfs_dir)?;
+
+    // Create ODS runtime files
+    create_ods_runtime_files(&config.rootfs_dir, &ods_status, bootloader.as_ref())?;
 
     info!("omnect-os-initramfs completed successfully");
+
+    // Switch root to final rootfs
+    switch_root(&config.rootfs_dir, None)?;
+
+    // This should never be reached
     Ok(())
 }
 
-/// Handle fatal errors based on image type (debug vs release)
+/// Mount all required partitions
+fn mount_partitions(
+    mm: &mut MountManager,
+    layout: &PartitionLayout,
+    config: &Config,
+    ods_status: &mut OdsStatus,
+) -> Result<()> {
+    let rootfs = &config.rootfs_dir;
+
+    // Mount rootfs read-only
+    if let Some(root_dev) = layout.partitions.get("rootCurrent") {
+        // Run fsck first
+        if let Ok(result) = check_filesystem_lenient(root_dev) {
+            ods_status.add_fsck_result("root", result.exit_code, result.output);
+        }
+
+        mm.mount_readonly(root_dev, rootfs, "ext4")?;
+        info!("Mounted rootfs at {}", rootfs.display());
+    }
+
+    // Mount boot partition
+    if let Some(boot_dev) = layout.partitions.get("boot") {
+        let boot_mount = rootfs.join("boot");
+
+        if let Ok(result) = check_filesystem_lenient(boot_dev) {
+            ods_status.add_fsck_result("boot", result.exit_code, result.output);
+        }
+
+        mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+    }
+
+    // Mount factory partition
+    if let Some(factory_dev) = layout.partitions.get("factory") {
+        let factory_mount = rootfs.join("mnt/factory");
+
+        if let Ok(result) = check_filesystem_lenient(factory_dev) {
+            ods_status.add_fsck_result("factory", result.exit_code, result.output);
+        }
+
+        mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
+    }
+
+    // Mount cert partition
+    if let Some(cert_dev) = layout.partitions.get("cert") {
+        let cert_mount = rootfs.join("mnt/cert");
+
+        if let Ok(result) = check_filesystem_lenient(cert_dev) {
+            ods_status.add_fsck_result("cert", result.exit_code, result.output);
+        }
+
+        mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
+    }
+
+    // Mount etc partition (for overlay upper)
+    if let Some(etc_dev) = layout.partitions.get("etc") {
+        let etc_mount = rootfs.join("mnt/etc");
+
+        if let Ok(result) = check_filesystem_lenient(etc_dev) {
+            ods_status.add_fsck_result("etc", result.exit_code, result.output);
+        }
+
+        mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
+    }
+
+    // Mount data partition
+    if let Some(data_dev) = layout.partitions.get("data") {
+        let data_mount = rootfs.join("mnt/data");
+
+        if let Ok(result) = check_filesystem_lenient(data_dev) {
+            ods_status.add_fsck_result("data", result.exit_code, result.output);
+        }
+
+        mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
+    }
+
+    Ok(())
+}
+
+/// Handle fatal errors based on image type
 fn handle_fatal_error(error: InitramfsError) -> ! {
     let is_release = std::fs::read_to_string("/etc/os-release")
         .map(|content| content.contains("OMNECT_RELEASE_IMAGE=\"1\""))
@@ -79,25 +206,35 @@ fn handle_fatal_error(error: InitramfsError) -> ! {
         // Release image: loop forever to prevent reboot loops
         loop {
             error!("FATAL: {}", error);
-            std::thread::sleep(std::time::Duration::from_secs(60));
+            thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
         }
     } else {
-        // Debug image: spawn a shell for debugging
+        // Debug image: spawn shell
         warn!("Debug mode: spawning shell due to error: {}", error);
+        spawn_debug_shell();
+    }
+}
 
-        // Try to spawn bash for debugging
-        let status = process::Command::new("/bin/bash")
-            .arg("--init-file")
-            .arg("/dev/null")
-            .status();
+/// Spawn emergency shell (before logging available)
+fn spawn_emergency_shell() -> ! {
+    let _ = process::Command::new("/bin/sh").status();
+    loop {
+        thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+    }
+}
 
-        match status {
-            Ok(s) => process::exit(s.code().unwrap_or(1)),
-            Err(_) => {
-                // If bash fails, try sh
-                let _ = process::Command::new("/bin/sh").status();
-                process::exit(1);
-            }
+/// Spawn debug shell for debugging
+fn spawn_debug_shell() -> ! {
+    let status = process::Command::new("/bin/bash")
+        .arg("--init-file")
+        .arg("/dev/null")
+        .status();
+
+    match status {
+        Ok(s) => process::exit(s.code().unwrap_or(1)),
+        Err(_) => {
+            let _ = process::Command::new("/bin/sh").status();
+            process::exit(1);
         }
     }
 }

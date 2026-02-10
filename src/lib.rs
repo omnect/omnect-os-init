@@ -10,6 +10,7 @@ pub mod error;
 pub mod filesystem;
 pub mod logging;
 pub mod partition;
+pub mod runtime;
 
 // Re-export main types for convenience
 pub use crate::bootloader::{Bootloader, BootloaderType, create_bootloader};
