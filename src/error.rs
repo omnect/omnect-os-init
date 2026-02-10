@@ -114,6 +114,9 @@ pub enum PartitionError {
         reason: String,
     },
 
+    #[error("Command '{command}' failed: {reason}")]
+    CommandFailed { command: String, reason: String },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

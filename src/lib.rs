@@ -8,6 +8,7 @@ pub mod config;
 pub mod early_init;
 pub mod error;
 pub mod logging;
+pub mod partition;
 
 // Re-export main types for convenience
 pub use bootloader::{Bootloader, BootloaderType, create_bootloader};
