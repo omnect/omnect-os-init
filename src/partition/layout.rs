@@ -120,10 +120,7 @@ fn detect_partition_table_type(device: &Path) -> Result<PartitionTableType> {
     if !output.status.success() {
         return Err(PartitionError::InvalidPartitionTable {
             device: device.to_path_buf(),
-            reason: format!(
-                "sfdisk failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
+            reason: format!("sfdisk failed: {}", String::from_utf8_lossy(&output.stderr)),
         });
     }
 
@@ -261,13 +258,34 @@ mod tests {
         let device = create_test_device_sda();
         let map = build_partition_map(&device, PartitionTableType::Gpt);
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
-        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
-        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda4")));
-        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda5")));
-        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda6")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda7")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/sda1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/sda2"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_B),
+            Some(&PathBuf::from("/dev/sda3"))
+        );
+        assert_eq!(
+            map.get(partition_names::FACTORY),
+            Some(&PathBuf::from("/dev/sda4"))
+        );
+        assert_eq!(
+            map.get(partition_names::CERT),
+            Some(&PathBuf::from("/dev/sda5"))
+        );
+        assert_eq!(
+            map.get(partition_names::ETC),
+            Some(&PathBuf::from("/dev/sda6"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/sda7"))
+        );
         assert_eq!(map.get(partition_names::EXTENDED), None); // No extended partition in GPT
     }
 
@@ -276,14 +294,38 @@ mod tests {
         let device = create_test_device_sda();
         let map = build_partition_map(&device, PartitionTableType::Dos);
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
-        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
-        assert_eq!(map.get(partition_names::EXTENDED), Some(&PathBuf::from("/dev/sda4")));
-        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda5")));
-        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda6")));
-        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda7")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda8")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/sda1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/sda2"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_B),
+            Some(&PathBuf::from("/dev/sda3"))
+        );
+        assert_eq!(
+            map.get(partition_names::EXTENDED),
+            Some(&PathBuf::from("/dev/sda4"))
+        );
+        assert_eq!(
+            map.get(partition_names::FACTORY),
+            Some(&PathBuf::from("/dev/sda5"))
+        );
+        assert_eq!(
+            map.get(partition_names::CERT),
+            Some(&PathBuf::from("/dev/sda6"))
+        );
+        assert_eq!(
+            map.get(partition_names::ETC),
+            Some(&PathBuf::from("/dev/sda7"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/sda8"))
+        );
     }
 
     #[test]
@@ -291,9 +333,18 @@ mod tests {
         let device = create_test_device_nvme();
         let map = build_partition_map(&device, PartitionTableType::Gpt);
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/nvme0n1p1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/nvme0n1p2")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/nvme0n1p7")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/nvme0n1p1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/nvme0n1p2"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/nvme0n1p7"))
+        );
     }
 
     #[test]
@@ -301,10 +352,22 @@ mod tests {
         let device = create_test_device_mmc();
         let map = build_partition_map(&device, PartitionTableType::Dos);
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/mmcblk0p1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/mmcblk0p2")));
-        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/mmcblk0p3")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/mmcblk0p8")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/mmcblk0p1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/mmcblk0p2"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_B),
+            Some(&PathBuf::from("/dev/mmcblk0p3"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/mmcblk0p8"))
+        );
     }
 
     #[test]

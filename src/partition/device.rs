@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::partition::Result;
 use crate::error::PartitionError;
+use crate::partition::Result;
 
 /// Sysfs path for block device lookups by major:minor
 const SYSFS_DEV_BLOCK: &str = "/sys/dev/block";
@@ -62,10 +62,7 @@ pub fn detect_root_device() -> Result<RootDevice> {
         // Extract major and minor from dev_t
         // On Linux: major = (dev >> 8) & 0xff, minor = dev & 0xff (simplified)
         // Using nix for proper extraction
-        (
-            nix::sys::stat::major(dev),
-            nix::sys::stat::minor(dev),
-        )
+        (nix::sys::stat::major(dev), nix::sys::stat::minor(dev))
     };
 
     #[cfg(not(unix))]
@@ -141,10 +138,7 @@ fn parse_partition_name(name: &str) -> Result<(&str, &str, u32)> {
 
     let partition_str = &name[digit_start..];
     let partition_num: u32 = partition_str.parse().map_err(|_| {
-        PartitionError::RootDeviceNotFound(format!(
-            "Invalid partition number in: {}",
-            name
-        ))
+        PartitionError::RootDeviceNotFound(format!("Invalid partition number in: {}", name))
     })?;
 
     let base_with_sep = &name[..digit_start];

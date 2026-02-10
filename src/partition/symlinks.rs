@@ -27,10 +27,7 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     create_symlink_dir()?;
 
     // Create rootblk symlink (full disk device)
-    create_symlink(
-        &layout.device.path,
-        &symlink_path(partition_names::ROOTBLK),
-    )?;
+    create_symlink(&layout.device.path, &symlink_path(partition_names::ROOTBLK))?;
 
     // Create partition symlinks
     for (name, device_path) in &layout.partitions {
@@ -121,7 +118,11 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
         reason: e.to_string(),
     })?;
 
-    log::debug!("Created symlink: {} -> {}", link.display(), target.display());
+    log::debug!(
+        "Created symlink: {} -> {}",
+        link.display(),
+        target.display()
+    );
 
     Ok(())
 }
@@ -129,10 +130,7 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
 /// Verify that all expected symlinks exist and are valid
 pub fn verify_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     // Check rootblk
-    verify_symlink(
-        &symlink_path(partition_names::ROOTBLK),
-        &layout.device.path,
-    )?;
+    verify_symlink(&symlink_path(partition_names::ROOTBLK), &layout.device.path)?;
 
     // Check all partitions
     for (name, device_path) in &layout.partitions {
@@ -191,10 +189,22 @@ mod tests {
         };
 
         let mut partitions = HashMap::new();
-        partitions.insert(partition_names::BOOT.to_string(), PathBuf::from("/dev/sda1"));
-        partitions.insert(partition_names::ROOT_A.to_string(), PathBuf::from("/dev/sda2"));
-        partitions.insert(partition_names::ROOT_B.to_string(), PathBuf::from("/dev/sda3"));
-        partitions.insert(partition_names::DATA.to_string(), PathBuf::from("/dev/sda7"));
+        partitions.insert(
+            partition_names::BOOT.to_string(),
+            PathBuf::from("/dev/sda1"),
+        );
+        partitions.insert(
+            partition_names::ROOT_A.to_string(),
+            PathBuf::from("/dev/sda2"),
+        );
+        partitions.insert(
+            partition_names::ROOT_B.to_string(),
+            PathBuf::from("/dev/sda3"),
+        );
+        partitions.insert(
+            partition_names::DATA.to_string(),
+            PathBuf::from("/dev/sda7"),
+        );
 
         PartitionLayout {
             table_type: PartitionTableType::Gpt,
@@ -207,7 +217,10 @@ mod tests {
     fn test_symlink_path() {
         assert_eq!(symlink_path("boot"), PathBuf::from("/dev/omnect/boot"));
         assert_eq!(symlink_path("rootA"), PathBuf::from("/dev/omnect/rootA"));
-        assert_eq!(symlink_path("rootblk"), PathBuf::from("/dev/omnect/rootblk"));
+        assert_eq!(
+            symlink_path("rootblk"),
+            PathBuf::from("/dev/omnect/rootblk")
+        );
     }
 
     #[test]

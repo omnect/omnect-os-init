@@ -7,12 +7,13 @@ pub mod bootloader;
 pub mod config;
 pub mod early_init;
 pub mod error;
+pub mod filesystem;
 pub mod logging;
 pub mod partition;
 
 // Re-export main types for convenience
-pub use bootloader::{Bootloader, BootloaderType, create_bootloader};
-pub use config::Config;
-pub use early_init::mount_essential_filesystems;
-pub use error::{InitramfsError, Result};
-pub use logging::KmsgLogger;
+pub use crate::bootloader::{Bootloader, BootloaderType, create_bootloader};
+pub use crate::config::Config;
+pub use crate::early_init::mount_essential_filesystems;
+pub use crate::error::{InitramfsError, Result};
+pub use crate::logging::KmsgLogger;
