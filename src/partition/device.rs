@@ -1,253 +1,256 @@
-//! Root device detection
+//! Root device detection from kernel command line parameters.
 //!
-//! Detects the root block device using stat(2) + sysfs lookup.
-//! Works across all device types (SATA, NVMe, MMC, virtio) without hardcoded names.
+//! Parses `/proc/cmdline` for `root=/dev/<device>` to determine the root block device.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::PartitionError;
-use crate::partition::Result;
+use crate::partition::{PartitionError, Result};
 
-/// Sysfs path for block device lookups by major:minor
-const SYSFS_DEV_BLOCK: &str = "/sys/dev/block";
-
-/// Sysfs path for checking if a device is a block device
-const SYSFS_BLOCK: &str = "/sys/block";
-
-/// Device path prefix
-const DEV_PATH: &str = "/dev";
-
-/// Represents a detected root block device
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents the detected root block device and its properties.
+#[derive(Debug, Clone)]
 pub struct RootDevice {
-    /// Base block device path (e.g., /dev/sda, /dev/nvme0n1, /dev/mmcblk0)
-    pub path: PathBuf,
-    /// Device name without /dev/ prefix (e.g., sda, nvme0n1, mmcblk0)
-    pub name: String,
-    /// Partition separator ("" for sda, "p" for nvme0n1/mmcblk0)
+    /// Base block device path (e.g., `/dev/sda`, `/dev/nvme0n1`, `/dev/mmcblk0`)
+    pub base: PathBuf,
+    /// Partition separator ("" for sda, "p" for nvme0n1p, mmcblk0p)
     pub partition_sep: String,
-    /// Root partition number (e.g., 2 for rootA or 3 for rootB)
-    pub root_partition: u32,
+    /// Root partition device path (e.g., `/dev/sda2`, `/dev/mmcblk0p2`)
+    pub root_partition: PathBuf,
 }
 
 impl RootDevice {
-    /// Get the device path for a specific partition number
-    pub fn partition_path(&self, partition: u32) -> PathBuf {
+    /// Constructs the path to a specific partition number.
+    pub fn partition_path(&self, partition_num: u32) -> PathBuf {
         PathBuf::from(format!(
             "{}{}{}",
-            self.path.display(),
+            self.base.display(),
             self.partition_sep,
-            partition
+            partition_num
         ))
-    }
-
-    /// Get the device name for a specific partition number
-    pub fn partition_name(&self, partition: u32) -> String {
-        format!("{}{}{}", self.name, self.partition_sep, partition)
     }
 }
 
-/// Detect the root block device from the current root filesystem
+/// Detects the root device by parsing kernel command line parameters.
 ///
-/// Uses stat(2) to get major:minor of "/" and looks up the device via sysfs.
-/// This method works for all device types without hardcoding device names.
+/// # Expected format
+/// `root=/dev/<device>` - Direct device path (e.g., `/dev/mmcblk0p2`, `/dev/sda2`)
+///
+/// # Errors
+/// Returns error if:
+/// - Cannot read `/proc/cmdline`
+/// - `root=` parameter is missing or malformed
+/// - Device path doesn't exist or cannot be resolved
 pub fn detect_root_device() -> Result<RootDevice> {
-    // Get major:minor of root filesystem
-    let root_stat = std::fs::metadata("/")?;
+    detect_root_device_from_cmdline("/proc/cmdline")
+}
 
-    #[cfg(unix)]
-    let (major, minor) = {
-        use std::os::unix::fs::MetadataExt;
-        let dev = root_stat.dev();
-        // Extract major and minor from dev_t
-        // On Linux: major = (dev >> 8) & 0xff, minor = dev & 0xff (simplified)
-        // Using nix for proper extraction
-        (nix::sys::stat::major(dev), nix::sys::stat::minor(dev))
-    };
+/// Internal implementation with configurable path for testing.
+pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<RootDevice> {
+    let cmdline = fs::read_to_string(cmdline_path).map_err(|e| {
+        PartitionError::DeviceDetection(format!("failed to read {}: {}", cmdline_path, e))
+    })?;
 
-    #[cfg(not(unix))]
-    let (major, minor) = {
-        return Err(PartitionError::RootDeviceNotFound(
-            "Non-Unix platform not supported".to_string(),
-        ));
-    };
+    // Parse root= parameter from cmdline
+    let root_param = parse_cmdline_param(&cmdline, "root")?
+        .ok_or_else(|| PartitionError::DeviceDetection("missing root= parameter".into()))?;
 
-    // Lookup device name via sysfs
-    // /sys/dev/block/8:2 -> symlink to ../../devices/.../sda/sda2
-    let sysfs_path = PathBuf::from(format!("{}/{}:{}", SYSFS_DEV_BLOCK, major, minor));
-
-    if !sysfs_path.exists() {
-        return Err(PartitionError::RootDeviceNotFound(format!(
-            "sysfs path not found: {}",
-            sysfs_path.display()
+    // Validate format: must start with /dev/
+    if !root_param.starts_with("/dev/") {
+        return Err(PartitionError::DeviceDetection(format!(
+            "root= must be a device path starting with /dev/, got: {}",
+            root_param
         )));
     }
 
-    let device_link = std::fs::read_link(&sysfs_path)?;
-    let partition_name = device_link
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            PartitionError::RootDeviceNotFound(format!(
-                "Invalid sysfs link: {}",
-                device_link.display()
-            ))
-        })?;
-
-    // Parse the partition name to extract base device and partition number
-    let (base_name, partition_sep, partition_num) = parse_partition_name(partition_name)?;
-
-    let device_path = PathBuf::from(format!("{}/{}", DEV_PATH, base_name));
-
-    // Verify the base device exists
-    if !device_path.exists() {
-        return Err(PartitionError::RootDeviceNotFound(format!(
-            "Block device not found: {}",
-            device_path.display()
+    let partition_path = PathBuf::from(&root_param);
+    if !partition_path.exists() {
+        return Err(PartitionError::DeviceDetection(format!(
+            "root device {} does not exist",
+            root_param
         )));
+    }
+
+    // Canonicalize to resolve any symlinks
+    let partition_path = fs::canonicalize(&partition_path).map_err(|e| {
+        PartitionError::DeviceDetection(format!("failed to canonicalize {}: {}", root_param, e))
+    })?;
+
+    // Derive base block device from partition path
+    let (base, partition_sep) = derive_base_device(&partition_path)?;
+
+    // Optionally validate against omnect_rootblk hint
+    if let Some(hint) = parse_cmdline_param(&cmdline, "omnect_rootblk")? {
+        let hint_path = PathBuf::from(&hint);
+        if hint_path != base {
+            log::warn!(
+                "omnect_rootblk hint {} differs from detected base device {}",
+                hint,
+                base.display()
+            );
+        }
     }
 
     Ok(RootDevice {
-        path: device_path,
-        name: base_name.to_string(),
-        partition_sep: partition_sep.to_string(),
-        root_partition: partition_num,
+        base,
+        partition_sep,
+        root_partition: partition_path,
     })
 }
 
-/// Parse a partition name into base device name, separator, and partition number
+/// Parses a parameter value from kernel command line.
 ///
-/// Examples:
-/// - "sda2" -> ("sda", "", 2)
-/// - "nvme0n1p2" -> ("nvme0n1", "p", 2)
-/// - "mmcblk0p2" -> ("mmcblk0", "p", 2)
-/// - "vda2" -> ("vda", "", 2)
-fn parse_partition_name(name: &str) -> Result<(&str, &str, u32)> {
-    // Find the trailing digits (partition number)
-    let digit_start = name
-        .rfind(|c: char| !c.is_ascii_digit())
-        .map(|i| i + 1)
-        .unwrap_or(0);
+/// Handles both `key=value` and `key="value with spaces"` formats.
+fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
+    let prefix = format!("{}=", key);
 
-    if digit_start == 0 || digit_start >= name.len() {
-        return Err(PartitionError::RootDeviceNotFound(format!(
-            "Cannot parse partition number from: {}",
-            name
-        )));
-    }
-
-    let partition_str = &name[digit_start..];
-    let partition_num: u32 = partition_str.parse().map_err(|_| {
-        PartitionError::RootDeviceNotFound(format!("Invalid partition number in: {}", name))
-    })?;
-
-    let base_with_sep = &name[..digit_start];
-
-    // Check if there's a 'p' separator (NVMe, MMC)
-    let (base_name, separator) = if base_with_sep.ends_with('p') {
-        let potential_base = &base_with_sep[..base_with_sep.len() - 1];
-        // Verify this is actually a block device (not just ending in 'p')
-        let sysfs_check = PathBuf::from(format!("{}/{}", SYSFS_BLOCK, potential_base));
-        if sysfs_check.exists() {
-            (potential_base, "p")
-        } else {
-            // No 'p' separator, the 'p' is part of the device name
-            (base_with_sep, "")
+    for token in cmdline.split_whitespace() {
+        if let Some(value) = token.strip_prefix(&prefix) {
+            // Handle quoted values
+            let value = value.trim_matches('"');
+            return Ok(Some(value.to_string()));
         }
-    } else {
-        (base_with_sep, "")
-    };
-
-    // Final verification: check the base device exists in sysfs
-    let sysfs_base = PathBuf::from(format!("{}/{}", SYSFS_BLOCK, base_name));
-    if !sysfs_base.exists() {
-        return Err(PartitionError::RootDeviceNotFound(format!(
-            "Base block device not found in sysfs: {}",
-            base_name
-        )));
     }
 
-    Ok((base_name, separator, partition_num))
+    Ok(None)
 }
 
-/// Strip partition from a device name, returning base name and separator
+/// Derives the base block device from a partition device path.
 ///
-/// Public helper for use in partition layout detection.
-pub fn strip_partition_from_name(partition_name: &str) -> Result<(String, String)> {
-    let (base, sep, _) = parse_partition_name(partition_name)?;
-    Ok((base.to_string(), sep.to_string()))
+/// Examples:
+/// - `/dev/sda2` → (`/dev/sda`, "")
+/// - `/dev/nvme0n1p2` → (`/dev/nvme0n1`, "p")
+/// - `/dev/mmcblk0p2` → (`/dev/mmcblk0`, "p")
+fn derive_base_device(partition_path: &Path) -> Result<(PathBuf, String)> {
+    let partition_name = partition_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            PartitionError::DeviceDetection(format!(
+                "invalid partition path: {}",
+                partition_path.display()
+            ))
+        })?;
+
+    let parent = partition_path
+        .parent()
+        .unwrap_or_else(|| Path::new("/dev"));
+
+    // Try different partition naming schemes
+    // NVMe/MMC: nvme0n1p2, mmcblk0p2 - partition number after 'p'
+    // SATA/virtio: sda2, vda2 - partition number directly appended
+
+    // Check for 'p' separator (NVMe, MMC)
+    if let Some(pos) = partition_name.rfind('p') {
+        let suffix = &partition_name[pos + 1..];
+        if suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty() {
+            let base_name = &partition_name[..pos];
+            // Verify this is actually a block device by checking sysfs
+            let sysfs_path = format!("/sys/block/{}", base_name);
+            if Path::new(&sysfs_path).exists() {
+                let base_path = parent.join(base_name);
+                return Ok((base_path, "p".to_string()));
+            }
+        }
+    }
+
+    // Try direct numeric suffix (SATA, virtio)
+    let mut base_end = partition_name.len();
+    while base_end > 0 && partition_name[..base_end].ends_with(|c: char| c.is_ascii_digit()) {
+        base_end -= 1;
+    }
+
+    if base_end < partition_name.len() && base_end > 0 {
+        let base_name = &partition_name[..base_end];
+        let sysfs_path = format!("/sys/block/{}", base_name);
+        if Path::new(&sysfs_path).exists() {
+            let base_path = parent.join(base_name);
+            return Ok((base_path, String::new()));
+        }
+    }
+
+    Err(PartitionError::DeviceDetection(format!(
+        "could not derive base device from {}",
+        partition_path.display()
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Note: These tests use mock data since actual sysfs access requires root
-    // Integration tests on real hardware will validate the full flow
-
     #[test]
-    fn test_root_device_partition_path() {
-        let device = RootDevice {
-            path: PathBuf::from("/dev/sda"),
-            name: "sda".to_string(),
-            partition_sep: "".to_string(),
-            root_partition: 2,
-        };
-
-        assert_eq!(device.partition_path(1), PathBuf::from("/dev/sda1"));
-        assert_eq!(device.partition_path(2), PathBuf::from("/dev/sda2"));
-        assert_eq!(device.partition_path(7), PathBuf::from("/dev/sda7"));
+    fn test_parse_cmdline_param_direct_device() {
+        let cmdline = "root=/dev/mmcblk0p2 ro quiet";
+        assert_eq!(
+            parse_cmdline_param(cmdline, "root").unwrap(),
+            Some("/dev/mmcblk0p2".to_string())
+        );
     }
 
     #[test]
-    fn test_root_device_partition_path_nvme() {
-        let device = RootDevice {
-            path: PathBuf::from("/dev/nvme0n1"),
-            name: "nvme0n1".to_string(),
-            partition_sep: "p".to_string(),
-            root_partition: 2,
-        };
+    fn test_parse_cmdline_param_missing() {
+        let cmdline = "ro quiet";
+        assert_eq!(parse_cmdline_param(cmdline, "root").unwrap(), None);
+    }
 
-        assert_eq!(device.partition_path(1), PathBuf::from("/dev/nvme0n1p1"));
-        assert_eq!(device.partition_path(2), PathBuf::from("/dev/nvme0n1p2"));
+    #[test]
+    fn test_parse_cmdline_param_complex() {
+        // Real-world example from Raspberry Pi
+        let cmdline = "root=/dev/mmcblk0p2 coherent_pool=1M 8250.nr_uarts=1 \
+                       console=tty0 console=ttyS0,115200 rdinit=/bin/bash";
+        assert_eq!(
+            parse_cmdline_param(cmdline, "root").unwrap(),
+            Some("/dev/mmcblk0p2".to_string())
+        );
+        assert_eq!(
+            parse_cmdline_param(cmdline, "coherent_pool").unwrap(),
+            Some("1M".to_string())
+        );
+        assert_eq!(
+            parse_cmdline_param(cmdline, "rdinit").unwrap(),
+            Some("/bin/bash".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_cmdline_omnect_rootblk() {
+        let cmdline = "root=/dev/sda2 omnect_rootblk=/dev/sda ro";
+        assert_eq!(
+            parse_cmdline_param(cmdline, "omnect_rootblk").unwrap(),
+            Some("/dev/sda".to_string())
+        );
+    }
+
+    #[test]
+    fn test_root_device_partition_path_sata() {
+        let device = RootDevice {
+            base: PathBuf::from("/dev/sda"),
+            partition_sep: String::new(),
+            root_partition: PathBuf::from("/dev/sda2"),
+        };
+        assert_eq!(device.partition_path(1), PathBuf::from("/dev/sda1"));
+        assert_eq!(device.partition_path(7), PathBuf::from("/dev/sda7"));
     }
 
     #[test]
     fn test_root_device_partition_path_mmc() {
         let device = RootDevice {
-            path: PathBuf::from("/dev/mmcblk0"),
-            name: "mmcblk0".to_string(),
+            base: PathBuf::from("/dev/mmcblk0"),
             partition_sep: "p".to_string(),
-            root_partition: 2,
+            root_partition: PathBuf::from("/dev/mmcblk0p2"),
         };
-
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/mmcblk0p1"));
-        assert_eq!(device.partition_path(5), PathBuf::from("/dev/mmcblk0p5"));
+        assert_eq!(device.partition_path(7), PathBuf::from("/dev/mmcblk0p7"));
     }
 
     #[test]
-    fn test_root_device_partition_name() {
+    fn test_root_device_partition_path_nvme() {
         let device = RootDevice {
-            path: PathBuf::from("/dev/sda"),
-            name: "sda".to_string(),
-            partition_sep: "".to_string(),
-            root_partition: 2,
-        };
-
-        assert_eq!(device.partition_name(1), "sda1");
-        assert_eq!(device.partition_name(2), "sda2");
-    }
-
-    #[test]
-    fn test_root_device_partition_name_nvme() {
-        let device = RootDevice {
-            path: PathBuf::from("/dev/nvme0n1"),
-            name: "nvme0n1".to_string(),
+            base: PathBuf::from("/dev/nvme0n1"),
             partition_sep: "p".to_string(),
-            root_partition: 2,
+            root_partition: PathBuf::from("/dev/nvme0n1p2"),
         };
-
-        assert_eq!(device.partition_name(1), "nvme0n1p1");
-        assert_eq!(device.partition_name(2), "nvme0n1p2");
+        assert_eq!(device.partition_path(1), PathBuf::from("/dev/nvme0n1p1"));
+        assert_eq!(device.partition_path(7), PathBuf::from("/dev/nvme0n1p7"));
     }
 }

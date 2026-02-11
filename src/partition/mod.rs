@@ -1,18 +1,33 @@
-//! Partition detection and management
+//! Partition management for omnect-os initramfs.
 //!
-//! This module handles:
-//! - Root device detection using stat(2) + sysfs
-//! - Partition table type detection (GPT vs DOS)
-//! - Creation of /dev/omnect/* symlinks
+//! Handles root device detection, partition layout, and symlink creation.
 
-mod device;
-mod layout;
-mod symlinks;
+pub mod device;
+pub mod layout;
+pub mod symlinks;
 
-pub use self::device::{RootDevice, detect_root_device};
-pub use self::layout::{PartitionLayout, PartitionTableType};
-pub use self::symlinks::create_omnect_symlinks;
+use thiserror::Error;
 
-use crate::error::PartitionError;
+/// Partition-related errors.
+#[derive(Debug, Error)]
+pub enum PartitionError {
+    #[error("device detection failed: {0}")]
+    DeviceDetection(String),
 
+    #[error("partition layout error: {0}")]
+    Layout(String),
+
+    #[error("symlink creation failed: {0}")]
+    Symlink(String),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Result type for partition operations.
 pub type Result<T> = std::result::Result<T, PartitionError>;
+
+// Re-export main types
+pub use device::{detect_root_device, RootDevice};
+pub use layout::{PartitionLayout, PartitionTableType};
+pub use symlinks::{create_omnect_symlinks, verify_symlinks};
