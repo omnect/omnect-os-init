@@ -14,25 +14,31 @@ use crate::partition::{PartitionLayout, Result};
 /// Base directory for omnect device symlinks
 const OMNECT_DEV_DIR: &str = "/dev/omnect";
 
-/// Create all /dev/omnect/* symlinks for the detected partition layout
-///
-/// Creates symlinks like:
-/// - /dev/omnect/rootblk -> /dev/sda
-/// - /dev/omnect/boot -> /dev/sda1
-/// - /dev/omnect/rootA -> /dev/sda2
-/// - /dev/omnect/rootCurrent -> /dev/sda2 (or sda3 if booted from rootB)
-/// - etc.
+/// Create all /dev/omnect/* symlinks for the given partition layout.
 pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
-    // Ensure /dev/omnect directory exists
     create_symlink_dir()?;
 
-    // Create rootblk symlink (full disk device)
-    create_symlink(&layout.device.path, &symlink_path(partition_names::ROOTBLK))?;
+    // Create symlink to the base block device
+    create_symlink(&layout.device.base, &symlink_path(partition_names::ROOTBLK))?;
 
     // Create partition symlinks
     for (name, device_path) in &layout.partitions {
         create_symlink(device_path, &symlink_path(name))?;
     }
+
+    // Determine if rootA or rootB
+    let root_part_str = layout.device.root_partition
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    
+    let is_root_a = root_part_str.ends_with('2') || root_part_str.ends_with("p2");
+    
+    log::info!(
+        "Root partition is {}, creating rootCurrent symlink to {}",
+        layout.device.root_partition.display(),
+        if is_root_a { "rootA" } else { "rootB" }
+    );
 
     // Create rootCurrent symlink pointing to the active root partition
     let root_current_target = layout.root_current();
@@ -44,12 +50,8 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     log::info!(
         "Created /dev/omnect symlinks for {} device {} ({})",
         layout.table_type,
-        layout.device.name,
-        if layout.device.root_partition == 2 {
-            "rootA"
-        } else {
-            "rootB"
-        }
+        layout.device.base.display(),
+        if is_root_a { "rootA" } else { "rootB" }
     );
 
     Ok(())
@@ -128,9 +130,9 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
 }
 
 /// Verify that all expected symlinks exist and are valid
-pub fn verify_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
+pub fn verify_symlinks(layout: &PartitionLayout) -> Result<()> {
     // Check rootblk
-    verify_symlink(&symlink_path(partition_names::ROOTBLK), &layout.device.path)?;
+    verify_symlink(&symlink_path(partition_names::ROOTBLK), &layout.device.base)?;
 
     // Check all partitions
     for (name, device_path) in &layout.partitions {
@@ -182,10 +184,9 @@ mod tests {
 
     fn create_test_layout() -> PartitionLayout {
         let device = RootDevice {
-            path: PathBuf::from("/dev/sda"),
-            name: "sda".to_string(),
+            base: PathBuf::from("/dev/sda"),
             partition_sep: "".to_string(),
-            root_partition: 2,
+            root_partition: PathBuf::from("/dev/sda2"),
         };
 
         let mut partitions = HashMap::new();

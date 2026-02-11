@@ -57,16 +57,25 @@ pub struct PartitionLayout {
 }
 
 impl PartitionLayout {
-    /// Detect partition layout from a root device
-    pub fn detect(device: &RootDevice) -> Result<Self> {
-        let table_type = detect_partition_table_type(&device.path)?;
-        let partitions = build_partition_map(device, table_type);
+    /// Detects the partition layout from the given root device.
+    pub fn detect(device: RootDevice) -> Result<Self> {
+        let table_type = detect_partition_table_type(&device.base)?;
+        let partitions = build_partition_map(&device, table_type);
 
         Ok(Self {
             table_type,
             partitions,
-            device: device.clone(),
+            device,
         })
+    }
+
+    /// Returns the symlink target for rootCurrent based on which root partition is active.
+    pub fn root_current_target(&self) -> &Path {
+        if self.is_root_a() {
+            self.partitions.get(partition_names::ROOT_A).unwrap()
+        } else {
+            self.partitions.get(partition_names::ROOT_B).unwrap()
+        }
     }
 
     /// Get the device path for a named partition
@@ -74,9 +83,19 @@ impl PartitionLayout {
         self.partitions.get(name)
     }
 
+    /// Check if current root is rootA (partition 2)
+    fn is_root_a(&self) -> bool {
+        let root_part_str = self.device.root_partition
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        root_part_str.ends_with('2') || root_part_str.ends_with("p2")
+    }
+
     /// Get the current root partition path (rootA or rootB based on boot)
     pub fn root_current(&self) -> PathBuf {
-        if self.device.root_partition == PARTITION_NUM_ROOT_A {
+        if self.is_root_a() {
             self.partitions
                 .get(partition_names::ROOT_A)
                 .cloned()
@@ -228,28 +247,25 @@ mod tests {
 
     fn create_test_device_sda() -> RootDevice {
         RootDevice {
-            path: PathBuf::from("/dev/sda"),
-            name: "sda".to_string(),
+            base: PathBuf::from("/dev/sda"),
             partition_sep: "".to_string(),
-            root_partition: 2,
+            root_partition: PathBuf::from("/dev/sda2"),
         }
     }
 
     fn create_test_device_nvme() -> RootDevice {
         RootDevice {
-            path: PathBuf::from("/dev/nvme0n1"),
-            name: "nvme0n1".to_string(),
+            base: PathBuf::from("/dev/nvme0n1"),
             partition_sep: "p".to_string(),
-            root_partition: 2,
+            root_partition: PathBuf::from("/dev/nvme0n1p2"),
         }
     }
 
     fn create_test_device_mmc() -> RootDevice {
         RootDevice {
-            path: PathBuf::from("/dev/mmcblk0"),
-            name: "mmcblk0".to_string(),
+            base: PathBuf::from("/dev/mmcblk0"),
             partition_sep: "p".to_string(),
-            root_partition: 3, // rootB
+            root_partition: PathBuf::from("/dev/mmcblk0p3"), // rootB
         }
     }
 
@@ -378,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_root_current_root_a() {
-        let device = create_test_device_sda(); // root_partition = 2 (rootA)
+        let device = create_test_device_sda(); // root_partition ends with 2 (rootA)
         let layout = PartitionLayout {
             table_type: PartitionTableType::Gpt,
             partitions: build_partition_map(&device, PartitionTableType::Gpt),
@@ -390,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_root_current_root_b() {
-        let device = create_test_device_mmc(); // root_partition = 3 (rootB)
+        let device = create_test_device_mmc(); // root_partition ends with 3 (rootB)
         let layout = PartitionLayout {
             table_type: PartitionTableType::Dos,
             partitions: build_partition_map(&device, PartitionTableType::Dos),

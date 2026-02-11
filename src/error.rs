@@ -98,26 +98,20 @@ pub enum ConfigError {
 /// Errors related to partition detection and management
 #[derive(Error, Debug)]
 pub enum PartitionError {
-    #[error("Failed to detect root device: {0}")]
-    RootDeviceNotFound(String),
+    #[error("device detection failed: {0}")]
+    DeviceDetection(String),
 
-    #[error("Invalid partition table on {}: {reason}", device.display())]
+    #[error("invalid partition table on {}: {reason}", device.display())]
     InvalidPartitionTable { device: PathBuf, reason: String },
 
-    #[error("Partition '{name}' not found on {}", device.display())]
-    PartitionNotFound { device: PathBuf, name: String },
-
-    #[error("Failed to create symlink {} -> {}: {reason}", link.display(), target.display())]
+    #[error("symlink creation failed for {} -> {}: {reason}", link.display(), target.display())]
     SymlinkFailed {
         link: PathBuf,
         target: PathBuf,
         reason: String,
     },
 
-    #[error("Command '{command}' failed: {reason}")]
-    CommandFailed { command: String, reason: String },
-
-    #[error("IO error: {0}")]
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
 

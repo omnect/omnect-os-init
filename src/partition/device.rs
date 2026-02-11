@@ -131,9 +131,7 @@ fn derive_base_device(partition_path: &Path) -> Result<(PathBuf, String)> {
             ))
         })?;
 
-    let parent = partition_path
-        .parent()
-        .unwrap_or_else(|| Path::new("/dev"));
+    let parent = partition_path.parent().unwrap_or_else(|| Path::new("/dev"));
 
     // Try different partition naming schemes
     // NVMe/MMC: nvme0n1p2, mmcblk0p2 - partition number after 'p'

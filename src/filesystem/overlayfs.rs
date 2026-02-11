@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use nix::mount::{MsFlags, mount};
+use nix::mount::MsFlags;
 
 use crate::error::FilesystemError;
 use crate::filesystem::{MountManager, MountOptions, MountPoint, Result};

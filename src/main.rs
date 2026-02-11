@@ -72,12 +72,12 @@ fn run() -> Result<()> {
     let root_device = detect_root_device()?;
     info!(
         "Root device: {} (partition {})",
-        root_device.path.display(),
-        root_device.root_partition
+        root_device.base.display(),
+        root_device.root_partition.display()
     );
 
     // Detect partition layout
-    let layout = PartitionLayout::detect(&root_device)?;
+    let layout = PartitionLayout::detect(root_device)?;
     info!("Partition table: {}", layout.table_type);
 
     // Create /dev/omnect/* symlinks
