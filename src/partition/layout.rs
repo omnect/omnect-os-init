@@ -11,7 +11,7 @@ use crate::error::PartitionError;
 use crate::partition::{Result, RootDevice};
 
 /// Command to query partition table
-const SFDISK_CMD: &str = "sfdisk";
+const SFDISK_CMD: &str = "/sbin/sfdisk";
 
 /// Partition table types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
