@@ -9,7 +9,7 @@ use crate::error::FilesystemError;
 use crate::filesystem::Result;
 
 /// fsck command name
-const FSCK_CMD: &str = "fsck";
+const FSCK_CMD: &str = "/sbin/fsck";
 
 /// fsck exit codes
 mod exit_code {

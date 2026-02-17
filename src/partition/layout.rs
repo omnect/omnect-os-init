@@ -193,6 +193,22 @@ fn build_partition_map(
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
+    // Determine current root (rootA=p2 or rootB=p3)
+    let root_part_str = device.root_partition
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let is_root_a = root_part_str.ends_with('2') || root_part_str.ends_with("p2");
+    
+    partitions.insert(
+        partition_names::ROOT_CURRENT.to_string(),
+        if is_root_a {
+            device.partition_path(PARTITION_NUM_ROOT_A)
+        } else {
+            device.partition_path(PARTITION_NUM_ROOT_B)
+        },
+    );
+
     // Table-type specific partitions
     match table_type {
         PartitionTableType::Gpt => {

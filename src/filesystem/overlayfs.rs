@@ -77,7 +77,7 @@ impl OverlayConfig {
 /// Setup the etc partition with overlayfs
 ///
 /// Creates an overlay where:
-/// - Lower layer: factory/etc (read-only defaults)
+/// - Lower layer: rootfs/etc (read-only from current OS)
 /// - Upper layer: mnt/etc/upper (persistent changes)
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
@@ -89,8 +89,11 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
     // Overlay directories
     let upper_dir = etc_mount.join(overlay_dirs::UPPER);
     let work_dir = etc_mount.join(overlay_dirs::WORK);
-    let lower_dir = factory_mount.join(paths::ETC);
+    let lower_dir = rootfs.join(paths::ETC);
     let target = rootfs.join(paths::ETC);
+
+    // Factory etc is only used for first-boot initialization
+    let factory_etc = factory_mount.join(paths::ETC);
 
     // Ensure directories exist
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
@@ -100,15 +103,16 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
 
     if is_first_boot {
         log::info!("First boot detected - copying factory etc to upper layer");
-        copy_directory_contents(&lower_dir, &upper_dir)?;
+        copy_directory_contents(&factory_etc, &upper_dir)?;
     }
 
     // Mount the overlay
     mount_overlay(mm, &lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(
-        "Setup etc overlay: {} -> {}",
+        "Setup etc overlay: lower={}, upper={} -> {}",
         lower_dir.display(),
+        upper_dir.display(),
         target.display()
     );
 
@@ -118,17 +122,16 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
 /// Setup the data partition with home overlayfs and bind mounts
 ///
 /// Creates:
-/// - Overlay for /home (factory/home lower, data/home/upper upper)
+/// - Overlay for /home (rootfs/home lower, data/home/upper upper)
 /// - Bind mount: data/var/lib -> rootfs/var/lib
 /// - Bind mount: data/local -> rootfs/usr/local
 /// - Optional: data/var/log -> rootfs/var/log (if persistent_var_log enabled)
 pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Result<()> {
     let rootfs = &config.rootfs_dir;
     let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-    let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
 
-    // Setup home overlay
-    setup_home_overlay(mm, rootfs, &data_mount, &factory_mount)?;
+    // Setup home overlay (no factory_mount parameter needed)
+    setup_home_overlay(mm, rootfs, &data_mount)?;
 
     // Setup bind mounts
     setup_var_lib_bind(mm, rootfs, &data_mount)?;
@@ -147,24 +150,24 @@ fn setup_home_overlay(
     mm: &mut MountManager,
     rootfs: &Path,
     data_mount: &Path,
-    factory_mount: &Path,
 ) -> Result<()> {
     let home_data = data_mount.join(paths::HOME);
     let upper_dir = home_data.join(overlay_dirs::UPPER);
     let work_dir = home_data.join(overlay_dirs::WORK);
-    let lower_dir = factory_mount.join(paths::HOME);
+    let lower_dir = rootfs.join(paths::HOME);
     let target = rootfs.join(paths::HOME);
 
     // Ensure directories exist
     ensure_dir(&home_data)?;
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
-    // Mount the overlay
+    // Mount the overlay with rootfs/home as lower layer
     mount_overlay(mm, &lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(
-        "Setup home overlay: {} -> {}",
+        "Setup home overlay: lower={}, upper={} -> {}",
         lower_dir.display(),
+        upper_dir.display(),
         target.display()
     );
 

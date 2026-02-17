@@ -3,6 +3,7 @@
 //! This module mounts essential filesystems (/dev, /proc, /sys, /run)
 //! that must be available before any other initialization can occur.
 
+use std::fs;
 use nix::mount::{MsFlags, mount};
 
 use crate::error::EarlyInitError;
@@ -60,7 +61,21 @@ pub fn mount_essential_filesystems() -> Result<()> {
         MsFlags::empty(),
     )?;
 
+    // Disable printk rate limiting for /dev/kmsg
+    // This ensures all init messages are logged without suppression
+    disable_printk_ratelimit();
+
     Ok(())
+}
+
+/// Disable printk rate limiting for /dev/kmsg
+///
+/// By default, the kernel rate-limits messages written to /dev/kmsg.
+/// For the init process, we want all messages to be logged.
+fn disable_printk_ratelimit() {
+    // Try to set printk_devkmsg to "on" to disable rate limiting
+    // This is a best-effort operation - if it fails, we continue anyway
+    let _ = fs::write("/proc/sys/kernel/printk_devkmsg", "on\n");
 }
 
 fn mount_if_needed(source: &str, target: &str, fstype: &str, flags: MsFlags) -> Result<()> {
