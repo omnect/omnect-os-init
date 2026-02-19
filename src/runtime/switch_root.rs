@@ -30,6 +30,10 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         new_root.display(),
         init_path
     );
+    // Move critical mounts to new root before switching
+    move_mount("/dev", &new_root.join("dev"))?;
+    move_mount("/proc", &new_root.join("proc"))?;
+    move_mount("/sys", &new_root.join("sys"))?;
 
     if !new_root.exists() {
         return Err(InitramfsError::Io(std::io::Error::new(
@@ -74,6 +78,27 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         std::io::ErrorKind::Other,
         format!("Failed to exec init: {}", err),
     )))
+
+
+}
+
+fn move_mount(source: &str, target: &Path) -> Result<()> {
+    use nix::mount::{mount, MsFlags};
+    
+    mount(
+        Some(source),
+        target,
+        None::<&str>,
+        MsFlags::MS_MOVE,
+        None::<&str>,
+    ).map_err(|e| {
+        InitramfsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to move to {}", e),
+        ))
+    })?;
+    
+    Ok(())
 }
 
 /// Find the init binary in the new root

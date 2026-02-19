@@ -94,7 +94,7 @@ fn run() -> Result<()> {
     mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
 
     // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;
+    //setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;
 
     // Setup overlays
     let overlay_config = OverlayConfig::new(&config.rootfs_dir)
@@ -107,7 +107,7 @@ fn run() -> Result<()> {
     create_fs_links(&config.rootfs_dir)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&config.rootfs_dir, &ods_status, bootloader.as_ref())?;
+    //create_ods_runtime_files(&config.rootfs_dir, &ods_status, bootloader.as_ref())?;
 
     info!("omnect-os-initramfs completed successfully");
 
