@@ -4,8 +4,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use std::thread;
+
 
 use crate::partition::{PartitionError, Result};
+
+const DEVICE_WAIT_TIMEOUT_SECS: u64 = 30;
+const DEVICE_POLL_INTERVAL_MS: u64 = 100;
 
 /// Represents the detected root block device and its properties.
 #[derive(Debug, Clone)]
@@ -62,6 +68,8 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
         )));
     }
 
+    wait_for_device(&PathBuf::from(&root_param))?;
+
     let partition_path = PathBuf::from(&root_param);
     if !partition_path.exists() {
         return Err(PartitionError::DeviceDetection(format!(
@@ -95,6 +103,27 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
         partition_sep,
         root_partition: partition_path,
     })
+}
+
+fn wait_for_device(device: &Path) -> Result<()> {
+    let timeout = Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS);
+    let poll_interval = Duration::from_millis(DEVICE_POLL_INTERVAL_MS);
+    let start = Instant::now();
+
+    loop {
+        if device.exists() {
+            return Ok(());
+        }
+
+        if start.elapsed() > timeout {
+            return Err(PartitionError::DeviceDetection(
+                format!("Device {} did not appear within {} seconds", 
+                    device.display(), 
+                    DEVICE_WAIT_TIMEOUT_SECS)
+            ));
+        }
+        thread::sleep(poll_interval);
+    }
 }
 
 /// Parses a parameter value from kernel command line.

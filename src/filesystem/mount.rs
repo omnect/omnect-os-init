@@ -255,6 +255,21 @@ impl MountManager {
         self.mount(MountPoint::new(source, target, options))
     }
 
+    /// Mount a tmpfs filesystem
+    pub fn mount_tmpfs(
+        &mut self,
+        target: impl Into<PathBuf>,
+        flags: MsFlags,
+        data: Option<&str>,
+    ) -> Result<()> {
+        let options = MountOptions {
+            fstype: Some(fstype::TMPFS.to_string()),
+            flags,
+            data: data.map(|s| s.to_string()),
+        };
+        self.mount(MountPoint::new("tmpfs", target, options))
+    }    
+
     /// Create a bind mount
     pub fn mount_bind(
         &mut self,
