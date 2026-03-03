@@ -8,7 +8,7 @@
 use crate::error::Result;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Runtime configuration for the initramfs
 #[derive(Debug, Clone)]
@@ -82,7 +82,7 @@ impl Config {
     }
 
     /// Parse os-release file for configuration
-    fn parse_os_release(rootfs_dir: &PathBuf) -> Result<(bool, Vec<String>, Vec<String>)> {
+    fn parse_os_release(rootfs_dir: &Path) -> Result<(bool, Vec<String>, Vec<String>)> {
         // Try rootfs first, then fall back to initramfs /etc/os-release
         let os_release_path = rootfs_dir.join("etc/os-release");
         let content = if os_release_path.exists() {

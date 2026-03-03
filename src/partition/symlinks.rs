@@ -26,20 +26,6 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
         create_symlink(device_path, &symlink_path(name))?;
     }
 
-    // Determine if rootA or rootB
-    let root_part_str = layout.device.root_partition
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    
-    let is_root_a = root_part_str.ends_with('2') || root_part_str.ends_with("p2");
-    
-    log::info!(
-        "Root partition is {}, creating rootCurrent symlink to {}",
-        layout.device.root_partition.display(),
-        if is_root_a { "rootA" } else { "rootB" }
-    );
-
     // Create rootCurrent symlink pointing to the active root partition
     let root_current_target = layout.root_current();
     create_symlink(
@@ -48,10 +34,10 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     )?;
 
     log::info!(
-        "Created /dev/omnect symlinks for {} device {} ({})",
+        "Created /dev/omnect symlinks for {} device {}, rootCurrent -> {}",
         layout.table_type,
         layout.device.base.display(),
-        if is_root_a { "rootA" } else { "rootB" }
+        root_current_target.display()
     );
 
     Ok(())

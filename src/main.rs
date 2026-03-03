@@ -7,7 +7,6 @@ use std::process;
 use std::thread;
 use std::time::Duration;
 use nix::mount::MsFlags;
-use std::path::Path;
 
 use log::{error, info, warn};
 
@@ -36,6 +35,9 @@ fn main() {
         spawn_emergency_shell();
     }
 
+    // Determine release mode early for use in error handling
+    let is_release_image = Config::load().map(|c| c.is_release_image).unwrap_or(false);
+
     // Initialize logging
     match KmsgLogger::new() {
         Ok(logger) => {
@@ -51,7 +53,7 @@ fn main() {
     // Run main initialization
     if let Err(e) = run() {
         error!("Initramfs failed: {}", e);
-        handle_fatal_error(e);
+        handle_fatal_error(e, is_release_image);
     }
 }
 
@@ -206,11 +208,7 @@ fn mount_partitions(
 }
 
 /// Handle fatal errors based on image type
-fn handle_fatal_error(error: InitramfsError) -> ! {
-    let is_release = std::fs::read_to_string("/etc/os-release")
-        .map(|content| content.contains("OMNECT_RELEASE_IMAGE=\"1\""))
-        .unwrap_or(false);
-
+fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
     if is_release {
         // Release image: loop forever to prevent reboot loops
         loop {

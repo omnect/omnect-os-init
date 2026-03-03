@@ -6,7 +6,8 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
-use nix::unistd::{chdir, chroot};
+use nix::mount::{umount2, MntFlags};
+use nix::unistd::{chdir, pivot_root};
 
 use crate::error::{InitramfsError, Result};
 
@@ -30,11 +31,6 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         new_root.display(),
         init_path
     );
-    // Move critical mounts to new root before switching
-    move_mount("/dev", &new_root.join("dev"))?;
-    move_mount("/proc", &new_root.join("proc"))?;
-    move_mount("/sys", &new_root.join("sys"))?;
-
     if !new_root.exists() {
         return Err(InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -42,9 +38,14 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         )));
     }
 
+    // Move critical mounts to new root before switching
+    move_mount("/dev", &new_root.join("dev"))?;
+    move_mount("/proc", &new_root.join("proc"))?;
+    move_mount("/sys", &new_root.join("sys"))?;
+
     let init_full_path = find_init(new_root, init_path)?;
 
-    // Change directory to new root
+    // chdir into new_root so that "." refers to it for pivot_root
     chdir(new_root).map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -52,15 +53,23 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         ))
     })?;
 
-    // Perform chroot
-    chroot(new_root).map_err(|e| {
+    // pivot_root(".", ".") makes new_root the new / and mounts the old root at "."
+    pivot_root(".", ".").map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("Failed to chroot: {}", e),
+            format!("Failed to pivot_root: {}", e),
         ))
     })?;
 
-    // Change to root of new filesystem
+    // Detach the old initramfs from the VFS
+    umount2(".", MntFlags::MNT_DETACH).map_err(|e| {
+        InitramfsError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to detach old root: {}", e),
+        ))
+    })?;
+
+    // Change to the real root
     chdir("/").map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
