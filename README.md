@@ -90,7 +90,7 @@ src/
     ├── mod.rs               # Public API
     ├── fs_link.rs           # fs-link symlink creation
     ├── omnect_device_service.rs  # ODS JSON status file writer
-    └── switch_root.rs       # pivot_root + initramfs detach + exec init
+    └── switch_root.rs       # MS_MOVE new root to / + chroot + exec init
 ```
 
 ## License

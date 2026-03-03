@@ -6,8 +6,8 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
-use nix::mount::{umount2, MntFlags};
-use nix::unistd::{chdir, pivot_root};
+use nix::mount::{MsFlags, mount};
+use nix::unistd::{chdir, chroot};
 
 use crate::error::{InitramfsError, Result};
 
@@ -45,7 +45,6 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
 
     let init_full_path = find_init(new_root, init_path)?;
 
-    // chdir into new_root so that "." refers to it for pivot_root
     chdir(new_root).map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -53,23 +52,30 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         ))
     })?;
 
-    // pivot_root(".", ".") makes new_root the new / and mounts the old root at "."
-    pivot_root(".", ".").map_err(|e| {
+    // MS_MOVE re-mounts the new root at /. This is the correct approach for
+    // initramfs: ramfs does not support pivot_root (EINVAL). busybox and
+    // systemd use the same MS_MOVE + chroot pattern.
+    mount(
+        Some("."),
+        "/",
+        None::<&str>,
+        MsFlags::MS_MOVE,
+        None::<&str>,
+    )
+    .map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("Failed to pivot_root: {}", e),
+            format!("Failed to MS_MOVE new root to /: {}", e),
         ))
     })?;
 
-    // Detach the old initramfs from the VFS
-    umount2(".", MntFlags::MNT_DETACH).map_err(|e| {
+    chroot(".").map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("Failed to detach old root: {}", e),
+            format!("Failed to chroot: {}", e),
         ))
     })?;
 
-    // Change to the real root
     chdir("/").map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,

@@ -115,6 +115,10 @@ fn run() -> Result<()> {
 
     info!("omnect-os-initramfs completed successfully");
 
+    // Release all tracked mounts before exec. The mounts themselves must
+    // survive into the new root; the RAII destructor must not unmount them.
+    mount_manager.release();
+
     // Switch root to final rootfs
     switch_root(&config.rootfs_dir, None)?;
 

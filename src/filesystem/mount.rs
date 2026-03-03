@@ -374,6 +374,15 @@ impl MountManager {
     pub fn mounts(&self) -> &[MountPoint] {
         &self.mounts
     }
+
+    /// Forget all tracked mounts without unmounting them.
+    ///
+    /// Call this immediately before exec-ing into the new root so that
+    /// the Drop impl does not tear down mounts that must survive into
+    /// the new userspace.
+    pub fn release(&mut self) {
+        self.mounts.clear();
+    }
 }
 
 impl Default for MountManager {
