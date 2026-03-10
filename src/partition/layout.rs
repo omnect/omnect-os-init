@@ -85,21 +85,7 @@ impl PartitionLayout {
 
     /// Check if current root is rootA (partition 2)
     fn is_root_a(&self) -> bool {
-        let root_part_str = self
-            .device
-            .root_partition
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-
-        // Parse the trailing numeric suffix to avoid false matches on devices
-        // with 10+ partitions (e.g. nvme0n1p12 would wrongly match "p2").
-        let suffix: u32 = root_part_str
-            .trim_start_matches(|c: char| !c.is_ascii_digit())
-            .parse()
-            .unwrap_or(0);
-
-        suffix == PARTITION_NUM_ROOT_A
+        partition_suffix(&self.device.root_partition) == PARTITION_NUM_ROOT_A
     }
 
     /// Get the current root partition path (rootA or rootB based on boot)
@@ -133,6 +119,19 @@ const PARTITION_NUM_FACTORY_DOS: u32 = 5;
 const PARTITION_NUM_CERT_DOS: u32 = 6;
 const PARTITION_NUM_ETC_DOS: u32 = 7;
 const PARTITION_NUM_DATA_DOS: u32 = 8;
+
+/// Parse the trailing numeric partition suffix from a device path.
+///
+/// Examples: `sda2` → 2, `mmcblk0p3` → 3, `nvme0n1p12` → 12.
+/// Returns 0 if the suffix cannot be parsed.
+fn partition_suffix(path: &Path) -> u32 {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .unwrap_or(0)
+}
 
 /// Detect partition table type using sfdisk
 fn detect_partition_table_type(device: &Path) -> Result<PartitionTableType> {
@@ -202,13 +201,10 @@ fn build_partition_map(
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
-    // Determine current root (rootA=p2 or rootB=p3)
-    let root_part_str = device
-        .root_partition
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let is_root_a = root_part_str.ends_with('2') || root_part_str.ends_with("p2");
+    // Determine current root by parsing the numeric partition suffix.
+    // String suffix matching (e.g. ends_with("p2")) is wrong for devices
+    // with 10+ partitions (nvme0n1p12 would falsely match).
+    let is_root_a = partition_suffix(&device.root_partition) == PARTITION_NUM_ROOT_A;
 
     partitions.insert(
         partition_names::ROOT_CURRENT.to_string(),
