@@ -91,10 +91,7 @@ impl OdsStatus {
 /// Files are written directly to the initramfs `/run` tmpfs. `switch_root`
 /// moves that mount into the new root via `MS_MOVE`, so they remain visible
 /// to ODS at the same path after the root pivot.
-pub fn create_ods_runtime_files(
-    status: &OdsStatus,
-    bootloader: &dyn Bootloader,
-) -> Result<()> {
+pub fn create_ods_runtime_files(status: &OdsStatus, bootloader: &dyn Bootloader) -> Result<()> {
     let ods_dir = Path::new(ODS_RUNTIME_DIR);
 
     // Ensure directory exists
@@ -180,8 +177,6 @@ fn copy_factory_reset_status(ods_dir: &Path) -> Result<()> {
 
     Ok(())
 }
-
-
 
 #[cfg(test)]
 mod tests {

@@ -92,7 +92,14 @@ impl PartitionLayout {
             .and_then(|s| s.to_str())
             .unwrap_or("");
 
-        root_part_str.ends_with('2') || root_part_str.ends_with("p2")
+        // Parse the trailing numeric suffix to avoid false matches on devices
+        // with 10+ partitions (e.g. nvme0n1p12 would wrongly match "p2").
+        let suffix: u32 = root_part_str
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .unwrap_or(0);
+
+        suffix == PARTITION_NUM_ROOT_A
     }
 
     /// Get the current root partition path (rootA or rootB based on boot)

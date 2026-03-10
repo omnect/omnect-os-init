@@ -4,6 +4,7 @@
 //! Rust implementation.
 
 use nix::mount::MsFlags;
+use std::fs;
 use std::process;
 use std::thread;
 use std::time::Duration;
@@ -35,8 +36,12 @@ fn main() {
         spawn_emergency_shell();
     }
 
-    // Determine release mode early for use in error handling
-    let is_release_image = Config::load().map(|c| c.is_release_image).unwrap_or(false);
+    // Determine release mode from /proc/cmdline only — rootfs is not yet
+    // mounted, so os-release cannot be read reliably here.
+    let is_release_image = fs::read_to_string("/proc/cmdline")
+        .unwrap_or_default()
+        .split_whitespace()
+        .any(|p| p == "omnect_release_image=1");
 
     // Initialize logging
     match KmsgLogger::new() {
@@ -61,7 +66,7 @@ fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
     // Load configuration
-    let config = Config::load()?;
+    let mut config = Config::load()?;
     info!(
         "Configuration loaded: rootfs_dir={}, release={}",
         config.rootfs_dir.display(),
@@ -96,6 +101,13 @@ fn run() -> Result<()> {
 
     // Run fsck on partitions and mount them
     mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
+
+    // Now that rootfs is mounted, read os-release for feature flags.
+    // Non-fatal: missing os-release means no features enabled.
+    if let Err(e) = config.load_os_release() {
+        log::warn!("Failed to read os-release from rootfs: {}", e);
+    }
+    info!("release={}", config.is_release_image);
 
     // Setup raw rootfs mount (before overlays)
     setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;

@@ -71,7 +71,10 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     })?;
 
     chdir("/").map_err(|e| {
-        InitramfsError::Io(std::io::Error::other(format!("Failed to chdir to /: {}", e)))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to chdir to /: {}",
+            e
+        )))
     })?;
 
     log::info!("Executing init: {}", init_full_path);
@@ -170,5 +173,4 @@ mod tests {
         let result = find_init(temp.path(), "/sbin/init");
         assert!(result.is_err());
     }
-
 }

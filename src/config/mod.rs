@@ -48,20 +48,32 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/rootfs"));
 
-        // Parse os-release if available
-        let (is_release_image, machine_features, distro_features) =
-            Self::parse_os_release(&rootfs_dir).unwrap_or((false, vec![], vec![]));
+        // os-release is not read here: rootfs is not mounted yet at this point.
+        // Call load_os_release() after mount_partitions() succeeds.
 
         Ok(Self {
             rootfs_dir,
             rootpart: cmdline_params.get("rootpart").cloned(),
             rootblk_hint: cmdline_params.get("rootblk").cloned(),
             root_device: cmdline_params.get("root").cloned(),
-            is_release_image,
-            machine_features,
-            distro_features,
+            is_release_image: false,
+            machine_features: vec![],
+            distro_features: vec![],
             cmdline_params,
         })
+    }
+
+    /// Load os-release fields from the mounted rootfs.
+    ///
+    /// Must be called after `mount_partitions` so that `rootfs_dir/etc/os-release`
+    /// exists and reflects the real OS image.
+    pub fn load_os_release(&mut self) -> Result<()> {
+        let (is_release, machine_features, distro_features) =
+            Self::parse_os_release(&self.rootfs_dir)?;
+        self.is_release_image = is_release;
+        self.machine_features = machine_features;
+        self.distro_features = distro_features;
+        Ok(())
     }
 
     /// Parse kernel command line parameters
@@ -83,13 +95,8 @@ impl Config {
 
     /// Parse os-release file for configuration
     fn parse_os_release(rootfs_dir: &Path) -> Result<(bool, Vec<String>, Vec<String>)> {
-        // Try rootfs first, then fall back to initramfs /etc/os-release
         let os_release_path = rootfs_dir.join("etc/os-release");
-        let content = if os_release_path.exists() {
-            fs::read_to_string(&os_release_path)?
-        } else {
-            fs::read_to_string("/etc/os-release").unwrap_or_default()
-        };
+        let content = fs::read_to_string(&os_release_path).unwrap_or_default();
 
         let mut is_release = false;
         let mut machine_features = vec![];
