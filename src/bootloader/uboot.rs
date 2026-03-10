@@ -5,7 +5,6 @@
 
 use std::process::Command;
 
-use crate::bootloader::types::{compress_and_encode, decode_and_decompress};
 use crate::bootloader::{Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result};
 use crate::error::BootloaderError;
 
@@ -89,19 +88,14 @@ impl Bootloader for UBootBootloader {
         self.run_fw_setenv(key, value)
     }
 
-    fn save_fsck_status(&mut self, partition: &str, output: &str, code: i32) -> Result<()> {
+    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        let value = format!("{}:{}", code, output);
-        let encoded = compress_and_encode(&value)?;
-        self.run_fw_setenv(&var_name, Some(&encoded))
+        self.run_fw_setenv(&var_name, Some(&code.to_string()))
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        match self.run_fw_printenv(&var_name)? {
-            Some(encoded) => Ok(Some(decode_and_decompress(&encoded)?)),
-            None => Ok(None),
-        }
+        self.run_fw_printenv(&var_name)
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
@@ -115,26 +109,4 @@ impl Bootloader for UBootBootloader {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compress_decompress_roundtrip() {
-        let original = "fsck from util-linux 2.37.2\n/dev/sda1: clean, 100/1000 files";
-
-        let encoded = compress_and_encode(original).unwrap();
-        let decoded = decode_and_decompress(&encoded).unwrap();
-
-        assert_eq!(original, decoded);
-    }
-
-    #[test]
-    fn test_compress_reduces_size() {
-        let original = "a]".repeat(1000);
-
-        let encoded = compress_and_encode(&original).unwrap();
-
-        // Compressed + base64 should still be smaller than original for repetitive data
-        assert!(encoded.len() < original.len());
-    }
-}
+mod tests {}

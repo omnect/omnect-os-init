@@ -49,10 +49,12 @@ pub trait Bootloader: Send + Sync {
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
     fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()>;
 
-    /// Save fsck status to bootloader environment
+    /// Save fsck exit code to bootloader environment.
     ///
-    /// The status is compressed (gzip) and base64 encoded before storage.
-    fn save_fsck_status(&mut self, partition: &str, output: &str, code: i32) -> Result<()>;
+    /// Only the integer exit code is stored (single digit) to keep the
+    /// environment block small. Full fsck output is written to
+    /// `/data/var/log/fsck/<partition>.log` by the caller.
+    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()>;
 
     /// Get fsck status from bootloader environment
     ///
@@ -125,19 +127,15 @@ impl Bootloader for MockBootloader {
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, output: &str, _code: i32) -> Result<()> {
+    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()> {
         let key = format!("omnect_fsck_{}", partition);
-        let encoded = types::compress_and_encode(output)?;
-        self.env.insert(key, encoded);
+        self.env.insert(key, code.to_string());
         Ok(())
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {
         let key = format!("omnect_fsck_{}", partition);
-        match self.env.get(&key) {
-            Some(encoded) => Ok(Some(types::decode_and_decompress(encoded)?)),
-            None => Ok(None),
-        }
+        Ok(self.env.get(&key).cloned())
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
@@ -189,11 +187,10 @@ mod tests {
     fn test_mock_bootloader_fsck_status() {
         let mut bl = MockBootloader::new();
 
-        let fsck_output = "fsck from util-linux 2.37.2\n/dev/sda1: clean";
-        bl.save_fsck_status("boot", fsck_output, 0).unwrap();
+        bl.save_fsck_status("boot", 1).unwrap();
 
         let retrieved = bl.get_fsck_status("boot").unwrap();
-        assert_eq!(retrieved, Some(fsck_output.to_string()));
+        assert_eq!(retrieved, Some("1".to_string()));
 
         bl.clear_fsck_status("boot").unwrap();
         assert_eq!(bl.get_fsck_status("boot").unwrap(), None);

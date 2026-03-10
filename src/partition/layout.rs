@@ -128,10 +128,7 @@ const PARTITION_NUM_DATA_DOS: u32 = 8;
 /// Uses the *trailing* digit run, not the first digit found, so that devices
 /// like `mmcblk0p2` (which contain digits in the base name) are handled correctly.
 fn partition_suffix(path: &Path) -> u32 {
-    let s = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let s = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     // Find the start of the last all-digit run at the end of the name.
     let digit_start = s
         .rfind(|c: char| !c.is_ascii_digit())

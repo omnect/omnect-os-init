@@ -91,10 +91,9 @@ impl Bootloader for GrubBootloader {
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, output: &str, code: i32) -> Result<()> {
+    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        let value = format!("{}:{}", code, output);
-        self.set_env(&var_name, Some(&value))
+        self.set_env(&var_name, Some(&code.to_string()))
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {

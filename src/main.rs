@@ -5,6 +5,7 @@
 
 use nix::mount::MsFlags;
 use std::fs;
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use log::{error, info, warn};
 
 use omnect_os_init::{
     Result,
+    bootloader::Bootloader,
     bootloader::create_bootloader,
     config::Config,
     error::{FilesystemError, InitramfsError},
@@ -93,7 +95,7 @@ fn run() -> Result<()> {
     create_omnect_symlinks(&layout)?;
 
     // Create bootloader abstraction
-    let bootloader = create_bootloader(&config.rootfs_dir)?;
+    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
     info!("Bootloader type: {}", bootloader.bootloader_type());
 
     // Initialize ODS status
@@ -101,6 +103,10 @@ fn run() -> Result<()> {
 
     // Run fsck on partitions and mount them
     mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
+
+    // Persist fsck results: exit code to bootloader env, full output to data partition log.
+    // Non-fatal: failures are logged as warnings.
+    persist_fsck_results(&ods_status, bootloader.as_mut(), &config.rootfs_dir);
 
     // Now that rootfs is mounted, read os-release for feature flags.
     // Non-fatal: missing os-release means no features enabled.
@@ -217,6 +223,48 @@ fn mount_partitions(
     // and lose any files written there (e.g. ODS runtime state).
 
     Ok(())
+}
+
+/// Persist fsck results after all partitions are mounted.
+///
+/// For each partition with a non-zero fsck exit code:
+/// - Stores the exit code in the bootloader environment (keeps grubenv/uboot-env small).
+/// - Writes the full output to `/data/var/log/fsck/<partition>.log` on the data partition
+///   so ODS and operators can inspect it after boot.
+fn persist_fsck_results(
+    ods_status: &OdsStatus,
+    bootloader: &mut dyn Bootloader,
+    rootfs_dir: &Path,
+) {
+    // Data partition is mounted at rootfs/mnt/data by mount_partitions.
+    // Files written here appear at /data/var/log/fsck/ in the final OS.
+    let log_dir = rootfs_dir.join("mnt/data/var/log/fsck");
+
+    for (partition, fsck) in &ods_status.fsck {
+        if fsck.code == 0 {
+            continue;
+        }
+
+        if let Err(e) = bootloader.save_fsck_status(partition, fsck.code) {
+            warn!(
+                "Failed to save fsck status for {} to bootloader env: {}",
+                partition, e
+            );
+        }
+
+        if !fsck.output.is_empty() {
+            if let Err(e) = fs::create_dir_all(&log_dir) {
+                warn!("Failed to create fsck log dir {}: {}", log_dir.display(), e);
+            } else {
+                let log_path = log_dir.join(format!("{}.log", partition));
+                if let Err(e) = fs::write(&log_path, &fsck.output) {
+                    warn!("Failed to write fsck log {}: {}", log_path.display(), e);
+                } else {
+                    info!("Wrote fsck log: {}", log_path.display());
+                }
+            }
+        }
+    }
 }
 
 /// Handle fatal errors based on image type
