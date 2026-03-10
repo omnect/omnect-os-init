@@ -111,7 +111,7 @@ fn run() -> Result<()> {
     create_fs_links(&config.rootfs_dir)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&config.rootfs_dir, &ods_status, bootloader.as_ref())?;
+    create_ods_runtime_files(&ods_status, bootloader.as_ref())?;
 
     info!("omnect-os-initramfs completed successfully");
 
@@ -195,16 +195,14 @@ fn mount_partitions(
         mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
     }
 
-    // Mount tmpfs for /run and /var/volatile
-    let run_mount = rootfs.join("run");
-    mm.mount_tmpfs(
-        &run_mount,
-        MsFlags::MS_NODEV | MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,
-        Some("mode=0755"),
-    )?;
-
+    // /var/volatile provides a writable mount for volatile data under the read-only rootfs
     let var_volatile = rootfs.join("var/volatile");
     mm.mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
+
+    // /run is NOT mounted here: the initramfs /run tmpfs (mounted by
+    // mount_essential_filesystems) is moved into the new root by switch_root
+    // using MS_MOVE. Mounting a second tmpfs at /rootfs/run would cause EBUSY
+    // and lose any files written there (e.g. ODS runtime state).
 
     Ok(())
 }

@@ -11,8 +11,10 @@ use serde::Serialize;
 use crate::bootloader::Bootloader;
 use crate::error::{InitramfsError, Result};
 
-/// Directory for ODS runtime files
-const ODS_RUNTIME_DIR: &str = "run/omnect-device-service";
+/// Directory for ODS runtime files.
+/// Written to the initramfs /run tmpfs; switch_root moves /run into the new
+/// root via MS_MOVE, so these files appear at the same path after boot.
+const ODS_RUNTIME_DIR: &str = "/run/omnect-device-service";
 
 /// Main status file name
 const ODS_STATUS_FILE: &str = "omnect-os-initramfs.json";
@@ -85,15 +87,18 @@ impl OdsStatus {
 }
 
 /// Create all runtime files for omnect-device-service
+///
+/// Files are written directly to the initramfs `/run` tmpfs. `switch_root`
+/// moves that mount into the new root via `MS_MOVE`, so they remain visible
+/// to ODS at the same path after the root pivot.
 pub fn create_ods_runtime_files(
-    rootfs_dir: &Path,
     status: &OdsStatus,
     bootloader: &dyn Bootloader,
 ) -> Result<()> {
-    let ods_dir = rootfs_dir.join(ODS_RUNTIME_DIR);
+    let ods_dir = Path::new(ODS_RUNTIME_DIR);
 
     // Ensure directory exists
-    fs::create_dir_all(&ods_dir).map_err(|e| {
+    fs::create_dir_all(ods_dir).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to create ODS runtime dir: {}",
             e
@@ -101,13 +106,13 @@ pub fn create_ods_runtime_files(
     })?;
 
     // Write main status file
-    write_status_file(&ods_dir, status)?;
+    write_status_file(ods_dir, status)?;
 
     // Handle update validation
-    handle_update_validation(&ods_dir, bootloader)?;
+    handle_update_validation(ods_dir, bootloader)?;
 
     // Copy factory reset status if exists
-    copy_factory_reset_status(&ods_dir)?;
+    copy_factory_reset_status(ods_dir)?;
 
     log::info!("Created ODS runtime files in {}", ods_dir.display());
 
