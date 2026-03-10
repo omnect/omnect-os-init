@@ -55,14 +55,7 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     // MS_MOVE re-mounts the new root at /. This is the correct approach for
     // initramfs: ramfs does not support pivot_root (EINVAL). busybox and
     // systemd use the same MS_MOVE + chroot pattern.
-    mount(
-        Some("."),
-        "/",
-        None::<&str>,
-        MsFlags::MS_MOVE,
-        None::<&str>,
-    )
-    .map_err(|e| {
+    mount(Some("."), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>).map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Failed to MS_MOVE new root to /: {}", e),
@@ -93,26 +86,25 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         std::io::ErrorKind::Other,
         format!("Failed to exec init: {}", err),
     )))
-
-
 }
 
 fn move_mount(source: &str, target: &Path) -> Result<()> {
-    use nix::mount::{mount, MsFlags};
-    
+    use nix::mount::{MsFlags, mount};
+
     mount(
         Some(source),
         target,
         None::<&str>,
         MsFlags::MS_MOVE,
         None::<&str>,
-    ).map_err(|e| {
+    )
+    .map_err(|e| {
         InitramfsError::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!("Failed to move to {}", e),
         ))
     })?;
-    
+
     Ok(())
 }
 

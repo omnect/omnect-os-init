@@ -85,7 +85,9 @@ impl PartitionLayout {
 
     /// Check if current root is rootA (partition 2)
     fn is_root_a(&self) -> bool {
-        let root_part_str = self.device.root_partition
+        let root_part_str = self
+            .device
+            .root_partition
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("");
@@ -194,12 +196,13 @@ fn build_partition_map(
     );
 
     // Determine current root (rootA=p2 or rootB=p3)
-    let root_part_str = device.root_partition
+    let root_part_str = device
+        .root_partition
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
     let is_root_a = root_part_str.ends_with('2') || root_part_str.ends_with("p2");
-    
+
     partitions.insert(
         partition_names::ROOT_CURRENT.to_string(),
         if is_root_a {

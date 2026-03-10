@@ -3,8 +3,8 @@
 //! This module mounts essential filesystems (/dev, /proc, /sys, /run)
 //! that must be available before any other initialization can occur.
 
-use std::fs;
 use nix::mount::{MsFlags, mount};
+use std::fs;
 
 use crate::error::EarlyInitError;
 

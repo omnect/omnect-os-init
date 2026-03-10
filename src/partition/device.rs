@@ -4,9 +4,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use std::thread;
-
+use std::time::{Duration, Instant};
 
 use crate::partition::{PartitionError, Result};
 
@@ -116,11 +115,11 @@ fn wait_for_device(device: &Path) -> Result<()> {
         }
 
         if start.elapsed() > timeout {
-            return Err(PartitionError::DeviceDetection(
-                format!("Device {} did not appear within {} seconds", 
-                    device.display(), 
-                    DEVICE_WAIT_TIMEOUT_SECS)
-            ));
+            return Err(PartitionError::DeviceDetection(format!(
+                "Device {} did not appear within {} seconds",
+                device.display(),
+                DEVICE_WAIT_TIMEOUT_SECS
+            )));
         }
         thread::sleep(poll_interval);
     }

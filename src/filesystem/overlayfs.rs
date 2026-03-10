@@ -146,11 +146,7 @@ pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resu
 }
 
 /// Setup home directory overlay
-fn setup_home_overlay(
-    mm: &mut MountManager,
-    rootfs: &Path,
-    data_mount: &Path,
-) -> Result<()> {
+fn setup_home_overlay(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -> Result<()> {
     let home_data = data_mount.join(paths::HOME);
     let upper_dir = home_data.join(overlay_dirs::UPPER);
     let work_dir = home_data.join(overlay_dirs::WORK);

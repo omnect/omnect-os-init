@@ -268,7 +268,7 @@ impl MountManager {
             data: data.map(|s| s.to_string()),
         };
         self.mount(MountPoint::new("tmpfs", target, options))
-    }    
+    }
 
     /// Create a bind mount
     pub fn mount_bind(

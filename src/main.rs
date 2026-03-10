@@ -3,10 +3,10 @@
 //! This binary replaces the bash-based initramfs scripts with a type-safe
 //! Rust implementation.
 
+use nix::mount::MsFlags;
 use std::process;
 use std::thread;
 use std::time::Duration;
-use nix::mount::MsFlags;
 
 use log::{error, info, warn};
 
@@ -203,7 +203,11 @@ fn mount_partitions(
 
     // Mount tmpfs for /run and /var/volatile
     let run_mount = rootfs.join("run");
-    mm.mount_tmpfs(&run_mount, MsFlags::MS_NODEV | MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,Some("mode=0755"))?;
+    mm.mount_tmpfs(
+        &run_mount,
+        MsFlags::MS_NODEV | MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,
+        Some("mode=0755"),
+    )?;
 
     let var_volatile = rootfs.join("var/volatile");
     mm.mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
