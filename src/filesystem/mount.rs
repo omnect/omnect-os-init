@@ -28,7 +28,6 @@ mod flags {
 mod fstype {
     pub const EXT4: &str = "ext4";
     pub const VFAT: &str = "vfat";
-    pub const OVERLAY: &str = "overlay";
     pub const TMPFS: &str = "tmpfs";
 }
 

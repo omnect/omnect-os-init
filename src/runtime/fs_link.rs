@@ -103,37 +103,31 @@ fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
     let target = PathBuf::from(&entry.target);
 
     // Ensure parent directory exists
-    if let Some(parent) = link_path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = link_path.parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
     }
 
     // Remove existing link/file if present
     if link_path.exists() || link_path.is_symlink() {
         fs::remove_file(&link_path).map_err(|e| {
-            InitramfsError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Failed to remove existing file {}: {}",
-                    link_path.display(),
-                    e
-                ),
-            ))
+            InitramfsError::Io(std::io::Error::other(format!(
+                "Failed to remove existing file {}: {}",
+                link_path.display(),
+                e
+            )))
         })?;
     }
 
     // Create the symlink
     symlink(&target, &link_path).map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "Failed to create symlink {} -> {}: {}",
-                link_path.display(),
-                target.display(),
-                e
-            ),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to create symlink {} -> {}: {}",
+            link_path.display(),
+            target.display(),
+            e
+        )))
     })?;
 
     log::debug!(

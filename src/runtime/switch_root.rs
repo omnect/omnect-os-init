@@ -1,6 +1,8 @@
 //! Switch root to final rootfs and exec init
 //!
-//! Implements the switch_root operation to pivot from initramfs to the real rootfs.
+//! Implements the switch_root operation using MS_MOVE + chroot to transition
+//! from initramfs to the real rootfs. pivot_root(2) is not used because ramfs
+//! does not support it (returns EINVAL).
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -42,38 +44,34 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     move_mount("/dev", &new_root.join("dev"))?;
     move_mount("/proc", &new_root.join("proc"))?;
     move_mount("/sys", &new_root.join("sys"))?;
+    // /run must be moved so ODS can read its runtime state after root switching
+    move_mount("/run", &new_root.join("run"))?;
 
     let init_full_path = find_init(new_root, init_path)?;
 
     chdir(new_root).map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to chdir to new root: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to chdir to new root: {}",
+            e
+        )))
     })?;
 
     // MS_MOVE re-mounts the new root at /. This is the correct approach for
     // initramfs: ramfs does not support pivot_root (EINVAL). busybox and
     // systemd use the same MS_MOVE + chroot pattern.
     mount(Some("."), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>).map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to MS_MOVE new root to /: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to MS_MOVE new root to /: {}",
+            e
+        )))
     })?;
 
     chroot(".").map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to chroot: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!("Failed to chroot: {}", e)))
     })?;
 
     chdir("/").map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to chdir to /: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!("Failed to chdir to /: {}", e)))
     })?;
 
     log::info!("Executing init: {}", init_full_path);
@@ -82,10 +80,10 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     let err = Command::new(&init_full_path).exec();
 
     // If we get here, exec failed
-    Err(InitramfsError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!("Failed to exec init: {}", err),
-    )))
+    Err(InitramfsError::Io(std::io::Error::other(format!(
+        "Failed to exec init: {}",
+        err
+    ))))
 }
 
 fn move_mount(source: &str, target: &Path) -> Result<()> {
@@ -99,10 +97,12 @@ fn move_mount(source: &str, target: &Path) -> Result<()> {
         None::<&str>,
     )
     .map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to move to {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to move {} → {}: {}",
+            source,
+            target.display(),
+            e
+        )))
     })?;
 
     Ok(())
@@ -132,12 +132,6 @@ fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
             INIT_PATHS
         ),
     )))
-}
-
-/// Prepare for switch_root by cleaning up initramfs
-pub fn prepare_switch_root() -> Result<()> {
-    log::debug!("Preparing for switch_root");
-    Ok(())
 }
 
 #[cfg(test)]
@@ -177,8 +171,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_prepare_switch_root() {
-        assert!(prepare_switch_root().is_ok());
-    }
 }

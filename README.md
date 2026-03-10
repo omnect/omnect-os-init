@@ -16,7 +16,7 @@ Implemented functionality:
 - **Logging**: Kernel ring buffer (`/dev/kmsg`) with log level prefixes
 - **ODS integration**: Runtime files for `omnect-device-service`
 - **fs-links**: Symlink creation from `/etc/fs-link.conf` and `/etc/fs-link.conf.d/`
-- **switch\_root**: `pivot_root` + initramfs detach + exec systemd
+- **switch\_root**: MS_MOVE + chroot + exec systemd (`pivot_root(2)` is not used; ramfs does not support it)
 
 Not yet implemented (planned):
 

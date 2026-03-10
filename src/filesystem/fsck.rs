@@ -201,11 +201,11 @@ fn disable_kmsg_ratelimit() {
 
 /// Re-enable kernel message rate limiting
 fn enable_kmsg_ratelimit() {
-    if let Ok(mut saved) = SAVED_RATELIMIT.lock() {
-        if let Some((ratelimit, burst)) = saved.take() {
-            let _ = std::fs::write(PRINTK_RATELIMIT_PATH, ratelimit);
-            let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, burst);
-        }
+    if let Ok(mut saved) = SAVED_RATELIMIT.lock()
+        && let Some((ratelimit, burst)) = saved.take()
+    {
+        let _ = std::fs::write(PRINTK_RATELIMIT_PATH, ratelimit);
+        let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, burst);
     }
 }
 

@@ -11,12 +11,9 @@ use log::{Level, Log, Metadata, Record, SetLoggerError};
 
 /// Kernel log level prefixes (see kernel Documentation/admin-guide/serial-console.rst)
 mod kernel_level {
-    pub const EMERG: &str = "<0>";
-    pub const ALERT: &str = "<1>";
     pub const CRIT: &str = "<2>";
     pub const ERR: &str = "<3>";
     pub const WARNING: &str = "<4>";
-    pub const NOTICE: &str = "<5>";
     pub const INFO: &str = "<6>";
     pub const DEBUG: &str = "<7>";
 }

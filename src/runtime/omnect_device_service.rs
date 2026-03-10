@@ -30,7 +30,7 @@ const BOOTLOADER_UPDATED_FILE: &str = "omnect_bootloader_updated";
 const FACTORY_RESET_STATUS_FILE: &str = "/tmp/factory-reset.json";
 
 /// Status information for omnect-device-service
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
     /// Fsck results for each partition
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -66,15 +66,6 @@ pub struct FactoryResetStatus {
     pub paths: Vec<String>,
 }
 
-impl Default for OdsStatus {
-    fn default() -> Self {
-        Self {
-            fsck: HashMap::new(),
-            factory_reset: None,
-        }
-    }
-}
-
 impl OdsStatus {
     /// Create a new empty status
     pub fn new() -> Self {
@@ -103,10 +94,10 @@ pub fn create_ods_runtime_files(
 
     // Ensure directory exists
     fs::create_dir_all(&ods_dir).map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to create ODS runtime dir: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to create ODS runtime dir: {}",
+            e
+        )))
     })?;
 
     // Write main status file
@@ -127,10 +118,10 @@ pub fn create_ods_runtime_files(
 fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
     let status_path = ods_dir.join(ODS_STATUS_FILE);
     let json = serde_json::to_string_pretty(status).map_err(|e| {
-        InitramfsError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to serialize ODS status: {}", e),
-        ))
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to serialize ODS status: {}",
+            e
+        )))
     })?;
 
     fs::write(&status_path, json)?;
@@ -185,32 +176,7 @@ fn copy_factory_reset_status(ods_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Collect fsck status from bootloader environment
-pub fn collect_fsck_status(bootloader: &dyn Bootloader) -> HashMap<String, FsckStatus> {
-    let mut fsck_results = HashMap::new();
 
-    // List of partitions to check
-    let partitions = ["boot", "rootA", "rootB", "factory", "cert", "etc", "data"];
-
-    for partition in partitions {
-        if let Ok(Some(status)) = bootloader.get_fsck_status(partition) {
-            // Parse the status (format: "code:output")
-            if let Some((code_str, output)) = status.split_once(':') {
-                if let Ok(code) = code_str.parse::<i32>() {
-                    fsck_results.insert(
-                        partition.to_string(),
-                        FsckStatus {
-                            code,
-                            output: output.to_string(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    fsck_results
-}
 
 #[cfg(test)]
 mod tests {

@@ -68,10 +68,10 @@ impl Bootloader for GrubBootloader {
         let output = self.run_grub_editenv(&["list"])?;
 
         for line in output.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if k == key {
-                    return Ok(Some(v.to_string()));
-                }
+            if let Some((k, v)) = line.split_once('=')
+                && k == key
+            {
+                return Ok(Some(v.to_string()));
             }
         }
 

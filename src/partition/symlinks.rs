@@ -163,42 +163,7 @@ fn verify_symlink(link: &Path, expected_target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::partition::RootDevice;
-    use crate::partition::layout::PartitionTableType;
-    use std::collections::HashMap;
     use tempfile::TempDir;
-
-    fn create_test_layout() -> PartitionLayout {
-        let device = RootDevice {
-            base: PathBuf::from("/dev/sda"),
-            partition_sep: "".to_string(),
-            root_partition: PathBuf::from("/dev/sda2"),
-        };
-
-        let mut partitions = HashMap::new();
-        partitions.insert(
-            partition_names::BOOT.to_string(),
-            PathBuf::from("/dev/sda1"),
-        );
-        partitions.insert(
-            partition_names::ROOT_A.to_string(),
-            PathBuf::from("/dev/sda2"),
-        );
-        partitions.insert(
-            partition_names::ROOT_B.to_string(),
-            PathBuf::from("/dev/sda3"),
-        );
-        partitions.insert(
-            partition_names::DATA.to_string(),
-            PathBuf::from("/dev/sda7"),
-        );
-
-        PartitionLayout {
-            table_type: PartitionTableType::Gpt,
-            partitions,
-            device,
-        }
-    }
 
     #[test]
     fn test_symlink_path() {
