@@ -14,7 +14,7 @@ use omnect_os_init::{
     Result,
     bootloader::create_bootloader,
     config::Config,
-    error::InitramfsError,
+    error::{FilesystemError, InitramfsError},
     filesystem::{
         MountManager, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
         setup_etc_overlay, setup_raw_rootfs_mount,
@@ -137,10 +137,9 @@ fn mount_partitions(
 
     // Mount rootfs read-only
     if let Some(root_dev) = layout.partitions.get("rootCurrent") {
-        // Run fsck first
-        if let Ok(result) = check_filesystem_lenient(root_dev) {
-            ods_status.add_fsck_result("root", result.exit_code, result.output);
-        }
+        // Run fsck first; FsckRequiresReboot propagates via ? and triggers a reboot
+        let result = check_filesystem_lenient(root_dev)?;
+        ods_status.add_fsck_result("root", result.exit_code, result.output);
 
         mm.mount_readonly(root_dev, rootfs, "ext4")?;
         info!("Mounted rootfs at {}", rootfs.display());
@@ -150,9 +149,8 @@ fn mount_partitions(
     if let Some(boot_dev) = layout.partitions.get("boot") {
         let boot_mount = rootfs.join("boot");
 
-        if let Ok(result) = check_filesystem_lenient(boot_dev) {
-            ods_status.add_fsck_result("boot", result.exit_code, result.output);
-        }
+        let result = check_filesystem_lenient(boot_dev)?;
+        ods_status.add_fsck_result("boot", result.exit_code, result.output);
 
         mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
@@ -161,9 +159,8 @@ fn mount_partitions(
     if let Some(factory_dev) = layout.partitions.get("factory") {
         let factory_mount = rootfs.join("mnt/factory");
 
-        if let Ok(result) = check_filesystem_lenient(factory_dev) {
-            ods_status.add_fsck_result("factory", result.exit_code, result.output);
-        }
+        let result = check_filesystem_lenient(factory_dev)?;
+        ods_status.add_fsck_result("factory", result.exit_code, result.output);
 
         mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
     }
@@ -172,9 +169,8 @@ fn mount_partitions(
     if let Some(cert_dev) = layout.partitions.get("cert") {
         let cert_mount = rootfs.join("mnt/cert");
 
-        if let Ok(result) = check_filesystem_lenient(cert_dev) {
-            ods_status.add_fsck_result("cert", result.exit_code, result.output);
-        }
+        let result = check_filesystem_lenient(cert_dev)?;
+        ods_status.add_fsck_result("cert", result.exit_code, result.output);
 
         mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
     }
@@ -183,9 +179,8 @@ fn mount_partitions(
     if let Some(etc_dev) = layout.partitions.get("etc") {
         let etc_mount = rootfs.join("mnt/etc");
 
-        if let Ok(result) = check_filesystem_lenient(etc_dev) {
-            ods_status.add_fsck_result("etc", result.exit_code, result.output);
-        }
+        let result = check_filesystem_lenient(etc_dev)?;
+        ods_status.add_fsck_result("etc", result.exit_code, result.output);
 
         mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
     }
@@ -194,9 +189,8 @@ fn mount_partitions(
     if let Some(data_dev) = layout.partitions.get("data") {
         let data_mount = rootfs.join("mnt/data");
 
-        if let Ok(result) = check_filesystem_lenient(data_dev) {
-            ods_status.add_fsck_result("data", result.exit_code, result.output);
-        }
+        let result = check_filesystem_lenient(data_dev)?;
+        ods_status.add_fsck_result("data", result.exit_code, result.output);
 
         mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
     }
@@ -217,6 +211,20 @@ fn mount_partitions(
 
 /// Handle fatal errors based on image type
 fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
+    // fsck exit code 2 means the filesystem was repaired but a clean reboot
+    // is required before the OS can safely use it.
+    if matches!(
+        error,
+        InitramfsError::Filesystem(FilesystemError::FsckRequiresReboot { .. })
+    ) {
+        error!("fsck requires reboot: {}", error);
+        let _ = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT);
+        // reboot(2) should not return; loop as a last resort
+        loop {
+            thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+        }
+    }
+
     if is_release {
         // Release image: loop forever to prevent reboot loops
         loop {
