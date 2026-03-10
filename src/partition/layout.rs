@@ -124,13 +124,20 @@ const PARTITION_NUM_DATA_DOS: u32 = 8;
 ///
 /// Examples: `sda2` → 2, `mmcblk0p3` → 3, `nvme0n1p12` → 12.
 /// Returns 0 if the suffix cannot be parsed.
+///
+/// Uses the *trailing* digit run, not the first digit found, so that devices
+/// like `mmcblk0p2` (which contain digits in the base name) are handled correctly.
 fn partition_suffix(path: &Path) -> u32 {
-    path.file_name()
+    let s = path
+        .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .trim_start_matches(|c: char| !c.is_ascii_digit())
-        .parse()
-        .unwrap_or(0)
+        .unwrap_or("");
+    // Find the start of the last all-digit run at the end of the name.
+    let digit_start = s
+        .rfind(|c: char| !c.is_ascii_digit())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    s[digit_start..].parse().unwrap_or(0)
 }
 
 /// Detect partition table type using sfdisk
@@ -436,5 +443,18 @@ mod tests {
         };
 
         assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p3"));
+    }
+
+    #[test]
+    fn test_partition_suffix() {
+        // Plain SATA: digit at end
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda2")), 2);
+        // MMC: base name contains a digit (mmcblk0), partition suffix is after 'p'
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p2")), 2);
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p3")), 3);
+        // NVMe: base name contains multiple digits, partition number > 9
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/nvme0n1p12")), 12);
+        // No suffix
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda")), 0);
     }
 }
