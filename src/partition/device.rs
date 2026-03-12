@@ -326,26 +326,17 @@ mod tests {
 
     #[test]
     fn test_derive_separator_nvme() {
-        assert_eq!(
-            derive_separator_from_base(Path::new("/dev/nvme0n1")),
-            "p"
-        );
+        assert_eq!(derive_separator_from_base(Path::new("/dev/nvme0n1")), "p");
     }
 
     #[test]
     fn test_derive_separator_mmc() {
-        assert_eq!(
-            derive_separator_from_base(Path::new("/dev/mmcblk0")),
-            "p"
-        );
+        assert_eq!(derive_separator_from_base(Path::new("/dev/mmcblk0")), "p");
     }
 
     #[test]
     fn test_derive_separator_sata() {
-        assert_eq!(
-            derive_separator_from_base(Path::new("/dev/sda")),
-            ""
-        );
+        assert_eq!(derive_separator_from_base(Path::new("/dev/sda")), "");
     }
 
     #[test]
