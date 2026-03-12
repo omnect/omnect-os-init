@@ -94,15 +94,18 @@ fn run() -> Result<()> {
     // Create /dev/omnect/* symlinks
     create_omnect_symlinks(&layout)?;
 
-    // Create bootloader abstraction
-    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
-    info!("Bootloader type: {}", bootloader.bootloader_type());
-
     // Initialize ODS status
     let mut ods_status = OdsStatus::new();
 
-    // Run fsck on partitions and mount them
+    // Run fsck on partitions and mount them.
+    // Boot partition must be mounted before create_bootloader() so that
+    // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
     mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
+
+    // Create bootloader abstraction after mounts so the boot partition and
+    // grubenv file are accessible.
+    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
+    info!("Bootloader type: {}", bootloader.bootloader_type());
 
     // Persist fsck results: exit code to bootloader env, full output to data partition log.
     // Non-fatal: failures are logged as warnings.

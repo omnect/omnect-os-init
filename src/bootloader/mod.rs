@@ -71,12 +71,14 @@ pub trait Bootloader: Send + Sync {
 /// Creates the appropriate bootloader implementation based on available tools.
 ///
 /// Detection logic:
-/// - If `grub-editenv` exists in the rootfs, use GRUB
-/// - Otherwise, use U-Boot (assumes fw_printenv/fw_setenv available)
+/// - If `grub-editenv` is present in the initramfs (`/usr/bin/grub-editenv`), use GRUB.
+///   Must be called after the boot partition is mounted (grubenv lives there).
+/// - Otherwise, use U-Boot (assumes fw_printenv/fw_setenv available in initramfs).
 pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
-    const GRUB_EDITENV_PATH: &str = "usr/bin/grub-editenv";
+    // grub-editenv is an initramfs tool, not installed in the rootfs.
+    const GRUB_EDITENV_INITRAMFS_PATH: &str = "/usr/bin/grub-editenv";
 
-    if rootfs_dir.join(GRUB_EDITENV_PATH).exists() {
+    if std::path::Path::new(GRUB_EDITENV_INITRAMFS_PATH).exists() {
         Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
     } else {
         Ok(Box::new(UBootBootloader::new()?))
