@@ -70,7 +70,7 @@ src/
 │   ├── mod.rs               # Bootloader trait + auto-detection
 │   ├── grub.rs              # GRUB implementation (grub-editenv)
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
-│   └── types.rs             # BootloaderType, gzip+base64 helpers
+│   └── types.rs             # BootloaderType enum
 ├── config/
 │   └── mod.rs               # /proc/cmdline + /etc/os-release parser
 ├── filesystem/

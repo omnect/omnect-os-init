@@ -292,7 +292,7 @@ fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
     }
 
     // Use cp -a to preserve all attributes
-    let output = Command::new("cp")
+    let output = Command::new("/bin/cp")
         .arg("-a")
         .arg(format!("{}/.", src.display()))
         .arg(dst)

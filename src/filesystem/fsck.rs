@@ -99,19 +99,25 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         device: device.to_path_buf(),
         exit_code,
         output: combined_output.clone(),
-        success: exit_code == exit_code::OK || exit_code == exit_code::CORRECTED,
-        reboot_required: exit_code & exit_code::REBOOT_REQUIRED != 0,
+        // Exit code 1 means errors were corrected — filesystem was written to,
+        // reboot required before mounting (kernel will return EUCLEAN otherwise).
+        success: exit_code == exit_code::OK,
+        reboot_required: exit_code & exit_code::REBOOT_REQUIRED != 0
+            || exit_code == exit_code::CORRECTED,
     };
 
     // Log the result
-    if result.success {
-        if exit_code == exit_code::CORRECTED {
-            log::info!("fsck corrected errors on {}", device.display());
-        } else {
-            log::debug!("fsck: {} is clean", device.display());
-        }
+    if exit_code == exit_code::OK {
+        log::debug!("fsck: {} is clean", device.display());
     } else if result.reboot_required {
-        log::warn!("fsck on {} requires reboot", device.display());
+        if exit_code == exit_code::CORRECTED {
+            log::warn!(
+                "fsck corrected errors on {} — reboot required before mount",
+                device.display()
+            );
+        } else {
+            log::warn!("fsck on {} requires reboot", device.display());
+        }
     } else {
         log::error!(
             "fsck failed on {} with code {}: {}",

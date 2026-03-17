@@ -111,6 +111,14 @@ fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
 
     // Remove existing link/file if present
     if link_path.exists() || link_path.is_symlink() {
+        // A plain directory cannot be replaced by a symlink — flag it clearly.
+        // Symlinks pointing to directories are fine and must be replaceable.
+        if !link_path.is_symlink() && link_path.is_dir() {
+            return Err(InitramfsError::Io(std::io::Error::other(format!(
+                "Cannot replace directory with symlink: {}",
+                link_path.display()
+            ))));
+        }
         fs::remove_file(&link_path).map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "Failed to remove existing file {}: {}",

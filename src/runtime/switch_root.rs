@@ -4,6 +4,7 @@
 //! from initramfs to the real rootfs. pivot_root(2) is not used because ramfs
 //! does not support it (returns EINVAL).
 
+use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -38,6 +39,19 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
             std::io::ErrorKind::NotFound,
             format!("New root does not exist: {}", new_root.display()),
         )));
+    }
+
+    // Ensure target mountpoint directories exist under new_root.
+    // MS_MOVE fails with ENOENT if the target directory is missing.
+    for dir in &["dev", "proc", "sys", "run"] {
+        fs::create_dir_all(new_root.join(dir)).map_err(|e| {
+            InitramfsError::Io(std::io::Error::other(format!(
+                "Failed to create mountpoint {}/{}: {}",
+                new_root.display(),
+                dir,
+                e
+            )))
+        })?;
     }
 
     // Move critical mounts to new root before switching

@@ -10,7 +10,7 @@ use crate::bootloader::{Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result};
 use crate::error::BootloaderError;
 
 /// Command name for GRUB environment manipulation
-const GRUB_EDITENV_CMD: &str = "grub-editenv";
+const GRUB_EDITENV_CMD: &str = "/bin/grub-editenv";
 
 /// Path to grubenv file relative to boot partition
 const GRUBENV_RELATIVE_PATH: &str = "EFI/BOOT/grubenv";

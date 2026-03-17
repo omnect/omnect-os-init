@@ -9,16 +9,15 @@ use crate::bootloader::{Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result};
 use crate::error::BootloaderError;
 
 /// Command to read U-Boot environment variables
-const FW_PRINTENV_CMD: &str = "fw_printenv";
+const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 
 /// Command to write U-Boot environment variables
-const FW_SETENV_CMD: &str = "fw_setenv";
+const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
-/// Fsck status is compressed (gzip) and base64 encoded to fit in the
-/// limited U-Boot environment space.
+/// Fsck status is stored as a plain integer exit code string.
 pub struct UBootBootloader {
     // No state needed - commands access environment directly
 }

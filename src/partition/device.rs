@@ -115,6 +115,18 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
             .output()
             .map_err(|e| PartitionError::DeviceDetection(format!("failed to run blkid: {}", e)))?;
 
+        // A non-zero exit from blkid means a hard failure (binary missing,
+        // I/O error, etc.) — not just "UUID not found". Treat it as fatal
+        // rather than retrying, to avoid spinning until timeout.
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PartitionError::DeviceDetection(format!(
+                "blkid exited with status {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            )));
+        }
+
         let stdout = std::str::from_utf8(&output.stdout)
             .map_err(|_| PartitionError::DeviceDetection("blkid output is not UTF-8".into()))?;
 

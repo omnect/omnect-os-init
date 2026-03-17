@@ -38,8 +38,12 @@ fn main() {
         spawn_emergency_shell();
     }
 
-    // Determine release mode from /proc/cmdline only — rootfs is not yet
-    // mounted, so os-release cannot be read reliably here.
+    // Determine release mode from /proc/cmdline — rootfs is not yet mounted
+    // so os-release cannot be read here. This value is intentionally kept
+    // separate from config.is_release_image (updated inside run()): if run()
+    // fails at any point, this cmdline-derived value is the only safe fallback
+    // for handle_fatal_error, which must decide debug vs. release behavior
+    // before the rootfs is available.
     let is_release_image = fs::read_to_string("/proc/cmdline")
         .unwrap_or_default()
         .split_whitespace()
