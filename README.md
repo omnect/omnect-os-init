@@ -83,7 +83,7 @@ src/
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── partition/
 │   ├── mod.rs               # Public API
-│   ├── device.rs            # Root device detection (sda/nvme/mmcblk)
+│   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
 │   ├── layout.rs            # GPT/DOS partition map builder
 │   └── symlinks.rs          # /dev/omnect/* symlink creation
 └── runtime/

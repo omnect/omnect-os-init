@@ -1,18 +1,17 @@
-//! Root device detection from kernel command line and sysfs.
+//! Root device detection from kernel command line.
 //!
 //! Supports two omnect-os boot paths depending on the bootloader:
 //!
-//! - **GRUB** (`rootpart=N`): bare partition number (e.g. `rootpart=2`). The base
-//!   block device is found by enumerating `/sys/block/`. If `omnect_rootblk=<base>`
-//!   is cached in the cmdline from a previous boot, the sysfs probe is skipped.
-//!   When USB storage is detected in sysfs but no removable block device has appeared
-//!   yet, the probe waits up to 30s for USB enumeration to complete before probing.
+//! - **GRUB** (`rootpart=N` + `bootpart_fsuuid=<uuid>`): GRUB probes the filesystem
+//!   UUID of its boot partition via `probe --fs-uuid` and passes it as `bootpart_fsuuid=`
+//!   on the kernel cmdline. initramfs calls `blkid -t UUID=<uuid>` to resolve the exact
+//!   boot partition device, then strips the partition suffix to get the base disk.
 //!
 //! - **U-Boot** (`root=/dev/<device>`): full device path set by U-Boot bootargs
 //!   (e.g. `root=/dev/mmcblk1p2`). Base device and separator are derived from the path.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,8 +19,6 @@ use crate::partition::{PartitionError, Result};
 
 const DEVICE_WAIT_TIMEOUT_SECS: u64 = 30;
 const DEVICE_POLL_INTERVAL_MS: u64 = 100;
-/// Per-candidate probe timeout when enumerating /sys/block/
-const PROBE_TIMEOUT_SECS: u64 = 2;
 
 /// Represents the detected root block device and its properties.
 #[derive(Debug, Clone)]
@@ -57,7 +54,9 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
         PartitionError::DeviceDetection(format!("failed to read {}: {}", cmdline_path, e))
     })?;
 
-    // omnect-os: rootpart=N (bare partition number, e.g. "2")
+    // GRUB: rootpart=N + bootpart_fsuuid=<uuid>
+    // GRUB and initramfs always ship in the same image, so bootpart_fsuuid is
+    // always present on GRUB boots — no fallback paths needed.
     if let Some(part_str) = parse_cmdline_param(&cmdline, "rootpart")? {
         let part_num: u32 = part_str.parse().map_err(|_| {
             PartitionError::DeviceDetection(format!(
@@ -66,16 +65,16 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
             ))
         })?;
 
-        // Fast path: bootloader cached the base device from a previous boot.
-        if let Some(hint) = parse_cmdline_param(&cmdline, "omnect_rootblk")? {
-            return device_from_hint(&hint, part_num);
-        }
+        let fsuuid = parse_cmdline_param(&cmdline, "bootpart_fsuuid")?.ok_or_else(|| {
+            PartitionError::DeviceDetection(
+                "rootpart= present but bootpart_fsuuid= missing from cmdline".into(),
+            )
+        })?;
 
-        // Generic probe: enumerate /sys/block/ — no hardcoded device names.
-        return probe_sysblock(part_num);
+        return device_from_fsuuid(&fsuuid, part_num);
     }
 
-    // U-Boot path: root=/dev/<device> (full partition path in bootargs)
+    // U-Boot: root=/dev/<device> (full partition path in bootargs)
     if let Some(root) = parse_cmdline_param(&cmdline, "root")? {
         if !root.starts_with("/dev/") {
             return Err(PartitionError::DeviceDetection(format!(
@@ -91,13 +90,79 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
     ))
 }
 
-/// Builds a `RootDevice` from a cached `omnect_rootblk` hint and partition number.
-fn device_from_hint(hint: &str, part_num: u32) -> Result<RootDevice> {
-    let base = PathBuf::from(hint);
-    let sep = partition_sep_for(&base);
-    let root_partition = PathBuf::from(format!("{}{}{}", hint, sep, part_num));
+/// Resolves the boot disk via the filesystem UUID of the boot partition (`bootpart_fsuuid=`).
+///
+/// GRUB runs `probe --fs-uuid` on `${root}` (the boot partition) and passes the result
+/// on the kernel cmdline. `blkid` is retried in a loop until the UUID is found or the
+/// timeout expires — block devices may not be ready immediately at initramfs startup.
+fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
+    use std::process::Command;
+
+    log::info!(
+        "device_from_fsuuid: resolving boot partition UUID={}",
+        fsuuid
+    );
+
+    // Retry blkid until the UUID appears or the timeout expires.
+    // Block devices may not be ready when initramfs first runs blkid.
+    let timeout = Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS);
+    let start = Instant::now();
+    let boot_part_str = loop {
+        // busybox blkid does not support -t / -o arguments; run without args
+        // and parse output ourselves. Each line has the format:
+        //   /dev/sda1: UUID="xxxx-xxxx" TYPE="vfat" ...
+        let output = Command::new("/sbin/blkid")
+            .output()
+            .map_err(|e| PartitionError::DeviceDetection(format!("failed to run blkid: {}", e)))?;
+
+        let stdout = std::str::from_utf8(&output.stdout)
+            .map_err(|_| PartitionError::DeviceDetection("blkid output is not UTF-8".into()))?;
+
+        match parse_blkid_output(stdout, fsuuid) {
+            Ok(dev) => {
+                log::info!(
+                    "device_from_fsuuid: UUID={} resolved to {} after {:.1}s",
+                    fsuuid,
+                    dev,
+                    start.elapsed().as_secs_f32()
+                );
+                break dev;
+            }
+            Err(_) => {
+                if start.elapsed() >= timeout {
+                    return Err(PartitionError::DeviceDetection(format!(
+                        "blkid found no device with UUID={} within {}s",
+                        fsuuid,
+                        timeout.as_secs()
+                    )));
+                }
+                log::debug!(
+                    "device_from_fsuuid: UUID={} not found yet, retrying...",
+                    fsuuid
+                );
+                thread::sleep(Duration::from_millis(DEVICE_POLL_INTERVAL_MS));
+            }
+        }
+    };
+
+    let name = PathBuf::from(&boot_part_str)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            PartitionError::DeviceDetection(format!("invalid blkid output: {}", boot_part_str))
+        })?
+        .to_string();
+
+    let (base_name, sep) = split_partition_suffix(&name)?;
+    let base = PathBuf::from("/dev").join(&base_name);
+    let root_partition = PathBuf::from(format!("/dev/{}{}{}", base_name, sep, part_num));
     wait_for_device(&root_partition)?;
-    log::info!("root device from omnect_rootblk hint: {}", base.display());
+
+    log::info!(
+        "device_from_fsuuid: root device = {} (partition {})",
+        base.display(),
+        part_num
+    );
     Ok(RootDevice {
         base,
         partition_sep: sep,
@@ -105,209 +170,7 @@ fn device_from_hint(hint: &str, part_num: u32) -> Result<RootDevice> {
     })
 }
 
-/// Enumerates `/sys/block/` to find which real block device has partition `part_num`.
-///
-/// Filters virtual devices by requiring `/sys/block/<name>/device` to exist —
-/// only real hardware (SATA, NVMe, MMC, virtio, USB) has this sysfs entry.
-/// Works in initramfs before any block device is mounted because sysfs is
-/// populated by the kernel's device driver layer, independent of mount state.
-///
-/// If USB storage is present in sysfs but no removable block device has appeared
-/// yet, waits up to 30s for USB enumeration to complete before probing. This avoids
-/// missing a USB boot device that is still being enumerated by the kernel.
-///
-/// When multiple disks have the same partition number (e.g. USB + internal NVMe),
-/// removable devices (USB) are sorted first. This matches the intended boot priority:
-/// a removable USB drive is always the intended boot source when present.
-fn probe_sysblock(part_num: u32) -> Result<RootDevice> {
-    log::debug!("probe_sysblock: searching for partition {}", part_num);
-
-    // If USB storage is present but its block device hasn't appeared in /sys/block/
-    // yet, wait for enumeration to complete before probing. This handles the race
-    // between kernel USB enumeration and the initramfs boot sequence.
-    if usb_storage_present() {
-        log::info!("probe_sysblock: USB storage detected, waiting for block device to appear");
-        wait_for_removable_block_device(Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS));
-    }
-
-    let mut matches: Vec<(RootDevice, bool)> = fs::read_dir("/sys/block")
-        .map_err(|e| PartitionError::DeviceDetection(format!("failed to read /sys/block: {}", e)))?
-        .flatten()
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let has_device = Path::new(&format!("/sys/block/{}/device", name)).exists();
-            // Only real hardware devices have a /device symlink
-            if !has_device {
-                log::debug!(
-                    "probe_sysblock: skipping {} (no /device symlink, virtual)",
-                    name
-                );
-            }
-            has_device
-        })
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let removable = is_removable(&name);
-            let base = PathBuf::from(format!("/dev/{}", name));
-            let sep = partition_sep_for(&base);
-            let candidate = PathBuf::from(format!("/dev/{}{}{}", name, sep, part_num));
-            log::info!(
-                "probe_sysblock: probing {} (removable={})",
-                candidate.display(),
-                removable
-            );
-            match wait_for_device_timeout(&candidate, Duration::from_secs(PROBE_TIMEOUT_SECS)) {
-                Ok(()) => {
-                    log::info!(
-                        "probe_sysblock: found {} (removable={})",
-                        candidate.display(),
-                        removable
-                    );
-                    Some((
-                        RootDevice {
-                            base,
-                            partition_sep: sep,
-                            root_partition: candidate,
-                        },
-                        removable,
-                    ))
-                }
-                Err(_) => {
-                    log::debug!(
-                        "probe_sysblock: {} did not appear within {}s, skipping",
-                        candidate.display(),
-                        PROBE_TIMEOUT_SECS
-                    );
-                    None
-                }
-            }
-        })
-        .collect();
-
-    // Removable devices (USB) sort before internal disks (NVMe, SATA, MMC).
-    // On USB boot, this ensures the USB drive is preferred over an internal disk
-    // that happens to have the same partition number.
-    matches.sort_by_key(|(_, removable)| !removable);
-    log::debug!(
-        "probe_sysblock: candidates after sort: [{}]",
-        matches
-            .iter()
-            .map(|(d, r)| format!("{} (removable={})", d.base.display(), r))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    match matches.len() {
-        0 => Err(PartitionError::DeviceDetection(format!(
-            "no block device found with partition {}",
-            part_num
-        ))),
-        1 => {
-            log::info!(
-                "probe_sysblock: selected {} (only match)",
-                matches[0].0.base.display()
-            );
-            Ok(matches.remove(0).0)
-        }
-        _ => {
-            // Multiple real disks have this partition number (e.g. during flash-mode).
-            // Flash-mode source/target disambiguation is handled in a separate PR.
-            let names: Vec<_> = matches
-                .iter()
-                .map(|(d, removable)| format!("{} (removable={})", d.base.display(), removable))
-                .collect();
-            log::warn!(
-                "probe_sysblock: multiple matches [{}]; selecting first after removable-sort",
-                names.join(", ")
-            );
-            Ok(matches.remove(0).0)
-        }
-    }
-}
-
-/// Returns true if the block device is removable (e.g. USB drive).
-///
-/// Reads `/sys/block/<name>/removable` — kernel sets this to "1" for removable
-/// media (USB, SD card via external reader) and "0" for internal disks (NVMe, SATA, MMC).
-fn is_removable(name: &str) -> bool {
-    fs::read_to_string(format!("/sys/block/{}/removable", name))
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false)
-}
-
-/// Returns true if a USB mass storage device is present — either already bound to the
-/// `usb-storage` driver or still in the process of being bound (Mass Storage interface class).
-///
-/// Checks two sysfs paths:
-/// - `/sys/bus/usb/drivers/usb-storage/`: symlinks appear here when binding is complete.
-/// - `/sys/bus/usb/devices/*/bInterfaceClass == "08"`: appears earlier, during binding,
-///   covering the race window between USB enumeration and driver attachment.
-fn usb_storage_present() -> bool {
-    // Fast path: driver already bound
-    if fs::read_dir("/sys/bus/usb/drivers/usb-storage")
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    // Cover the race window: interface enumerated but driver not yet bound
-    fs::read_dir("/sys/bus/usb/devices")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|e| {
-            fs::read_to_string(e.path().join("bInterfaceClass"))
-                .map(|c| c.trim() == "08")
-                .unwrap_or(false)
-        })
-}
-
-/// Blocks until at least one removable real block device appears in `/sys/block/`,
-/// or until the timeout expires. Called when USB storage is detected but its block
-/// device node has not yet appeared — gives the kernel time to finish enumeration.
-fn wait_for_removable_block_device(timeout: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        let found = fs::read_dir("/sys/block")
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                Path::new(&format!("/sys/block/{}/device", name)).exists() && is_removable(&name)
-            });
-        if found {
-            log::info!(
-                "probe_sysblock: removable block device appeared after {:.1}s",
-                start.elapsed().as_secs_f32()
-            );
-            return;
-        }
-        thread::sleep(Duration::from_millis(DEVICE_POLL_INTERVAL_MS));
-    }
-    log::warn!(
-        "probe_sysblock: no removable block device appeared within {}s, proceeding anyway",
-        timeout.as_secs()
-    );
-}
-
-/// Returns the partition separator for a block device: `"p"` for NVMe/MMC, `""` for others.
-fn partition_sep_for(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    if name.contains("nvme") || name.starts_with("mmcblk") {
-        "p".to_string()
-    } else {
-        String::new()
-    }
-}
-
 /// Builds a `RootDevice` from a full `root=/dev/<device>` path (U-Boot boot path).
-///
-/// Derives the base device and partition separator from the device name.
 fn device_from_path(path: &str) -> Result<RootDevice> {
     let root_partition = PathBuf::from(path);
     wait_for_device(&root_partition)?;
@@ -351,11 +214,8 @@ fn split_partition_suffix(name: &str) -> Result<(String, String)> {
     )))
 }
 
-fn wait_for_device(device: &Path) -> Result<()> {
-    wait_for_device_timeout(device, Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS))
-}
-
-fn wait_for_device_timeout(device: &Path, timeout: Duration) -> Result<()> {
+fn wait_for_device(device: &std::path::Path) -> Result<()> {
+    let timeout = Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS);
     let start = Instant::now();
     loop {
         if device.exists() {
@@ -385,9 +245,70 @@ pub(crate) fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<Str
     Ok(None)
 }
 
+/// Parses busybox `blkid` output (no arguments) and returns the device path
+/// whose `UUID=` field matches `fsuuid`.
+///
+/// Each line has the format:
+///   `/dev/sda1: UUID="xxxx-xxxx" TYPE="vfat" ...`
+fn parse_blkid_output(output: &str, fsuuid: &str) -> Result<String> {
+    let needle = format!("UUID=\"{}\"", fsuuid);
+    output
+        .lines()
+        .find(|line| line.contains(&needle))
+        .and_then(|line| line.split(':').next())
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| {
+            PartitionError::DeviceDetection(format!("blkid found no device with UUID={}", fsuuid))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_blkid_output_found() {
+        let output = "/dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n\
+                      /dev/sda2: UUID=\"3fbe07d8-7dc2-4afb-8929-f0bdcb4a3ec5\" BLOCK_SIZE=\"4096\" TYPE=\"ext4\"\n";
+        assert_eq!(
+            parse_blkid_output(output, "abcd-1234").unwrap(),
+            "/dev/sda1"
+        );
+        assert_eq!(
+            parse_blkid_output(output, "3fbe07d8-7dc2-4afb-8929-f0bdcb4a3ec5").unwrap(),
+            "/dev/sda2"
+        );
+    }
+
+    #[test]
+    fn test_parse_blkid_output_not_found() {
+        let output = "/dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n";
+        assert!(parse_blkid_output(output, "0000-0000").is_err());
+    }
+
+    #[test]
+    fn test_parse_blkid_output_lvm_skipped() {
+        // LVM member has UUID in a different format; should not match fs UUID
+        let output = "/dev/sda3: UUID=\"cxCxgR-SzbH-ea59-BRsb\" TYPE=\"LVM2_member\"\n\
+                      /dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n";
+        assert_eq!(
+            parse_blkid_output(output, "abcd-1234").unwrap(),
+            "/dev/sda1"
+        );
+    }
+
+    #[test]
+    fn test_parse_cmdline_param_bootpart_fsuuid() {
+        let cmdline = "rootpart=2 bootpart_fsuuid=1234-ABCD ro quiet";
+        assert_eq!(
+            parse_cmdline_param(cmdline, "rootpart").unwrap(),
+            Some("2".to_string())
+        );
+        assert_eq!(
+            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
+            Some("1234-ABCD".to_string())
+        );
+    }
 
     #[test]
     fn test_parse_cmdline_param_rootpart() {
@@ -397,7 +318,7 @@ mod tests {
             Some("2".to_string())
         );
         assert_eq!(
-            parse_cmdline_param(cmdline, "omnect_rootblk").unwrap(),
+            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
             None
         );
     }
@@ -407,52 +328,65 @@ mod tests {
         let cmdline = "ro quiet";
         assert_eq!(parse_cmdline_param(cmdline, "rootpart").unwrap(), None);
         assert_eq!(
-            parse_cmdline_param(cmdline, "omnect_rootblk").unwrap(),
+            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
             None
         );
     }
 
     #[test]
     fn test_parse_cmdline_param_complex() {
-        let cmdline = "rootpart=2 coherent_pool=1M console=ttyS0,115200 \
-                       omnect_rootblk=/dev/sda omnect_release_image=1";
+        let cmdline =
+            "rootpart=2 coherent_pool=1M console=ttyS0,115200 bootpart_fsuuid=ABCD-1234 ro";
         assert_eq!(
             parse_cmdline_param(cmdline, "rootpart").unwrap(),
             Some("2".to_string())
         );
         assert_eq!(
-            parse_cmdline_param(cmdline, "omnect_rootblk").unwrap(),
-            Some("/dev/sda".to_string())
+            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
+            Some("ABCD-1234".to_string())
         );
     }
 
     #[test]
-    fn test_parse_cmdline_omnect_rootblk() {
-        let cmdline = "rootpart=2 omnect_rootblk=/dev/sda ro";
+    fn test_parse_cmdline_param_uboot_root() {
+        let cmdline = "root=/dev/mmcblk1p2 ro quiet";
         assert_eq!(
-            parse_cmdline_param(cmdline, "omnect_rootblk").unwrap(),
-            Some("/dev/sda".to_string())
+            parse_cmdline_param(cmdline, "root").unwrap(),
+            Some("/dev/mmcblk1p2".to_string())
+        );
+        assert_eq!(parse_cmdline_param(cmdline, "rootpart").unwrap(), None);
+    }
+
+    #[test]
+    fn test_split_partition_suffix_sata() {
+        assert_eq!(
+            split_partition_suffix("sda2").unwrap(),
+            ("sda".to_string(), String::new())
         );
     }
 
     #[test]
-    fn test_partition_sep_for_nvme() {
-        assert_eq!(partition_sep_for(Path::new("/dev/nvme0n1")), "p");
+    fn test_split_partition_suffix_mmc() {
+        assert_eq!(
+            split_partition_suffix("mmcblk1p2").unwrap(),
+            ("mmcblk1".to_string(), "p".to_string())
+        );
     }
 
     #[test]
-    fn test_partition_sep_for_mmc() {
-        assert_eq!(partition_sep_for(Path::new("/dev/mmcblk0")), "p");
+    fn test_split_partition_suffix_nvme() {
+        assert_eq!(
+            split_partition_suffix("nvme0n1p2").unwrap(),
+            ("nvme0n1".to_string(), "p".to_string())
+        );
     }
 
     #[test]
-    fn test_partition_sep_for_sata() {
-        assert_eq!(partition_sep_for(Path::new("/dev/sda")), "");
-    }
-
-    #[test]
-    fn test_partition_sep_for_virtio() {
-        assert_eq!(partition_sep_for(Path::new("/dev/vda")), "");
+    fn test_split_partition_suffix_virtio() {
+        assert_eq!(
+            split_partition_suffix("vda2").unwrap(),
+            ("vda".to_string(), String::new())
+        );
     }
 
     #[test]
@@ -497,47 +431,5 @@ mod tests {
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/vda1"));
         assert_eq!(device.partition_path(7), PathBuf::from("/dev/vda7"));
-    }
-
-    #[test]
-    fn test_parse_cmdline_param_uboot_root() {
-        let cmdline = "root=/dev/mmcblk1p2 ro quiet";
-        assert_eq!(
-            parse_cmdline_param(cmdline, "root").unwrap(),
-            Some("/dev/mmcblk1p2".to_string())
-        );
-        assert_eq!(parse_cmdline_param(cmdline, "rootpart").unwrap(), None);
-    }
-
-    #[test]
-    fn test_split_partition_suffix_sata() {
-        assert_eq!(
-            split_partition_suffix("sda2").unwrap(),
-            ("sda".to_string(), String::new())
-        );
-    }
-
-    #[test]
-    fn test_split_partition_suffix_mmc() {
-        assert_eq!(
-            split_partition_suffix("mmcblk1p2").unwrap(),
-            ("mmcblk1".to_string(), "p".to_string())
-        );
-    }
-
-    #[test]
-    fn test_split_partition_suffix_nvme() {
-        assert_eq!(
-            split_partition_suffix("nvme0n1p2").unwrap(),
-            ("nvme0n1".to_string(), "p".to_string())
-        );
-    }
-
-    #[test]
-    fn test_split_partition_suffix_virtio() {
-        assert_eq!(
-            split_partition_suffix("vda2").unwrap(),
-            ("vda".to_string(), String::new())
-        );
     }
 }

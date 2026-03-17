@@ -23,7 +23,6 @@ pub mod vars {
     pub const FLASH_MODE: &str = "flash-mode";
     pub const FLASH_MODE_DEVPATH: &str = "flash-mode-devpath";
     pub const FLASH_MODE_URL: &str = "flash-mode-url";
-    pub const OMNECT_ROOTBLK: &str = "omnect_rootblk";
     pub const RESIZED_DATA: &str = "resized-data";
     pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
     pub const DATA_MOUNT_OPTIONS: &str = "data-mount-options";
