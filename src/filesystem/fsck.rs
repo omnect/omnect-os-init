@@ -71,9 +71,9 @@ impl FsckResult {
 pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
-    // Disable kernel message rate limiting during fsck
-    // This ensures all fsck output is visible in dmesg
+    // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
     disable_kmsg_ratelimit();
+    let _ratelimit_guard = KmsgRatelimitGuard;
 
     let mut cmd = Command::new(FSCK_CMD);
 
@@ -94,9 +94,6 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined_output = format!("{}{}", stdout, stderr);
-
-    // Re-enable rate limiting
-    enable_kmsg_ratelimit();
 
     let result = FsckResult {
         device: device.to_path_buf(),
@@ -175,7 +172,16 @@ pub fn check_filesystem_lenient(device: &Path) -> Result<FsckResult> {
     }
 }
 
-/// Path to kernel printk settings
+/// RAII guard that re-enables kmsg rate limiting when dropped.
+/// Guarantees restoration on all exit paths including early error returns.
+struct KmsgRatelimitGuard;
+
+impl Drop for KmsgRatelimitGuard {
+    fn drop(&mut self) {
+        enable_kmsg_ratelimit();
+    }
+}
+
 const PRINTK_RATELIMIT_PATH: &str = "/proc/sys/kernel/printk_ratelimit";
 const PRINTK_RATELIMIT_BURST_PATH: &str = "/proc/sys/kernel/printk_ratelimit_burst";
 

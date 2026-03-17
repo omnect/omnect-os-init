@@ -111,6 +111,9 @@ pub enum PartitionError {
         reason: String,
     },
 
+    #[error("symlink removal failed for {}: {reason}", path.display())]
+    SymlinkRemoveFailed { path: PathBuf, reason: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

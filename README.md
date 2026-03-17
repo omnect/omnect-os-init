@@ -15,7 +15,7 @@ Implemented functionality:
 - **Filesystem operations**: fsck, mount manager (RAII), overlayfs for `/etc` and `/home`, bind mounts
 - **Logging**: Kernel ring buffer (`/dev/kmsg`) with log level prefixes
 - **ODS integration**: Runtime files for `omnect-device-service`
-- **fs-links**: Symlink creation from `/etc/fs-link.conf` and `/etc/fs-link.conf.d/`
+- **fs-links**: Symlink creation from `etc/omnect/fs-link.json` and `etc/omnect/fs-link.d/`
 - **switch\_root**: MS_MOVE + chroot + exec systemd (`pivot_root(2)` is not used; ramfs does not support it)
 
 Not yet implemented (planned):

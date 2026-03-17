@@ -57,10 +57,9 @@ pub fn remove_omnect_symlinks() -> Result<()> {
         let entry = entry?;
         let path = entry.path();
         if path.is_symlink() {
-            fs::remove_file(&path).map_err(|e| PartitionError::SymlinkFailed {
-                link: path.clone(),
-                target: PathBuf::new(),
-                reason: format!("Failed to remove symlink: {}", e),
+            fs::remove_file(&path).map_err(|e| PartitionError::SymlinkRemoveFailed {
+                path: path.clone(),
+                reason: e.to_string(),
             })?;
         }
     }
@@ -92,10 +91,9 @@ fn symlink_path(name: &str) -> PathBuf {
 fn create_symlink(target: &Path, link: &Path) -> Result<()> {
     // Remove existing symlink if present
     if link.is_symlink() || link.exists() {
-        fs::remove_file(link).map_err(|e| PartitionError::SymlinkFailed {
-            link: link.to_path_buf(),
-            target: target.to_path_buf(),
-            reason: format!("Failed to remove existing symlink: {}", e),
+        fs::remove_file(link).map_err(|e| PartitionError::SymlinkRemoveFailed {
+            path: link.to_path_buf(),
+            reason: e.to_string(),
         })?;
     }
 

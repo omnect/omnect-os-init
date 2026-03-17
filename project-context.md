@@ -46,7 +46,7 @@
 ## 6. Key Patterns
 - **Error handling:** `thiserror` for typed errors, `Result<T>` everywhere
 - **Bootloader abstraction:** `dyn Bootloader` trait for GRUB/U-Boot
-- **Compression:** fsck output is gzip+base64 encoded for bootloader storage
+- **Compression:** fsck exit code (integer) stored in bootloader env; full output written to `/data/var/log/fsck/<partition>.log`
 - **Idempotent mounts:** `is_mounted()` check before mounting
 
 ## 7. Integration Points

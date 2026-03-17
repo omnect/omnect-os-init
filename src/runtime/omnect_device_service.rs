@@ -135,7 +135,16 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 /// Handle update validation workflow
 fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Result<()> {
     // Check if update validation is requested
-    let validate_update = bootloader.get_env("omnect_validate_update").unwrap_or(None);
+    let validate_update = match bootloader.get_env("omnect_validate_update") {
+        Ok(val) => val,
+        Err(e) => {
+            log::warn!(
+                "failed to read omnect_validate_update from bootloader: {}",
+                e
+            );
+            None
+        }
+    };
 
     if let Some(value) = validate_update {
         if value == "1" || value.to_lowercase() == "true" {
@@ -152,9 +161,16 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
     }
 
     // Check for bootloader updated flag
-    let bootloader_updated = bootloader
-        .get_env("omnect_bootloader_updated")
-        .unwrap_or(None);
+    let bootloader_updated = match bootloader.get_env("omnect_bootloader_updated") {
+        Ok(val) => val,
+        Err(e) => {
+            log::warn!(
+                "failed to read omnect_bootloader_updated from bootloader: {}",
+                e
+            );
+            None
+        }
+    };
 
     if bootloader_updated.is_some() {
         let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);

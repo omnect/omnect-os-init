@@ -234,7 +234,9 @@ fn wait_for_device(device: &std::path::Path) -> Result<()> {
 
 /// Parses a parameter value from kernel command line.
 ///
-/// Handles both `key=value` and `key="value with spaces"` formats.
+/// Handles `key=value` format. Values containing spaces are not supported
+/// (the kernel cmdline splits on whitespace; quoted values with spaces
+/// would be split into multiple tokens by `split_whitespace`).
 pub(crate) fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
     let prefix = format!("{}=", key);
     for token in cmdline.split_whitespace() {

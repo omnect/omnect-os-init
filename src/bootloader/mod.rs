@@ -55,9 +55,9 @@ pub trait Bootloader: Send + Sync {
     /// `/data/var/log/fsck/<partition>.log` by the caller.
     fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()>;
 
-    /// Get fsck status from bootloader environment
+    /// Get fsck status from bootloader environment.
     ///
-    /// Returns the decompressed fsck output if it exists.
+    /// Returns the raw integer exit code string if it exists (e.g. `"0"`, `"1"`).
     fn get_fsck_status(&self, partition: &str) -> Result<Option<String>>;
 
     /// Clear fsck status from bootloader environment
