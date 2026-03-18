@@ -119,16 +119,11 @@ pub fn verify_symlinks(layout: &PartitionLayout) -> Result<()> {
     // Check rootblk
     verify_symlink(&symlink_path(partition_names::ROOTBLK), &layout.device.base)?;
 
-    // Check all partitions
+    // Check all partitions — rootCurrent is already in layout.partitions so
+    // no explicit check needed (mirrors create_omnect_symlinks).
     for (name, device_path) in &layout.partitions {
         verify_symlink(&symlink_path(name), device_path)?;
     }
-
-    // Check rootCurrent
-    verify_symlink(
-        &symlink_path(partition_names::ROOT_CURRENT),
-        &layout.root_current(),
-    )?;
 
     Ok(())
 }

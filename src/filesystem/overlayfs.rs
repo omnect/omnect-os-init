@@ -17,6 +17,8 @@ use crate::filesystem::{MountManager, MountOptions, MountPoint, Result};
 
 /// Overlay filesystem type
 const OVERLAY_FSTYPE: &str = "overlay";
+/// cp command for copying directory contents (preserves attributes via -a)
+const CP_CMD: &str = "/bin/cp";
 
 /// Directory names for overlay layers
 mod overlay_dirs {
@@ -292,7 +294,7 @@ fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
     }
 
     // Use cp -a to preserve all attributes
-    let output = Command::new("/bin/cp")
+    let output = Command::new(CP_CMD)
         .arg("-a")
         .arg(format!("{}/.", src.display()))
         .arg(dst)

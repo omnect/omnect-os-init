@@ -25,6 +25,7 @@ pub mod vars {
     pub const FLASH_MODE_URL: &str = "flash-mode-url";
     pub const RESIZED_DATA: &str = "resized-data";
     pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
+    pub const OMNECT_BOOTLOADER_UPDATED: &str = "omnect_bootloader_updated";
     pub const DATA_MOUNT_OPTIONS: &str = "data-mount-options";
 }
 

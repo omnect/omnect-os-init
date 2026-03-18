@@ -19,6 +19,7 @@ use crate::partition::{PartitionError, Result};
 
 const DEVICE_WAIT_TIMEOUT_SECS: u64 = 30;
 const DEVICE_POLL_INTERVAL_MS: u64 = 100;
+const BLKID_CMD: &str = "/sbin/blkid";
 
 /// Represents the detected root block device and its properties.
 #[derive(Debug, Clone)]
@@ -111,7 +112,7 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
         // busybox blkid does not support -t / -o arguments; run without args
         // and parse output ourselves. Each line has the format:
         //   /dev/sda1: UUID="xxxx-xxxx" TYPE="vfat" ...
-        let output = Command::new("/sbin/blkid")
+        let output = Command::new(BLKID_CMD)
             .output()
             .map_err(|e| PartitionError::DeviceDetection(format!("failed to run blkid: {}", e)))?;
 

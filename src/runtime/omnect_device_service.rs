@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::bootloader::Bootloader;
+use crate::bootloader::vars;
 use crate::error::{InitramfsError, Result};
 
 /// Directory for ODS runtime files.
@@ -141,7 +142,7 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 /// Handle update validation workflow
 fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Result<()> {
     // Check if update validation is requested
-    let validate_update = match bootloader.get_env("omnect_validate_update") {
+    let validate_update = match bootloader.get_env(vars::OMNECT_VALIDATE_UPDATE) {
         Ok(val) => val,
         Err(e) => {
             log::warn!(
@@ -179,7 +180,7 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
     }
 
     // Check for bootloader updated flag
-    let bootloader_updated = match bootloader.get_env("omnect_bootloader_updated") {
+    let bootloader_updated = match bootloader.get_env(vars::OMNECT_BOOTLOADER_UPDATED) {
         Ok(val) => val,
         Err(e) => {
             log::warn!(
@@ -190,7 +191,9 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
         }
     };
 
-    if bootloader_updated.is_some() {
+    if let Some(value) = bootloader_updated
+        && (value == "1" || value.to_lowercase() == "true")
+    {
         let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);
         fs::write(&marker_path, "1").map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(

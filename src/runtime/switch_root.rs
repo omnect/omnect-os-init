@@ -128,11 +128,21 @@ fn move_mount(source: &str, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Find the init binary in the new root
+/// Find the init binary in the new root.
+///
+/// Always returns an absolute path string (starts with `/`) so that
+/// `Command::new` on PID 1 does not fall back to PATH lookup.
 fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
+    // Ensure the caller-supplied path is absolute to avoid PATH lookup on exec.
+    let requested_init = if requested_init.starts_with('/') {
+        requested_init.to_string()
+    } else {
+        format!("/{}", requested_init)
+    };
+
     let requested_path = new_root.join(requested_init.trim_start_matches('/'));
     if requested_path.exists() {
-        return Ok(requested_init.to_string());
+        return Ok(requested_init);
     }
 
     for init_path in INIT_PATHS {

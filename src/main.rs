@@ -30,6 +30,8 @@ use omnect_os_init::{
 
 /// Sleep duration for fatal error loop (seconds)
 const FATAL_ERROR_SLEEP_SECS: u64 = 60;
+const BASH_CMD: &str = "/bin/bash";
+const SH_CMD: &str = "/bin/sh";
 
 fn main() {
     // Mount essential filesystems first (/dev, /proc, /sys, /run)
@@ -305,7 +307,7 @@ fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
 
 /// Spawn emergency shell (before logging available)
 fn spawn_emergency_shell() -> ! {
-    let _ = process::Command::new("/bin/sh").status();
+    let _ = process::Command::new(SH_CMD).status();
     loop {
         thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
     }
@@ -313,16 +315,19 @@ fn spawn_emergency_shell() -> ! {
 
 /// Spawn debug shell for debugging
 fn spawn_debug_shell() -> ! {
-    let status = process::Command::new("/bin/bash")
-        .arg("--init-file")
-        .arg("/dev/null")
-        .status();
+    // PID 1 must never exit — the kernel would panic. Respawn the shell
+    // in a loop so the operator can re-enter after an accidental exit.
+    loop {
+        let status = process::Command::new(BASH_CMD)
+            .arg("--init-file")
+            .arg("/dev/null")
+            .status();
 
-    match status {
-        Ok(s) => process::exit(s.code().unwrap_or(1)),
-        Err(_) => {
-            let _ = process::Command::new("/bin/sh").status();
-            process::exit(1);
+        if let Err(e) = status {
+            log::warn!("bash unavailable ({}), falling back to sh", e);
+            let _ = process::Command::new(SH_CMD).status();
         }
+
+        log::info!("debug shell exited — respawning");
     }
 }

@@ -81,7 +81,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         cmd.arg("-y"); // Automatically repair
     }
 
-    cmd.arg("-C0"); // Progress to fd 0 (stdout)
+    cmd.arg("-C0"); // per e2fsck(8): -C0 writes progress to stdout
     cmd.arg(device);
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
