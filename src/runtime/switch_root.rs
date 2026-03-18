@@ -59,7 +59,10 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         })?;
     }
 
-    // Move critical mounts to new root before switching
+    // Move critical mounts to new root before switching.
+    // After this point, /dev, /proc, /sys, /run are only accessible via
+    // new_root's subtree. If MS_MOVE subsequently fails (the one step that
+    // can leave the initramfs without these mounts), we attempt restoration.
     move_mount("/dev", &new_root.join("dev"))?;
     move_mount("/proc", &new_root.join("proc"))?;
     move_mount("/sys", &new_root.join("sys"))?;
@@ -76,12 +79,16 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     // MS_MOVE re-mounts the new root at /. This is the correct approach for
     // initramfs: ramfs does not support pivot_root (EINVAL). busybox and
     // systemd use the same MS_MOVE + chroot pattern.
-    mount(Some("."), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>).map_err(|e| {
-        InitramfsError::Io(std::io::Error::other(format!(
+    //
+    // On failure: attempt to restore the critical mounts back to the initramfs
+    // so the debug/emergency shell still has access to /dev, /proc, /sys, /run.
+    if let Err(e) = mount(Some("."), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>) {
+        restore_critical_mounts(new_root);
+        return Err(InitramfsError::Io(std::io::Error::other(format!(
             "Failed to MS_MOVE new root to /: {}",
             e
-        )))
-    })?;
+        ))));
+    }
 
     chroot(".").map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!("Failed to chroot: {}", e)))
@@ -126,6 +133,24 @@ fn move_mount(source: &str, target: &Path) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+/// Attempt to restore critical mounts back to the initramfs after a failed MS_MOVE.
+///
+/// Called only when MS_MOVE has NOT yet succeeded — at that point `/` is still
+/// the initramfs root, so moving from `new_root/{dev,proc,sys,run}` back to
+/// `/{dev,proc,sys,run}` restores the debug/emergency shell environment.
+/// Best-effort: individual failures are logged and do not abort.
+fn restore_critical_mounts(new_root: &Path) {
+    for name in &["dev", "proc", "sys", "run"] {
+        let src = new_root.join(name);
+        let dst = format!("/{name}");
+        if let Err(e) = move_mount(&src.to_string_lossy(), Path::new(&dst)) {
+            log::warn!("Failed to restore /{name} to initramfs during switch_root rollback: {e}");
+        } else {
+            log::debug!("Restored /{name} to initramfs");
+        }
+    }
 }
 
 /// Find the init binary in the new root.

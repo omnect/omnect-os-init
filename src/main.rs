@@ -17,7 +17,7 @@ use omnect_os_init::{
     bootloader::Bootloader,
     bootloader::create_bootloader,
     config::Config,
-    error::{FilesystemError, InitramfsError},
+    error::{FilesystemError, InitramfsError, PartitionError},
     filesystem::{
         MountManager, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
         setup_etc_overlay, setup_raw_rootfs_mount,
@@ -205,12 +205,15 @@ fn mount_partitions(
 ) -> Result<()> {
     let rootfs = &config.rootfs_dir;
 
-    // Mount rootfs read-only
-    if let Some(root_dev) = layout.partitions.get("rootCurrent") {
-        fsck_and_record(root_dev, "root", ods_status)?;
-        mm.mount_readonly(root_dev, rootfs, "ext4")?;
-        info!("Mounted rootfs at {}", rootfs.display());
-    }
+    // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
+    let root_dev = layout.partitions.get("rootCurrent").ok_or_else(|| {
+        InitramfsError::Partition(PartitionError::DeviceDetection(
+            "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
+        ))
+    })?;
+    fsck_and_record(root_dev, "root", ods_status)?;
+    mm.mount_readonly(root_dev, rootfs, "ext4")?;
+    info!("Mounted rootfs at {}", rootfs.display());
 
     // Mount boot partition
     if let Some(boot_dev) = layout.partitions.get("boot") {
