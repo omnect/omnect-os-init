@@ -89,15 +89,6 @@ impl MountOptions {
         }
     }
 
-    /// Create options for a private bind mount
-    pub fn bind_private() -> Self {
-        Self {
-            fstype: None,
-            flags: flags::BIND | flags::PRIVATE,
-            data: None,
-        }
-    }
-
     /// Create options for a tmpfs mount
     pub fn tmpfs() -> Self {
         Self {

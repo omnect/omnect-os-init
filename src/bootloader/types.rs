@@ -56,7 +56,14 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
             .ok_or_else(|| std::io::Error::other("no gzip stdin"))?
             .write_all(raw.as_bytes())?;
 
-        Ok(gzip.wait_with_output()?.stdout)
+        let out = gzip.wait_with_output()?;
+        if !out.status.success() {
+            return Err(std::io::Error::other(format!(
+                "gzip exited with status {}",
+                out.status
+            )));
+        }
+        Ok(out.stdout)
     })();
 
     let compressed = match gzip_result {
@@ -81,6 +88,12 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
             .write_all(&compressed)?;
 
         let out = b64.wait_with_output()?;
+        if !out.status.success() {
+            return Err(std::io::Error::other(format!(
+                "base64 exited with status {}",
+                out.status
+            )));
+        }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     })();
 
@@ -111,7 +124,8 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
                 .write_all(encoded.as_bytes())?;
             child.wait_with_output()
         })
-        .ok()?;
+        .ok()
+        .filter(|out| out.status.success())?;
 
     // Decompress gzip → raw text.
     let gz_out = Command::new(GUNZIP_CMD)
@@ -127,7 +141,8 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
                 .write_all(&b64_out.stdout)?;
             child.wait_with_output()
         })
-        .ok()?;
+        .ok()
+        .filter(|out| out.status.success())?;
 
     let raw = String::from_utf8_lossy(&gz_out.stdout);
     let (code_str, output) = raw.split_once('\n')?;

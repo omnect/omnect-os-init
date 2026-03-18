@@ -106,16 +106,26 @@ fn run() -> Result<()> {
     // Run fsck on partitions and mount them.
     // Boot partition must be mounted before create_bootloader() so that
     // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status)?;
+    let mount_result = mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status);
 
-    // Create bootloader abstraction after mounts so the boot partition and
-    // grubenv file are accessible.
-    let mut bootloader = create_bootloader(&config.rootfs_dir)?;
-    info!("Bootloader type: {}", bootloader.bootloader_type());
+    // Attempt to create bootloader and persist fsck results before propagating any
+    // mount error. This ensures results are stored even on the FsckRequiresReboot
+    // reboot path. For GRUB: requires boot partition mounted; best-effort if it isn't.
+    let mut bootloader_result = create_bootloader(&config.rootfs_dir);
+    if let Ok(ref mut bl) = bootloader_result {
+        info!("Bootloader type: {}", bl.bootloader_type());
+        // Persist fsck results: exit code to bootloader env, full output to data partition log.
+        // Non-fatal: failures are logged as warnings.
+        persist_fsck_results(&ods_status, bl.as_mut(), &config.rootfs_dir);
+    } else {
+        warn!("Could not create bootloader; fsck results will not be persisted to bootloader env");
+    }
 
-    // Persist fsck results: exit code to bootloader env, full output to data partition log.
-    // Non-fatal: failures are logged as warnings.
-    persist_fsck_results(&ods_status, bootloader.as_mut(), &config.rootfs_dir);
+    // Propagate mount failure after persistence attempt (FsckRequiresReboot → reboot)
+    mount_result?;
+
+    // Safe: mount succeeded means boot partition is mounted, so bootloader was created above.
+    let bootloader = bootloader_result?;
 
     // Now that rootfs is mounted, read os-release for feature flags.
     // Non-fatal: missing os-release means no features enabled.
@@ -153,6 +163,36 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// Run fsck on a partition and record the result (including output) in ods_status.
+///
+/// Intercepts `FsckRequiresReboot` to save the output before propagating, ensuring
+/// it is available for persistence even when mounting is aborted early.
+fn fsck_and_record(
+    dev: &Path,
+    name: &str,
+    ods_status: &mut OdsStatus,
+) -> std::result::Result<(), FilesystemError> {
+    match check_filesystem_lenient(dev) {
+        Ok(r) => {
+            ods_status.add_fsck_result(name, r.exit_code, r.output);
+            Ok(())
+        }
+        Err(FilesystemError::FsckRequiresReboot {
+            device,
+            code,
+            output,
+        }) => {
+            ods_status.add_fsck_result(name, code, output.clone());
+            Err(FilesystemError::FsckRequiresReboot {
+                device,
+                code,
+                output,
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Mount all required partitions
 fn mount_partitions(
     mm: &mut MountManager,
@@ -164,10 +204,7 @@ fn mount_partitions(
 
     // Mount rootfs read-only
     if let Some(root_dev) = layout.partitions.get("rootCurrent") {
-        // Run fsck first; FsckRequiresReboot propagates via ? and triggers a reboot
-        let result = check_filesystem_lenient(root_dev)?;
-        ods_status.add_fsck_result("root", result.exit_code, result.output);
-
+        fsck_and_record(root_dev, "root", ods_status)?;
         mm.mount_readonly(root_dev, rootfs, "ext4")?;
         info!("Mounted rootfs at {}", rootfs.display());
     }
@@ -175,50 +212,35 @@ fn mount_partitions(
     // Mount boot partition
     if let Some(boot_dev) = layout.partitions.get("boot") {
         let boot_mount = rootfs.join("boot");
-
-        let result = check_filesystem_lenient(boot_dev)?;
-        ods_status.add_fsck_result("boot", result.exit_code, result.output);
-
+        fsck_and_record(boot_dev, "boot", ods_status)?;
         mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition
     if let Some(factory_dev) = layout.partitions.get("factory") {
         let factory_mount = rootfs.join("mnt/factory");
-
-        let result = check_filesystem_lenient(factory_dev)?;
-        ods_status.add_fsck_result("factory", result.exit_code, result.output);
-
+        fsck_and_record(factory_dev, "factory", ods_status)?;
         mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
     }
 
     // Mount cert partition
     if let Some(cert_dev) = layout.partitions.get("cert") {
         let cert_mount = rootfs.join("mnt/cert");
-
-        let result = check_filesystem_lenient(cert_dev)?;
-        ods_status.add_fsck_result("cert", result.exit_code, result.output);
-
+        fsck_and_record(cert_dev, "cert", ods_status)?;
         mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
     }
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get("etc") {
         let etc_mount = rootfs.join("mnt/etc");
-
-        let result = check_filesystem_lenient(etc_dev)?;
-        ods_status.add_fsck_result("etc", result.exit_code, result.output);
-
+        fsck_and_record(etc_dev, "etc", ods_status)?;
         mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
     }
 
     // Mount data partition
     if let Some(data_dev) = layout.partitions.get("data") {
         let data_mount = rootfs.join("mnt/data");
-
-        let result = check_filesystem_lenient(data_dev)?;
-        ods_status.add_fsck_result("data", result.exit_code, result.output);
-
+        fsck_and_record(data_dev, "data", ods_status)?;
         mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
     }
 

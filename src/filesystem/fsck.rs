@@ -132,6 +132,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         return Err(FilesystemError::FsckRequiresReboot {
             device: device.to_path_buf(),
             code: exit_code,
+            output: combined_output,
         });
     }
 
@@ -154,9 +155,15 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
 pub fn check_filesystem_lenient(device: &Path) -> Result<FsckResult> {
     match check_filesystem(device, true) {
         Ok(result) => Ok(result),
-        Err(FilesystemError::FsckRequiresReboot { device, code }) => {
-            Err(FilesystemError::FsckRequiresReboot { device, code })
-        }
+        Err(FilesystemError::FsckRequiresReboot {
+            device,
+            code,
+            output,
+        }) => Err(FilesystemError::FsckRequiresReboot {
+            device,
+            code,
+            output,
+        }),
         Err(FilesystemError::FsckFailed {
             device,
             code,

@@ -139,7 +139,11 @@ pub enum FilesystemError {
     },
 
     #[error("Filesystem check for {} requires reboot (fsck exit code {code})", device.display())]
-    FsckRequiresReboot { device: PathBuf, code: i32 },
+    FsckRequiresReboot {
+        device: PathBuf,
+        code: i32,
+        output: String,
+    },
 
     #[error("Overlayfs setup failed for {}: {reason}", target.display())]
     OverlayFailed { target: PathBuf, reason: String },
