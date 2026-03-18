@@ -311,8 +311,7 @@ fn persist_fsck_results(
 
 /// Handle fatal errors based on image type
 fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
-    // fsck exit code 1 (errors corrected) and code 2 (fsck requests reboot) both
-    // require a clean reboot before the OS can safely mount the filesystem.
+    // fsck exit code 2 means fsck explicitly requests a reboot before mounting.
     if matches!(
         error,
         InitramfsError::Filesystem(FilesystemError::FsckRequiresReboot { .. })

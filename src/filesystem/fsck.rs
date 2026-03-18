@@ -40,9 +40,9 @@ pub struct FsckResult {
     pub exit_code: i32,
     /// Output from fsck (stdout + stderr)
     pub output: String,
-    /// Whether the check was successful (code 0 only — code 1 triggers reboot)
+    /// Whether the check was successful (code 0: clean, or code 1: errors corrected by -y)
     pub success: bool,
-    /// Whether a reboot is required (code 1: errors corrected, or code 2: fsck requests reboot)
+    /// Whether a reboot is required (code 2 only: fsck explicitly requests reboot)
     pub reboot_required: bool,
 }
 
@@ -65,9 +65,9 @@ impl FsckResult {
 /// * `auto_repair` - If true, automatically repair errors (-y flag)
 ///
 /// # Returns
-/// * `Ok(FsckResult)` - Result of the check
-/// * `Err(FilesystemError::FsckRequiresReboot)` - If reboot is required (exit code 1: errors corrected, or exit code 2: fsck requests reboot)
-/// * `Err(FilesystemError::FsckFailed)` - If check failed with errors
+/// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
+/// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
+/// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
 pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
@@ -99,25 +99,28 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         device: device.to_path_buf(),
         exit_code,
         output: combined_output.clone(),
-        // Exit code 1 means errors were corrected — filesystem was written to,
-        // reboot required before mounting (kernel will return EUCLEAN otherwise).
-        success: exit_code == exit_code::OK,
-        reboot_required: exit_code & exit_code::REBOOT_REQUIRED != 0
-            || exit_code == exit_code::CORRECTED,
+        // Exit code 1: errors were corrected by -y. The filesystem is now clean
+        // and safe to mount — no reboot needed. Matches legacy bash behaviour.
+        // Exit code 2: fsck explicitly requests a reboot (e.g. kernel needs to
+        // replay journal). Only this code triggers a reboot.
+        success: exit_code == exit_code::OK || exit_code == exit_code::CORRECTED,
+        reboot_required: exit_code & exit_code::REBOOT_REQUIRED != 0,
     };
 
     // Log the result
     if exit_code == exit_code::OK {
         log::debug!("fsck: {} is clean", device.display());
+    } else if exit_code == exit_code::CORRECTED {
+        log::info!(
+            "fsck corrected errors on {} (code 1) — filesystem is clean, continuing",
+            device.display()
+        );
     } else if result.reboot_required {
-        if exit_code == exit_code::CORRECTED {
-            log::warn!(
-                "fsck corrected errors on {} — reboot required before mount",
-                device.display()
-            );
-        } else {
-            log::warn!("fsck on {} requires reboot", device.display());
-        }
+        log::warn!(
+            "fsck on {} requires reboot (code {})",
+            device.display(),
+            exit_code
+        );
     } else {
         log::error!(
             "fsck failed on {} with code {}: {}",
@@ -127,7 +130,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         );
     }
 
-    // Handle reboot requirement
+    // Exit code 2: fsck requests a reboot before mounting
     if result.reboot_required {
         return Err(FilesystemError::FsckRequiresReboot {
             device: device.to_path_buf(),
@@ -136,7 +139,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         });
     }
 
-    // Return error for serious failures, but include the result
+    // Exit codes ≥4: uncorrectable errors
     if !result.success {
         return Err(FilesystemError::FsckFailed {
             device: device.to_path_buf(),
