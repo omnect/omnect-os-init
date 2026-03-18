@@ -62,7 +62,13 @@ fn load_fs_link_config(rootfs_dir: &Path) -> Result<FsLinkConfig> {
     let config_d_path = rootfs_dir.join(FS_LINK_CONFIG_PATH_D);
     if config_d_path.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(&config_d_path)?
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    log::warn!("Failed to read entry in {}: {err}", config_d_path.display());
+                    None
+                }
+            })
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
             .collect();
 

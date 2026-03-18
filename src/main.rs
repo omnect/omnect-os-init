@@ -117,7 +117,8 @@ fn run() -> Result<()> {
     let mut bootloader_result = create_bootloader(&config.rootfs_dir);
     if let Ok(ref mut bl) = bootloader_result {
         info!("Bootloader type: {}", bl.bootloader_type());
-        // Persist fsck results: exit code to bootloader env, full output to data partition log.
+        // Persist fsck results: gzip+base64 encoded output (code + full text) to
+        // bootloader env, and full output to data partition log.
         // Non-fatal: failures are logged as warnings.
         persist_fsck_results(&ods_status, bl.as_mut(), &config.rootfs_dir);
     } else {
@@ -268,9 +269,10 @@ fn mount_partitions(
 /// Persist fsck results after all partitions are mounted.
 ///
 /// For each partition with a non-zero fsck exit code:
-/// - Stores the exit code in the bootloader environment (keeps grubenv/uboot-env small).
-/// - Writes the full output to `/data/var/log/fsck/<partition>.log` on the data partition
-///   so ODS and operators can inspect it after boot.
+/// - Stores the gzip+base64 encoded exit code and full output in the bootloader
+///   environment (grubenv / uboot-env) for inspection after the next boot.
+/// - Writes the full output to `/data/var/log/fsck/<partition>.log` on the data
+///   partition so ODS and operators can inspect it after boot.
 fn persist_fsck_results(
     ods_status: &OdsStatus,
     bootloader: &mut dyn Bootloader,
