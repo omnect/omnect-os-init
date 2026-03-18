@@ -89,8 +89,15 @@ fn symlink_path(name: &str) -> PathBuf {
 
 /// Create a symlink, removing any existing symlink first
 fn create_symlink(target: &Path, link: &Path) -> Result<()> {
-    // Remove existing symlink if present
+    // Remove existing symlink if present. Plain directories cannot be replaced
+    // by a symlink — flag them clearly. Symlinks pointing to directories are fine.
     if link.is_symlink() || link.exists() {
+        if !link.is_symlink() && link.is_dir() {
+            return Err(PartitionError::SymlinkRemoveFailed {
+                path: link.to_path_buf(),
+                reason: "path is a directory, cannot replace with symlink".to_string(),
+            });
+        }
         fs::remove_file(link).map_err(|e| PartitionError::SymlinkRemoveFailed {
             path: link.to_path_buf(),
             reason: e.to_string(),

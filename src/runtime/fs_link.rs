@@ -97,8 +97,28 @@ fn load_config_file(path: &Path) -> Result<FsLinkConfig> {
     Ok(config)
 }
 
+/// Validate that a config-supplied path is a safe relative path.
+///
+/// Rejects absolute paths (Path::join would silently discard rootfs_dir) and
+/// paths containing `..` components (directory traversal outside rootfs).
+fn validate_relative_path(path: &str) -> Result<()> {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return Err(InitramfsError::Io(std::io::Error::other(format!(
+            "fs-link path must be relative, got absolute path: {path}"
+        ))));
+    }
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(InitramfsError::Io(std::io::Error::other(format!(
+            "fs-link path must not contain '..': {path}"
+        ))));
+    }
+    Ok(())
+}
+
 /// Create a single symbolic link
 fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
+    validate_relative_path(&entry.link)?;
     let link_path = rootfs_dir.join(&entry.link);
     let target = PathBuf::from(&entry.target);
 

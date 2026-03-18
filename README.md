@@ -9,7 +9,7 @@ acting as `/init` in the initramfs. Runs as PID 1 before `switch_root`.
 
 Implemented functionality:
 
-- **Bootloader abstraction**: Unified `Bootloader` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`)
+- **Bootloader abstraction**: Unified `Bootloader` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
 - **Configuration**: Parses `/proc/cmdline` and `/etc/os-release`
 - **Partition management**: Root device detection, partition layout (GPT/DOS), `/dev/omnect/*` symlinks
 - **Filesystem operations**: fsck, mount manager (RAII), overlayfs for `/etc` and `/home`, bind mounts

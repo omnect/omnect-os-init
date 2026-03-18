@@ -1,6 +1,8 @@
 //! Common types for bootloader implementations
 
 use std::fmt;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
 /// Bootloader type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,109 @@ impl fmt::Display for BootloaderType {
     }
 }
 
+/// Encode fsck result for storage in the bootloader environment.
+///
+/// Produces `base64(gzip("{code}\n{output}"))` using the busybox `gzip` and
+/// `base64` applets that are always present in the initramfs. This matches the
+/// legacy bash script encoding so ODS can decode the value identically.
+///
+/// Returns an empty string if encoding fails (non-fatal; the plain log file
+/// on the data partition still captures the output).
+pub fn encode_fsck_output(code: i32, output: &str) -> String {
+    let raw = format!("{code}\n{output}");
+
+    // Pipe raw text through `gzip -c` to get compressed bytes.
+    let gzip_result = (|| -> std::io::Result<Vec<u8>> {
+        let mut gzip = Command::new("/bin/gzip")
+            .args(["-c"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        gzip.stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("no gzip stdin"))?
+            .write_all(raw.as_bytes())?;
+
+        Ok(gzip.wait_with_output()?.stdout)
+    })();
+
+    let compressed = match gzip_result {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("encode_fsck_output: gzip failed: {e}");
+            return String::new();
+        }
+    };
+
+    // Pipe compressed bytes through `base64 -w 0` (no line wrapping).
+    let base64_result = (|| -> std::io::Result<String> {
+        let mut b64 = Command::new("/usr/bin/base64")
+            .args(["-w", "0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        b64.stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("no base64 stdin"))?
+            .write_all(&compressed)?;
+
+        let out = b64.wait_with_output()?;
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    })();
+
+    match base64_result {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("encode_fsck_output: base64 failed: {e}");
+            String::new()
+        }
+    }
+}
+
+/// Decode a fsck result previously encoded with [`encode_fsck_output`].
+///
+/// Returns `(exit_code, output)` on success, or `None` if decoding fails.
+pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
+    // Decode base64 → compressed bytes.
+    let b64_out = Command::new("/usr/bin/base64")
+        .args(["-d"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| std::io::Error::other("no stdin"))?
+                .write_all(encoded.as_bytes())?;
+            child.wait_with_output()
+        })
+        .ok()?;
+
+    // Decompress gzip → raw text.
+    let gz_out = Command::new("/bin/gunzip")
+        .args(["-c"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| std::io::Error::other("no stdin"))?
+                .write_all(&b64_out.stdout)?;
+            child.wait_with_output()
+        })
+        .ok()?;
+
+    let raw = String::from_utf8_lossy(&gz_out.stdout);
+    let (code_str, output) = raw.split_once('\n')?;
+    let code = code_str.trim().parse::<i32>().ok()?;
+    Some((code, output.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,5 +139,27 @@ mod tests {
         assert_eq!(BootloaderType::Grub.to_string(), "GRUB");
         assert_eq!(BootloaderType::UBoot.to_string(), "U-Boot");
         assert_eq!(BootloaderType::Mock.to_string(), "Mock");
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        let code = 1;
+        let output = "Pass 1: Checking inodes, blocks, and sizes\nErrors corrected.";
+        let encoded = encode_fsck_output(code, output);
+        assert!(
+            !encoded.is_empty(),
+            "encoding should succeed when gzip/base64 are available"
+        );
+        if !encoded.is_empty() {
+            let (dec_code, dec_output) = decode_fsck_output(&encoded).unwrap();
+            assert_eq!(dec_code, code);
+            assert_eq!(dec_output, output);
+        }
+    }
+
+    #[test]
+    fn test_decode_invalid_returns_none() {
+        assert!(decode_fsck_output("not-valid-base64!!!").is_none());
+        assert!(decode_fsck_output("").is_none());
     }
 }

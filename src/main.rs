@@ -252,7 +252,7 @@ fn persist_fsck_results(
             continue;
         }
 
-        if let Err(e) = bootloader.save_fsck_status(partition, fsck.code) {
+        if let Err(e) = bootloader.save_fsck_status(partition, fsck.code, &fsck.output) {
             warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition, e

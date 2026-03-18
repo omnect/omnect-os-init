@@ -48,17 +48,17 @@ pub trait Bootloader: Send + Sync {
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
     fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()>;
 
-    /// Save fsck exit code to bootloader environment.
+    /// Save fsck result to bootloader environment.
     ///
-    /// Only the integer exit code is stored (single digit) to keep the
-    /// environment block small. Full fsck output is written to
-    /// `/data/var/log/fsck/<partition>.log` by the caller.
-    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()>;
+    /// Stores exit code and full fsck output as gzip+base64 encoded string so the
+    /// diagnostic text survives the reboot required after fsck corrects errors.
+    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()>;
 
     /// Get fsck status from bootloader environment.
     ///
-    /// Returns the raw integer exit code string if it exists (e.g. `"0"`, `"1"`).
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<String>>;
+    /// Returns the decoded `(exit_code, output)` pair if a value is present,
+    /// or `None` if no status was stored for this partition.
+    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>>;
 
     /// Clear fsck status from bootloader environment
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()>;
@@ -70,12 +70,12 @@ pub trait Bootloader: Send + Sync {
 /// Creates the appropriate bootloader implementation based on available tools.
 ///
 /// Detection logic:
-/// - If `grub-editenv` is present in the initramfs (`/usr/bin/grub-editenv`), use GRUB.
+/// - If `grub-editenv` is present in the initramfs (`/bin/grub-editenv`), use GRUB.
 ///   Must be called after the boot partition is mounted (grubenv lives there).
 /// - Otherwise, use U-Boot (assumes fw_printenv/fw_setenv available in initramfs).
 pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
     // grub-editenv is an initramfs tool, not installed in the rootfs.
-    const GRUB_EDITENV_INITRAMFS_PATH: &str = "/usr/bin/grub-editenv";
+    const GRUB_EDITENV_INITRAMFS_PATH: &str = "/bin/grub-editenv";
 
     if std::path::Path::new(GRUB_EDITENV_INITRAMFS_PATH).exists() {
         Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
@@ -128,15 +128,17 @@ impl Bootloader for MockBootloader {
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32) -> Result<()> {
+    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
+        use crate::bootloader::types::encode_fsck_output;
         let key = format!("omnect_fsck_{}", partition);
-        self.env.insert(key, code.to_string());
+        self.env.insert(key, encode_fsck_output(code, output));
         Ok(())
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<String>> {
+    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
+        use crate::bootloader::types::decode_fsck_output;
         let key = format!("omnect_fsck_{}", partition);
-        Ok(self.env.get(&key).cloned())
+        Ok(self.env.get(&key).and_then(|v| decode_fsck_output(v)))
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
@@ -188,10 +190,14 @@ mod tests {
     fn test_mock_bootloader_fsck_status() {
         let mut bl = MockBootloader::new();
 
-        bl.save_fsck_status("boot", 1).unwrap();
+        bl.save_fsck_status("boot", 1, "errors corrected on pass 1")
+            .unwrap();
 
         let retrieved = bl.get_fsck_status("boot").unwrap();
-        assert_eq!(retrieved, Some("1".to_string()));
+        assert_eq!(
+            retrieved,
+            Some((1, "errors corrected on pass 1".to_string()))
+        );
 
         bl.clear_fsck_status("boot").unwrap();
         assert_eq!(bl.get_fsck_status("boot").unwrap(), None);

@@ -40,9 +40,9 @@ pub struct FsckResult {
     pub exit_code: i32,
     /// Output from fsck (stdout + stderr)
     pub output: String,
-    /// Whether the check was successful (code 0 or 1)
+    /// Whether the check was successful (code 0 only — code 1 triggers reboot)
     pub success: bool,
-    /// Whether a reboot is required (code 2)
+    /// Whether a reboot is required (code 1: errors corrected, or code 2: fsck requests reboot)
     pub reboot_required: bool,
 }
 
