@@ -215,7 +215,10 @@ fn mount_partitions(
                 "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
             ))
         })?;
-    fsck_and_record(root_dev, partition_names::ROOT_CURRENT, ods_status)?;
+    // rootCurrent is mounted directly — no fsck. Legacy bash never runs check_fs on
+    // rootCurrent either: the kernel's own ext4 journal replay is the correct recovery
+    // mechanism. Running fsck -y before mount can interfere with journal replay and
+    // cause EUCLEAN on a filesystem that the kernel could have mounted cleanly.
     mm.mount_readonly(root_dev, rootfs, "ext4")?;
     info!("Mounted rootfs at {}", rootfs.display());
 
