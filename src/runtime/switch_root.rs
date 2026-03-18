@@ -41,6 +41,11 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
         )));
     }
 
+    // Verify the init binary exists BEFORE moving any mounts. If init is
+    // missing we want to fail while /dev, /proc, /sys, /run are still on
+    // the initramfs so the debug shell / fatal-error path still works.
+    let init_full_path = find_init(new_root, init_path)?;
+
     // Ensure target mountpoint directories exist under new_root.
     // MS_MOVE fails with ENOENT if the target directory is missing.
     for dir in &["dev", "proc", "sys", "run"] {
@@ -60,8 +65,6 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     move_mount("/sys", &new_root.join("sys"))?;
     // /run must be moved so ODS can read its runtime state after root switching
     move_mount("/run", &new_root.join("run"))?;
-
-    let init_full_path = find_init(new_root, init_path)?;
 
     chdir(new_root).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(

@@ -21,23 +21,17 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     // Create symlink to the base block device
     create_symlink(&layout.device.base, &symlink_path(partition_names::ROOTBLK))?;
 
-    // Create partition symlinks
+    // Create partition symlinks — rootCurrent is already in layout.partitions
+    // with the correct active-partition target, so no explicit creation needed.
     for (name, device_path) in &layout.partitions {
         create_symlink(device_path, &symlink_path(name))?;
     }
-
-    // Create rootCurrent symlink pointing to the active root partition
-    let root_current_target = layout.root_current();
-    create_symlink(
-        &root_current_target,
-        &symlink_path(partition_names::ROOT_CURRENT),
-    )?;
 
     log::info!(
         "Created /dev/omnect symlinks for {} device {}, rootCurrent -> {}",
         layout.table_type,
         layout.device.base.display(),
-        root_current_target.display()
+        layout.root_current().display()
     );
 
     Ok(())

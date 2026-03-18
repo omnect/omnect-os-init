@@ -18,7 +18,8 @@ const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
-/// Fsck status is stored as a plain integer exit code string.
+/// Fsck status is stored as gzip+base64 encoded `"exit_code\noutput"` string
+/// via busybox subprocess commands to survive the reboot required after fsck.
 pub struct UBootBootloader {
     // No state needed - commands access environment directly
 }

@@ -126,7 +126,13 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
         )))
     })?;
 
-    fs::write(&status_path, json)?;
+    fs::write(&status_path, json).map_err(|e| {
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to write ODS status to {}: {}",
+            status_path.display(),
+            e
+        )))
+    })?;
     log::debug!("Wrote ODS status to {}", status_path.display());
 
     Ok(())
@@ -150,12 +156,24 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
         if value == "1" || value.to_lowercase() == "true" {
             // Create trigger file for ODS
             let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
-            fs::write(&trigger_path, "1")?;
+            fs::write(&trigger_path, "1").map_err(|e| {
+                InitramfsError::Io(std::io::Error::other(format!(
+                    "Failed to write {}: {}",
+                    trigger_path.display(),
+                    e
+                )))
+            })?;
             log::info!("Update validation requested - created trigger file");
         } else if value == "failed" {
             // Mark validation as failed
             let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
-            fs::write(&failed_path, "1")?;
+            fs::write(&failed_path, "1").map_err(|e| {
+                InitramfsError::Io(std::io::Error::other(format!(
+                    "Failed to write {}: {}",
+                    failed_path.display(),
+                    e
+                )))
+            })?;
             log::warn!("Update validation failed marker created");
         }
     }
@@ -174,7 +192,13 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
 
     if bootloader_updated.is_some() {
         let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);
-        fs::write(&marker_path, "1")?;
+        fs::write(&marker_path, "1").map_err(|e| {
+            InitramfsError::Io(std::io::Error::other(format!(
+                "Failed to write {}: {}",
+                marker_path.display(),
+                e
+            )))
+        })?;
         log::info!("Bootloader update marker created");
     }
 

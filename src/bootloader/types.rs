@@ -4,6 +4,11 @@ use std::fmt;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
+const GZIP_CMD: &str = "/bin/gzip";
+const GUNZIP_CMD: &str = "/bin/gunzip";
+/// busybox base64 applet lives under /bin, not /usr/bin
+const BASE64_CMD: &str = "/bin/base64";
+
 /// Bootloader type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootloaderType {
@@ -40,7 +45,7 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
 
     // Pipe raw text through `gzip -c` to get compressed bytes.
     let gzip_result = (|| -> std::io::Result<Vec<u8>> {
-        let mut gzip = Command::new("/bin/gzip")
+        let mut gzip = Command::new(GZIP_CMD)
             .args(["-c"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -64,7 +69,7 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
 
     // Pipe compressed bytes through `base64 -w 0` (no line wrapping).
     let base64_result = (|| -> std::io::Result<String> {
-        let mut b64 = Command::new("/usr/bin/base64")
+        let mut b64 = Command::new(BASE64_CMD)
             .args(["-w", "0"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -93,7 +98,7 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
 /// Returns `(exit_code, output)` on success, or `None` if decoding fails.
 pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
     // Decode base64 → compressed bytes.
-    let b64_out = Command::new("/usr/bin/base64")
+    let b64_out = Command::new(BASE64_CMD)
         .args(["-d"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -109,7 +114,7 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
         .ok()?;
 
     // Decompress gzip → raw text.
-    let gz_out = Command::new("/bin/gunzip")
+    let gz_out = Command::new(GUNZIP_CMD)
         .args(["-c"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
