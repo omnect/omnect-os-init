@@ -68,7 +68,7 @@ impl FsckResult {
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
 /// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
-pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> {
+pub fn check_filesystem(device: &Path, auto_repair: bool, fstype: &str) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
     // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
@@ -81,7 +81,12 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
         cmd.arg("-y"); // Automatically repair
     }
 
-    cmd.arg("-C0"); // per e2fsck(8): -C0 writes progress to stdout
+    // -C0 (write progress to stdout) is only supported by e2fsck; fsck.vfat and
+    // other non-ext implementations reject or mishandle it. Pass it only for ext
+    // filesystems to avoid spurious non-zero exit codes on vfat.
+    if fstype.starts_with("ext") {
+        cmd.arg("-C0");
+    }
     cmd.arg(device);
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
@@ -155,8 +160,8 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
 ///
 /// This variant returns Ok even if fsck reports errors, unless a reboot is required.
 /// Useful for partitions where we want to log errors but continue booting.
-pub fn check_filesystem_lenient(device: &Path) -> Result<FsckResult> {
-    match check_filesystem(device, true) {
+pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResult> {
+    match check_filesystem(device, true, fstype) {
         Ok(result) => Ok(result),
         Err(FilesystemError::FsckRequiresReboot {
             device,

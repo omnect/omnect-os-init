@@ -140,7 +140,7 @@ impl Bootloader for GrubBootloader {
                 .and_then(|v| decode_fsck_output(&v)))
         } else {
             let file_path = self.boot_dir.join(format!("fsck.{partition}"));
-            if !file_path.exists() {
+            if !file_path.is_file() {
                 return Ok(None);
             }
             let encoded =

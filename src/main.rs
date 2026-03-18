@@ -128,8 +128,20 @@ fn run() -> Result<()> {
     // Propagate mount failure after persistence attempt (FsckRequiresReboot → reboot)
     mount_result?;
 
-    // Safe: mount succeeded means boot partition is mounted, so bootloader was created above.
-    let bootloader = bootloader_result?;
+    // Bootloader is expected to be available after a successful mount, but can
+    // fail in edge cases (e.g. missing grubenv on a corrupted boot partition).
+    // Log a warning and continue — ODS bootloader-dependent state will be skipped
+    // rather than aborting a boot that otherwise succeeded.
+    let bootloader = match bootloader_result {
+        Ok(bl) => Some(bl),
+        Err(e) => {
+            warn!(
+                "Bootloader unavailable after mount: {}; ODS update-validation will be skipped",
+                e
+            );
+            None
+        }
+    };
 
     // Now that rootfs is mounted, read os-release for feature flags.
     // Non-fatal: missing os-release means no features enabled.
@@ -152,7 +164,7 @@ fn run() -> Result<()> {
     create_fs_links(&config.rootfs_dir)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&ods_status, bootloader.as_ref())?;
+    create_ods_runtime_files(&ods_status, bootloader.as_deref())?;
 
     info!("omnect-os-initramfs completed successfully");
 
@@ -175,8 +187,9 @@ fn fsck_and_record(
     dev: &Path,
     name: &str,
     ods_status: &mut OdsStatus,
+    fstype: &str,
 ) -> std::result::Result<(), FilesystemError> {
-    match check_filesystem_lenient(dev) {
+    match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
             ods_status.add_fsck_result(name, r.exit_code, r.output);
             Ok(())
@@ -225,35 +238,35 @@ fn mount_partitions(
     // Mount boot partition
     if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
         let boot_mount = rootfs.join("boot");
-        fsck_and_record(boot_dev, partition_names::BOOT, ods_status)?;
+        fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
         mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition
     if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
         let factory_mount = rootfs.join("mnt/factory");
-        fsck_and_record(factory_dev, partition_names::FACTORY, ods_status)?;
+        fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
         mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
     }
 
     // Mount cert partition
     if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
         let cert_mount = rootfs.join("mnt/cert");
-        fsck_and_record(cert_dev, partition_names::CERT, ods_status)?;
+        fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
         mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
     }
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
         let etc_mount = rootfs.join("mnt/etc");
-        fsck_and_record(etc_dev, partition_names::ETC, ods_status)?;
+        fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
         mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
     }
 
     // Mount data partition
     if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
         let data_mount = rootfs.join("mnt/data");
-        fsck_and_record(data_dev, partition_names::DATA, ods_status)?;
+        fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
         mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
     }
 

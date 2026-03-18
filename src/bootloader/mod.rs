@@ -78,7 +78,7 @@ pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
     // grub-editenv is an initramfs tool, not installed in the rootfs.
     const GRUB_EDITENV_INITRAMFS_PATH: &str = "/bin/grub-editenv";
 
-    if std::path::Path::new(GRUB_EDITENV_INITRAMFS_PATH).exists() {
+    if std::path::Path::new(GRUB_EDITENV_INITRAMFS_PATH).is_file() {
         Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
     } else {
         Ok(Box::new(UBootBootloader::new()?))
@@ -131,19 +131,19 @@ impl Bootloader for MockBootloader {
 
     fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
         use crate::bootloader::types::encode_fsck_output;
-        let key = format!("omnect_fsck_{}", partition);
+        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.env.insert(key, encode_fsck_output(code, output));
         Ok(())
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
         use crate::bootloader::types::decode_fsck_output;
-        let key = format!("omnect_fsck_{}", partition);
+        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
         Ok(self.env.get(&key).and_then(|v| decode_fsck_output(v)))
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        let key = format!("omnect_fsck_{}", partition);
+        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.env.remove(&key);
         Ok(())
     }

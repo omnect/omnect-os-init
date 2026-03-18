@@ -39,7 +39,11 @@ impl fmt::Display for BootloaderType {
 /// legacy bash script encoding so ODS can decode the value identically.
 ///
 /// Returns an empty string if encoding fails (non-fatal; the plain log file
-/// on the data partition still captures the output).
+/// on the data partition still captures the output). Note: an empty string
+/// stored in the bootloader env is indistinguishable from "no fsck ran" —
+/// `get_fsck_status` will return `Ok(None)` for both cases, masking the
+/// encoding failure. This is acceptable: the plain log file is the primary
+/// diagnostic artifact; the bootloader env value is a lightweight indicator.
 pub fn encode_fsck_output(code: i32, output: &str) -> String {
     let raw = format!("{code}\n{output}");
 

@@ -92,7 +92,10 @@ impl OdsStatus {
 /// Files are written directly to the initramfs `/run` tmpfs. `switch_root`
 /// moves that mount into the new root via `MS_MOVE`, so they remain visible
 /// to ODS at the same path after the root pivot.
-pub fn create_ods_runtime_files(status: &OdsStatus, bootloader: &dyn Bootloader) -> Result<()> {
+pub fn create_ods_runtime_files(
+    status: &OdsStatus,
+    bootloader: Option<&dyn Bootloader>,
+) -> Result<()> {
     let ods_dir = Path::new(ODS_RUNTIME_DIR);
 
     // Ensure directory exists
@@ -106,8 +109,11 @@ pub fn create_ods_runtime_files(status: &OdsStatus, bootloader: &dyn Bootloader)
     // Write main status file
     write_status_file(ods_dir, status)?;
 
-    // Handle update validation
-    handle_update_validation(ods_dir, bootloader)?;
+    // Handle update validation — requires a functional bootloader.
+    // Skipped if bootloader is unavailable (e.g. missing grubenv on first boot).
+    if let Some(bl) = bootloader {
+        handle_update_validation(ods_dir, bl)?;
+    }
 
     // Copy factory reset status if exists
     copy_factory_reset_status(ods_dir)?;

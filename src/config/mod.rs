@@ -24,15 +24,6 @@ pub struct Config {
     /// Path to the rootfs mount point
     pub rootfs_dir: PathBuf,
 
-    /// Root partition identifier (e.g., "2" for /dev/sda2)
-    pub rootpart: Option<String>,
-
-    /// Root block device hint from kernel cmdline
-    pub rootblk_hint: Option<String>,
-
-    /// Root device from kernel cmdline (e.g., /dev/mmcblk0p2)
-    pub root_device: Option<String>,
-
     /// Whether this is a release image
     pub is_release_image: bool,
 
@@ -61,9 +52,6 @@ impl Config {
 
         Ok(Self {
             rootfs_dir,
-            rootpart: cmdline_params.get("rootpart").cloned(),
-            rootblk_hint: cmdline_params.get("rootblk").cloned(),
-            root_device: cmdline_params.get("root").cloned(),
             is_release_image: false,
             machine_features: vec![],
             distro_features: vec![],
@@ -191,9 +179,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             rootfs_dir: PathBuf::from("/rootfs"),
-            rootpart: None,
-            rootblk_hint: None,
-            root_device: None,
             is_release_image: false,
             machine_features: vec![],
             distro_features: vec![],
