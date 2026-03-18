@@ -34,7 +34,7 @@ impl GrubBootloader {
     pub fn new(rootfs_dir: &Path) -> Result<Self> {
         let grubenv_path = rootfs_dir.join("boot").join(GRUBENV_RELATIVE_PATH);
 
-        if !grubenv_path.exists() {
+        if !grubenv_path.is_file() {
             return Err(BootloaderError::EnvFileNotFound { path: grubenv_path });
         }
 

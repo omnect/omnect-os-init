@@ -208,11 +208,25 @@ static SAVED_RATELIMIT: Mutex<Option<(String, String)>> = Mutex::new(None);
 ///
 /// This ensures fsck output isn't throttled in dmesg.
 fn disable_kmsg_ratelimit() {
-    let ratelimit = std::fs::read_to_string(PRINTK_RATELIMIT_PATH).unwrap_or_default();
-    let burst = std::fs::read_to_string(PRINTK_RATELIMIT_BURST_PATH).unwrap_or_default();
+    let ratelimit = match std::fs::read_to_string(PRINTK_RATELIMIT_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            log::warn!("Failed to read {PRINTK_RATELIMIT_PATH}: {e}; skipping ratelimit save");
+            return;
+        }
+    };
+    let burst = match std::fs::read_to_string(PRINTK_RATELIMIT_BURST_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            log::warn!(
+                "Failed to read {PRINTK_RATELIMIT_BURST_PATH}: {e}; skipping ratelimit save"
+            );
+            return;
+        }
+    };
 
     if let Ok(mut saved) = SAVED_RATELIMIT.lock() {
-        *saved = Some((ratelimit.trim().to_string(), burst.trim().to_string()));
+        *saved = Some((ratelimit, burst));
     }
 
     let _ = std::fs::write(PRINTK_RATELIMIT_PATH, "0");

@@ -18,3 +18,11 @@
 
 # Debug files
 *.dSYM/
+
+.github/
+
+omnect-os-init_0.1.0.bb
+
+origin-rewrite-initramfs-plan.md
+
+rewrite-initramfs-plan.md

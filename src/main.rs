@@ -46,10 +46,13 @@ fn main() {
     // fails at any point, this cmdline-derived value is the only safe fallback
     // for handle_fatal_error, which must decide debug vs. release behavior
     // before the rootfs is available.
-    let is_release_image = fs::read_to_string("/proc/cmdline")
-        .unwrap_or_default()
-        .split_whitespace()
-        .any(|p| p == "omnect_release_image=1");
+    let is_release_image = match fs::read_to_string("/proc/cmdline") {
+        Ok(s) => s.split_whitespace().any(|p| p == "omnect_release_image=1"),
+        Err(e) => {
+            eprintln!("Warning: failed to read /proc/cmdline: {e}; defaulting to debug mode");
+            false
+        }
+    };
 
     // Initialize logging
     match KmsgLogger::new() {
@@ -329,9 +332,13 @@ fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
 
 /// Spawn emergency shell (before logging available)
 fn spawn_emergency_shell() -> ! {
-    let _ = process::Command::new(SH_CMD).status();
+    // PID 1 must never exit. Respawn the shell so the operator can retry
+    // after an accidental exit or if sh fails to start.
     loop {
-        thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+        match process::Command::new(SH_CMD).status() {
+            Ok(status) => log::warn!("Emergency shell exited with {status} — respawning"),
+            Err(e) => log::error!("Failed to spawn emergency shell: {e}"),
+        }
     }
 }
 

@@ -212,11 +212,20 @@ fn handle_update_validation(ods_dir: &Path, bootloader: &dyn Bootloader) -> Resu
 fn copy_factory_reset_status(ods_dir: &Path) -> Result<()> {
     let src = PathBuf::from(FACTORY_RESET_STATUS_FILE);
 
-    if src.exists() {
-        let dst = ods_dir.join("factory-reset.json");
-        fs::copy(&src, &dst)?;
-        log::debug!("Copied factory reset status to ODS dir");
+    if !src.exists() {
+        return Ok(());
     }
+
+    let dst = ods_dir.join("factory-reset.json");
+    fs::copy(&src, &dst).map_err(|e| {
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to copy {} to {}: {}",
+            src.display(),
+            dst.display(),
+            e
+        )))
+    })?;
+    log::debug!("Copied factory reset status to ODS dir");
 
     Ok(())
 }
@@ -280,5 +289,87 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"status\":0"));
         assert!(json.contains("\"paths\""));
+    }
+
+    #[test]
+    fn test_handle_update_validation_value_1() {
+        let temp = TempDir::new().unwrap();
+        let bl =
+            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+        assert!(!temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_value_true() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(vars::OMNECT_VALIDATE_UPDATE, "true");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_failed() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(vars::OMNECT_VALIDATE_UPDATE, "failed");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_unexpected_value_creates_nothing() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(vars::OMNECT_VALIDATE_UPDATE, "unexpected");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_bootloader_updated() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "1");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_bootloader_updated_false_creates_nothing() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "0");
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(!temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_no_env_creates_nothing() {
+        let temp = TempDir::new().unwrap();
+        let bl = crate::bootloader::create_mock_bootloader();
+
+        handle_update_validation(temp.path(), &bl).unwrap();
+
+        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+        assert!(!temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
     }
 }

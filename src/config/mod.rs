@@ -13,7 +13,7 @@ pub mod build {
     include!(concat!(env!("OUT_DIR"), "/build_config.rs"));
 }
 
-use crate::error::Result;
+use crate::error::{ConfigError, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -86,8 +86,11 @@ impl Config {
 
     /// Parse kernel command line parameters
     fn parse_cmdline() -> Result<HashMap<String, String>> {
-        let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
-        let mut params = HashMap::new();
+        let cmdline = fs::read_to_string("/proc/cmdline").map_err(|e| ConfigError::ReadFailed {
+            path: "/proc/cmdline".to_string(),
+            reason: e.to_string(),
+        })?;
+        let mut params: HashMap<String, String> = HashMap::new();
 
         for part in cmdline.split_whitespace() {
             if let Some((key, value)) = part.split_once('=') {
@@ -104,7 +107,17 @@ impl Config {
     /// Parse os-release file for configuration
     fn parse_os_release(rootfs_dir: &Path) -> Result<(bool, Vec<String>, Vec<String>)> {
         let os_release_path = rootfs_dir.join("etc/os-release");
-        let content = fs::read_to_string(&os_release_path).unwrap_or_default();
+        let content = match fs::read_to_string(&os_release_path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                return Err(ConfigError::ReadFailed {
+                    path: os_release_path.display().to_string(),
+                    reason: e.to_string(),
+                }
+                .into());
+            }
+        };
 
         let mut is_release = false;
         let mut machine_features = vec![];

@@ -69,15 +69,6 @@ impl PartitionLayout {
         })
     }
 
-    /// Returns the symlink target for rootCurrent based on which root partition is active.
-    pub fn root_current_target(&self) -> &Path {
-        if self.is_root_a() {
-            self.partitions.get(partition_names::ROOT_A).unwrap()
-        } else {
-            self.partitions.get(partition_names::ROOT_B).unwrap()
-        }
-    }
-
     /// Get the device path for a named partition
     pub fn get(&self, name: &str) -> Option<&PathBuf> {
         self.partitions.get(name)
@@ -88,18 +79,27 @@ impl PartitionLayout {
         partition_suffix(&self.device.root_partition) == PARTITION_NUM_ROOT_A
     }
 
-    /// Get the current root partition path (rootA or rootB based on boot)
+    /// Get the current root partition path (rootA or rootB based on boot).
+    ///
+    /// Falls back to reconstructing the path from the device if the map entry
+    /// is absent (indicates incomplete initialisation — should not occur in normal boot).
     pub fn root_current(&self) -> PathBuf {
         if self.is_root_a() {
             self.partitions
                 .get(partition_names::ROOT_A)
                 .cloned()
-                .unwrap_or_else(|| self.device.partition_path(PARTITION_NUM_ROOT_A))
+                .unwrap_or_else(|| {
+                    log::warn!("rootA not in partition map; reconstructing path");
+                    self.device.partition_path(PARTITION_NUM_ROOT_A)
+                })
         } else {
             self.partitions
                 .get(partition_names::ROOT_B)
                 .cloned()
-                .unwrap_or_else(|| self.device.partition_path(PARTITION_NUM_ROOT_B))
+                .unwrap_or_else(|| {
+                    log::warn!("rootB not in partition map; reconstructing path");
+                    self.device.partition_path(PARTITION_NUM_ROOT_B)
+                })
         }
     }
 }

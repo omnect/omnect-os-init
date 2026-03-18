@@ -141,13 +141,13 @@ fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
     };
 
     let requested_path = new_root.join(requested_init.trim_start_matches('/'));
-    if requested_path.exists() {
+    if requested_path.is_file() {
         return Ok(requested_init);
     }
 
     for init_path in INIT_PATHS {
         let full_path = new_root.join(init_path.trim_start_matches('/'));
-        if full_path.exists() {
+        if full_path.is_file() {
             log::debug!("Found init at {}", init_path);
             return Ok((*init_path).to_string());
         }

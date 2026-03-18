@@ -395,7 +395,12 @@ impl Drop for MountManager {
 
 /// Check if a path is mounted by reading /proc/mounts
 pub fn is_path_mounted(path: &Path) -> Result<bool> {
-    let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let mounts =
+        std::fs::read_to_string("/proc/mounts").map_err(|e| FilesystemError::MountFailed {
+            src_path: PathBuf::new(),
+            target: path.to_path_buf(),
+            reason: format!("Failed to read /proc/mounts: {e}"),
+        })?;
     let path_str = path.to_string_lossy();
 
     Ok(mounts.lines().any(|line| {
