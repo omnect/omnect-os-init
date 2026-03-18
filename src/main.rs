@@ -24,7 +24,7 @@ use omnect_os_init::{
     },
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
-    partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
+    partition::{PartitionLayout, create_omnect_symlinks, detect_root_device, partition_names},
     runtime::{OdsStatus, create_fs_links, create_ods_runtime_files, switch_root},
 };
 
@@ -206,47 +206,50 @@ fn mount_partitions(
     let rootfs = &config.rootfs_dir;
 
     // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
-    let root_dev = layout.partitions.get("rootCurrent").ok_or_else(|| {
-        InitramfsError::Partition(PartitionError::DeviceDetection(
-            "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
-        ))
-    })?;
-    fsck_and_record(root_dev, "root", ods_status)?;
+    let root_dev = layout
+        .partitions
+        .get(partition_names::ROOT_CURRENT)
+        .ok_or_else(|| {
+            InitramfsError::Partition(PartitionError::DeviceDetection(
+                "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
+            ))
+        })?;
+    fsck_and_record(root_dev, partition_names::ROOT_CURRENT, ods_status)?;
     mm.mount_readonly(root_dev, rootfs, "ext4")?;
     info!("Mounted rootfs at {}", rootfs.display());
 
     // Mount boot partition
-    if let Some(boot_dev) = layout.partitions.get("boot") {
+    if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
         let boot_mount = rootfs.join("boot");
-        fsck_and_record(boot_dev, "boot", ods_status)?;
+        fsck_and_record(boot_dev, partition_names::BOOT, ods_status)?;
         mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition
-    if let Some(factory_dev) = layout.partitions.get("factory") {
+    if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
         let factory_mount = rootfs.join("mnt/factory");
-        fsck_and_record(factory_dev, "factory", ods_status)?;
+        fsck_and_record(factory_dev, partition_names::FACTORY, ods_status)?;
         mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
     }
 
     // Mount cert partition
-    if let Some(cert_dev) = layout.partitions.get("cert") {
+    if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
         let cert_mount = rootfs.join("mnt/cert");
-        fsck_and_record(cert_dev, "cert", ods_status)?;
+        fsck_and_record(cert_dev, partition_names::CERT, ods_status)?;
         mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
     }
 
     // Mount etc partition (for overlay upper)
-    if let Some(etc_dev) = layout.partitions.get("etc") {
+    if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
         let etc_mount = rootfs.join("mnt/etc");
-        fsck_and_record(etc_dev, "etc", ods_status)?;
+        fsck_and_record(etc_dev, partition_names::ETC, ods_status)?;
         mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
     }
 
     // Mount data partition
-    if let Some(data_dev) = layout.partitions.get("data") {
+    if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
         let data_mount = rootfs.join("mnt/data");
-        fsck_and_record(data_dev, "data", ods_status)?;
+        fsck_and_record(data_dev, partition_names::DATA, ods_status)?;
         mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
     }
 
@@ -335,12 +338,17 @@ fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
 
 /// Spawn emergency shell (before logging available)
 fn spawn_emergency_shell() -> ! {
-    // PID 1 must never exit. Respawn the shell so the operator can retry
-    // after an accidental exit or if sh fails to start.
+    // PID 1 must never exit. Respawn the shell so the operator can retry.
+    // Use eprintln! — the kmsg logger may not be initialised yet at this point.
     loop {
         match process::Command::new(SH_CMD).status() {
-            Ok(status) => log::warn!("Emergency shell exited with {status} — respawning"),
-            Err(e) => log::error!("Failed to spawn emergency shell: {e}"),
+            Ok(status) => eprintln!("Emergency shell exited with {status} — respawning"),
+            Err(e) => {
+                eprintln!(
+                    "Failed to spawn emergency shell ({e}) — retrying in {FATAL_ERROR_SLEEP_SECS}s"
+                );
+                thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+            }
         }
     }
 }
@@ -355,11 +363,18 @@ fn spawn_debug_shell() -> ! {
             .arg("/dev/null")
             .status();
 
-        if let Err(e) = status {
-            log::warn!("bash unavailable ({}), falling back to sh", e);
-            let _ = process::Command::new(SH_CMD).status();
+        match status {
+            Ok(_) => log::info!("debug shell exited — respawning"),
+            Err(e) => {
+                log::warn!("bash unavailable ({e}), falling back to sh");
+                match process::Command::new(SH_CMD).status() {
+                    Ok(_) => log::info!("sh exited — respawning"),
+                    Err(e) => {
+                        log::error!("sh also unavailable ({e}) — sleeping before retry");
+                        thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+                    }
+                }
+            }
         }
-
-        log::info!("debug shell exited — respawning");
     }
 }

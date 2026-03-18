@@ -60,16 +60,25 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     }
 
     // Move critical mounts to new root before switching.
-    // After this point, /dev, /proc, /sys, /run are only accessible via
-    // new_root's subtree. If MS_MOVE subsequently fails (the one step that
-    // can leave the initramfs without these mounts), we attempt restoration.
-    move_mount("/dev", &new_root.join("dev"))?;
-    move_mount("/proc", &new_root.join("proc"))?;
-    move_mount("/sys", &new_root.join("sys"))?;
-    // /run must be moved so ODS can read its runtime state after root switching
-    move_mount("/run", &new_root.join("run"))?;
+    // Track which mounts succeeded so any intermediate failure can be rolled back,
+    // preserving the debug/emergency shell environment on the initramfs.
+    let critical_mounts = [
+        ("/dev", "dev"),
+        ("/proc", "proc"),
+        ("/sys", "sys"),
+        ("/run", "run"), // moved so ODS can read its runtime state after root switch
+    ];
+    let mut moved: Vec<&str> = Vec::new();
+    for (src, name) in &critical_mounts {
+        if let Err(e) = move_mount(src, &new_root.join(name)) {
+            rollback_critical_mounts(&moved, new_root);
+            return Err(e);
+        }
+        moved.push(name);
+    }
 
     chdir(new_root).map_err(|e| {
+        rollback_critical_mounts(&moved, new_root);
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to chdir to new root: {}",
             e
@@ -80,10 +89,10 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     // initramfs: ramfs does not support pivot_root (EINVAL). busybox and
     // systemd use the same MS_MOVE + chroot pattern.
     //
-    // On failure: attempt to restore the critical mounts back to the initramfs
-    // so the debug/emergency shell still has access to /dev, /proc, /sys, /run.
+    // On failure: restore all moved mounts so the debug/emergency shell still
+    // has access to /dev, /proc, /sys, /run on the initramfs.
     if let Err(e) = mount(Some("."), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>) {
-        restore_critical_mounts(new_root);
+        rollback_critical_mounts(&moved, new_root);
         return Err(InitramfsError::Io(std::io::Error::other(format!(
             "Failed to MS_MOVE new root to /: {}",
             e
@@ -135,18 +144,18 @@ fn move_mount(source: &str, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Attempt to restore critical mounts back to the initramfs after a failed MS_MOVE.
+/// Attempt to restore already-moved critical mounts back to the initramfs.
 ///
-/// Called only when MS_MOVE has NOT yet succeeded — at that point `/` is still
-/// the initramfs root, so moving from `new_root/{dev,proc,sys,run}` back to
-/// `/{dev,proc,sys,run}` restores the debug/emergency shell environment.
-/// Best-effort: individual failures are logged and do not abort.
-fn restore_critical_mounts(new_root: &Path) {
-    for name in &["dev", "proc", "sys", "run"] {
+/// Called on any failure before MS_MOVE succeeds — at that point `/` is still
+/// the initramfs root, so moving from `new_root/{name}` back to `/{name}`
+/// restores the debug/emergency shell environment. Best-effort: individual
+/// failures are logged and do not abort.
+fn rollback_critical_mounts(moved: &[&str], new_root: &Path) {
+    for name in moved.iter().rev() {
         let src = new_root.join(name);
         let dst = format!("/{name}");
         if let Err(e) = move_mount(&src.to_string_lossy(), Path::new(&dst)) {
-            log::warn!("Failed to restore /{name} to initramfs during switch_root rollback: {e}");
+            log::warn!("Failed to restore /{name} to initramfs during rollback: {e}");
         } else {
             log::debug!("Restored /{name} to initramfs");
         }
@@ -158,6 +167,14 @@ fn restore_critical_mounts(new_root: &Path) {
 /// Always returns an absolute path string (starts with `/`) so that
 /// `Command::new` on PID 1 does not fall back to PATH lookup.
 fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
+    // Reject paths containing ".." to prevent escaping new_root before chroot.
+    if requested_init.split('/').any(|c| c == "..") {
+        return Err(InitramfsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("init path must not contain '..': {requested_init}"),
+        )));
+    }
+
     // Ensure the caller-supplied path is absolute to avoid PATH lookup on exec.
     let requested_init = if requested_init.starts_with('/') {
         requested_init.to_string()
