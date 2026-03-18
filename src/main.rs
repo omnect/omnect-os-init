@@ -19,7 +19,7 @@ use omnect_os_init::{
     config::Config,
     error::{FilesystemError, InitramfsError, PartitionError},
     filesystem::{
-        MountManager, OverlayConfig, check_filesystem_lenient, setup_data_overlay,
+        MountManager, OverlayConfig, check_filesystem_lenient, is_path_mounted, setup_data_overlay,
         setup_etc_overlay, setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
@@ -278,9 +278,14 @@ fn persist_fsck_results(
     bootloader: &mut dyn Bootloader,
     rootfs_dir: &Path,
 ) {
-    // Data partition is mounted at rootfs/mnt/data by mount_partitions.
-    // Files written here appear at /data/var/log/fsck/ in the final OS.
+    // Bootloader save (grubenv or env file) is the primary persistence mechanism
+    // and works as long as the boot partition is mounted — which is true even on
+    // the FsckRequiresReboot path (boot is mounted before fsck runs).
+    //
+    // The data partition log is best-effort: it is only mounted when
+    // mount_partitions() succeeds fully, so it may not be available here.
     let log_dir = rootfs_dir.join("mnt/data/var/log/fsck");
+    let data_mounted = is_path_mounted(&rootfs_dir.join("mnt/data")).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
         if fsck.code == 0 {
@@ -295,6 +300,13 @@ fn persist_fsck_results(
         }
 
         if !fsck.output.is_empty() {
+            if !data_mounted {
+                warn!(
+                    "Data partition not mounted; skipping fsck log write for {}",
+                    partition
+                );
+                continue;
+            }
             if let Err(e) = fs::create_dir_all(&log_dir) {
                 warn!("Failed to create fsck log dir {}: {}", log_dir.display(), e);
             } else {

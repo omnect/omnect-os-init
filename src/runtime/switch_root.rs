@@ -5,6 +5,7 @@
 //! does not support it (returns EINVAL).
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -162,6 +163,16 @@ fn rollback_critical_mounts(moved: &[&str], new_root: &Path) {
     }
 }
 
+/// Returns true if `path` is a regular file with at least one executable bit set.
+///
+/// Checking only `is_file()` is insufficient — a non-executable file would cause
+/// `exec` to fail after critical mounts have already been moved to the new root.
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 /// Find the init binary in the new root.
 ///
 /// Always returns an absolute path string (starts with `/`) so that
@@ -183,13 +194,13 @@ fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
     };
 
     let requested_path = new_root.join(requested_init.trim_start_matches('/'));
-    if requested_path.is_file() {
+    if is_executable_file(&requested_path) {
         return Ok(requested_init);
     }
 
     for init_path in INIT_PATHS {
         let full_path = new_root.join(init_path.trim_start_matches('/'));
-        if full_path.is_file() {
+        if is_executable_file(&full_path) {
             log::debug!("Found init at {}", init_path);
             return Ok((*init_path).to_string());
         }
@@ -210,14 +221,20 @@ fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
+
+    fn write_executable(path: &std::path::Path, content: &str) {
+        fs::write(path, content).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     #[test]
     fn test_find_init_default() {
         let temp = TempDir::new().unwrap();
         let sbin = temp.path().join("sbin");
         fs::create_dir_all(&sbin).unwrap();
-        fs::write(sbin.join("init"), "#!/bin/sh").unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
 
         let result = find_init(temp.path(), "/sbin/init");
         assert!(result.is_ok());
@@ -229,7 +246,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let systemd_dir = temp.path().join("lib/systemd");
         fs::create_dir_all(&systemd_dir).unwrap();
-        fs::write(systemd_dir.join("systemd"), "#!/bin/sh").unwrap();
+        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
 
         let result = find_init(temp.path(), "/sbin/init");
         assert!(result.is_ok());
@@ -239,6 +256,19 @@ mod tests {
     #[test]
     fn test_find_init_not_found() {
         let temp = TempDir::new().unwrap();
+        let result = find_init(temp.path(), "/sbin/init");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_init_non_executable() {
+        // A file without +x should not be accepted as init.
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        fs::write(sbin.join("init"), "#!/bin/sh").unwrap();
+        fs::set_permissions(sbin.join("init"), fs::Permissions::from_mode(0o644)).unwrap();
+
         let result = find_init(temp.path(), "/sbin/init");
         assert!(result.is_err());
     }
