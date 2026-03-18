@@ -66,7 +66,7 @@ impl FsckResult {
 ///
 /// # Returns
 /// * `Ok(FsckResult)` - Result of the check
-/// * `Err(FilesystemError::FsckRequiresReboot)` - If reboot is required (exit code 2)
+/// * `Err(FilesystemError::FsckRequiresReboot)` - If reboot is required (exit code 1: errors corrected, or exit code 2: fsck requests reboot)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with errors
 pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
@@ -131,6 +131,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
     if result.reboot_required {
         return Err(FilesystemError::FsckRequiresReboot {
             device: device.to_path_buf(),
+            code: exit_code,
         });
     }
 
@@ -153,8 +154,8 @@ pub fn check_filesystem(device: &Path, auto_repair: bool) -> Result<FsckResult> 
 pub fn check_filesystem_lenient(device: &Path) -> Result<FsckResult> {
     match check_filesystem(device, true) {
         Ok(result) => Ok(result),
-        Err(FilesystemError::FsckRequiresReboot { device }) => {
-            Err(FilesystemError::FsckRequiresReboot { device })
+        Err(FilesystemError::FsckRequiresReboot { device, code }) => {
+            Err(FilesystemError::FsckRequiresReboot { device, code })
         }
         Err(FilesystemError::FsckFailed {
             device,

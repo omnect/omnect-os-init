@@ -40,9 +40,19 @@ impl UBootBootloader {
                 reason: e.to_string(),
             })?;
 
-        // Exit code 1 typically means variable not found
+        // Exit code 1 means the variable was not found — that is a normal condition.
+        // Any other non-zero code indicates a real failure (bad /etc/fw_env.config,
+        // I/O error, permission denied, etc.) and must be surfaced as an error.
         if !output.status.success() {
-            return Ok(None);
+            let code = output.status.code().unwrap_or(-1);
+            if code == 1 {
+                return Ok(None);
+            }
+            return Err(BootloaderError::CommandExitCode {
+                command: FW_PRINTENV_CMD.to_string(),
+                code: Some(code),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
         }
 
         let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
