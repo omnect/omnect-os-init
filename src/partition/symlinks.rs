@@ -8,8 +8,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use crate::error::PartitionError;
-use crate::partition::layout::partition_names;
-use crate::partition::{PartitionLayout, Result};
+use crate::partition::{PartitionLayout, Result, layout::partition_names};
 
 /// Base directory for omnect device symlinks
 const OMNECT_DEV_DIR: &str = "/dev/omnect";
