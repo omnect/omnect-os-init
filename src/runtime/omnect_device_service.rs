@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::bootloader::Bootloader;
-use crate::bootloader::vars;
+use crate::bootloader::{Bootloader, vars};
 use crate::error::{InitramfsError, Result};
 
 /// Directory for ODS runtime files.

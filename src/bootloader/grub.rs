@@ -7,8 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::bootloader::types::{decode_fsck_output, encode_fsck_output};
-use crate::bootloader::{Bootloader, BootloaderType, Result};
+use crate::bootloader::{
+    Bootloader, BootloaderType, Result,
+    types::{decode_fsck_output, encode_fsck_output},
+};
 use crate::error::BootloaderError;
 
 /// Command name for GRUB environment manipulation

@@ -5,8 +5,10 @@
 
 use std::process::Command;
 
-use crate::bootloader::types::{decode_fsck_output, encode_fsck_output};
-use crate::bootloader::{Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result};
+use crate::bootloader::{
+    Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result,
+    types::{decode_fsck_output, encode_fsck_output},
+};
 use crate::error::BootloaderError;
 
 /// Command to read U-Boot environment variables
