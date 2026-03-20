@@ -25,6 +25,8 @@ thiserror = { version = "2.0", default-features = false }
 [features]
 default = ["core"]
 core = []
+grub = ["core"]           # x86-64 EFI targets (GRUB bootloader)
+uboot = ["core"]          # ARM targets (U-Boot bootloader)
 factory-reset = ["core"]
 flash-mode-1 = ["factory-reset"]
 flash-mode-2 = ["flash-mode-1"]

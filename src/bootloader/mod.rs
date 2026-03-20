@@ -3,16 +3,20 @@
 //! This module provides a trait-based abstraction over different bootloaders
 //! (GRUB and U-Boot) to allow unified access to bootloader environment variables.
 
+#[cfg(feature = "grub")]
 mod grub;
 mod types;
+#[cfg(feature = "uboot")]
 mod uboot;
 
 use std::path::Path;
 
 use crate::error::BootloaderError;
 
+#[cfg(feature = "grub")]
 pub use self::grub::GrubBootloader;
 pub use self::types::BootloaderType;
+#[cfg(feature = "uboot")]
 pub use self::uboot::UBootBootloader;
 
 pub type Result<T> = std::result::Result<T, BootloaderError>;
@@ -68,21 +72,25 @@ pub trait Bootloader: Send + Sync {
     fn bootloader_type(&self) -> BootloaderType;
 }
 
-/// Creates the appropriate bootloader implementation based on available tools.
+/// Creates the appropriate bootloader implementation based on the build-time feature flag.
 ///
-/// Detection logic:
-/// - If `grub-editenv` is present in the initramfs (`/bin/grub-editenv`), use GRUB.
-///   Must be called after the boot partition is mounted (grubenv lives there).
-/// - Otherwise, use U-Boot (assumes fw_printenv/fw_setenv available in initramfs).
-pub fn create_bootloader(rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
-    // grub-editenv is an initramfs tool, not installed in the rootfs.
-    const GRUB_EDITENV_INITRAMFS_PATH: &str = "/bin/grub-editenv";
+/// The bootloader type is a build-time property of the target platform:
+/// - `grub` feature: x86-64 EFI targets using GRUB (`grub-editenv`)
+/// - `uboot` feature: ARM targets using U-Boot (`fw_printenv`/`fw_setenv`)
+///
+/// Exactly one of `grub` or `uboot` must be enabled; the build will fail otherwise.
+pub fn create_bootloader(_rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
+    #[cfg(all(feature = "grub", feature = "uboot"))]
+    compile_error!("features `grub` and `uboot` are mutually exclusive; enable exactly one");
 
-    if std::path::Path::new(GRUB_EDITENV_INITRAMFS_PATH).is_file() {
-        Ok(Box::new(GrubBootloader::new(rootfs_dir)?))
-    } else {
-        Ok(Box::new(UBootBootloader::new()?))
-    }
+    #[cfg(not(any(feature = "grub", feature = "uboot")))]
+    compile_error!("exactly one of features `grub` or `uboot` must be enabled");
+
+    #[cfg(feature = "grub")]
+    return Ok(Box::new(GrubBootloader::new(_rootfs_dir)?));
+
+    #[cfg(feature = "uboot")]
+    return Ok(Box::new(UBootBootloader::new()?));
 }
 
 /// Create a mock bootloader for testing
