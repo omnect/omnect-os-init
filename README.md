@@ -27,14 +27,16 @@ Not yet implemented (planned):
 ## Building
 
 ```bash
-# Debug build
-cargo build
+# Debug build (bootloader type must be specified)
+cargo build --features grub     # x86-64 EFI targets
+cargo build --features uboot    # ARM targets
 
 # Release build (optimized for size)
-cargo build --release
+cargo build --release --features grub
+cargo build --release --features uboot
 
-# With optional features
-cargo build --release --features "persistent-var-log,resize-data"
+# With additional optional features
+cargo build --release --features "grub,persistent-var-log,resize-data"
 ```
 
 ## Features
@@ -42,12 +44,17 @@ cargo build --release --features "persistent-var-log,resize-data"
 | Feature | Description | Status |
 |---------|-------------|--------|
 | `core` | Core boot sequence (default) | Implemented |
+| `grub` | GRUB bootloader support — x86-64 EFI targets | Implemented |
+| `uboot` | U-Boot bootloader support — ARM targets | Implemented |
 | `persistent-var-log` | Bind-mount `/var/log` to data partition | Implemented |
 | `factory-reset` | Factory reset support | Planned |
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
 | `flash-mode-3` | HTTP/HTTPS flashing | Planned |
 | `resize-data` | Data partition auto-resize | Planned |
+
+> **Note:** `grub` and `uboot` are mutually exclusive. Exactly one must be set at build time.
+> The Yocto recipe selects the correct feature via `CARGO_FEATURES` based on `MACHINE_FEATURES`.
 
 ## Testing
 
@@ -67,7 +74,7 @@ src/
 ├── error.rs                 # Error type hierarchy
 ├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
 ├── bootloader/
-│   ├── mod.rs               # Bootloader trait + auto-detection
+│   ├── mod.rs               # Bootloader trait + build-time selection (grub/uboot feature)
 │   ├── grub.rs              # GRUB implementation (grub-editenv)
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
 │   └── types.rs             # BootloaderType enum
