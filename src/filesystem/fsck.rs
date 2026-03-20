@@ -62,13 +62,13 @@ impl FsckResult {
 ///
 /// # Arguments
 /// * `device` - Path to the block device to check
-/// * `auto_repair` - If true, automatically repair errors (-y flag)
+/// * `fstype` - Filesystem type (e.g. "ext4", "vfat")
 ///
 /// # Returns
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
 /// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
-pub fn check_filesystem(device: &Path, auto_repair: bool, fstype: &str) -> Result<FsckResult> {
+pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
     // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
@@ -77,9 +77,8 @@ pub fn check_filesystem(device: &Path, auto_repair: bool, fstype: &str) -> Resul
 
     let mut cmd = Command::new(FSCK_CMD);
 
-    if auto_repair {
-        cmd.arg("-y"); // Automatically repair
-    }
+    // Always repair automatically; this is an unattended initramfs boot.
+    cmd.arg("-y");
 
     // -C0 (write progress to stdout) is only supported by e2fsck; fsck.vfat and
     // other non-ext implementations reject or mishandle it. Pass it only for ext
@@ -161,7 +160,7 @@ pub fn check_filesystem(device: &Path, auto_repair: bool, fstype: &str) -> Resul
 /// This variant returns Ok even if fsck reports errors, unless a reboot is required.
 /// Useful for partitions where we want to log errors but continue booting.
 pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResult> {
-    match check_filesystem(device, true, fstype) {
+    match check_filesystem(device, fstype) {
         Ok(result) => Ok(result),
         Err(FilesystemError::FsckRequiresReboot {
             device,
