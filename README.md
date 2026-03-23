@@ -59,10 +59,11 @@ cargo build --release --features "grub,persistent-var-log,resize-data"
 ## Testing
 
 ```bash
-cargo test
+cargo test --features grub   # x86-64 targets
+cargo test --features uboot  # ARM targets
 
 # Verbose output
-cargo test -- --nocapture
+cargo test --features grub -- --nocapture
 ```
 
 ## Architecture
