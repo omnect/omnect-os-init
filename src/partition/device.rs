@@ -4,7 +4,7 @@
 //!
 //! - **GRUB** (`rootpart=N` + `bootpart_fsuuid=<uuid>`): GRUB probes the filesystem
 //!   UUID of its boot partition via `probe --fs-uuid` and passes it as `bootpart_fsuuid=`
-//!   on the kernel cmdline. initramfs calls `blkid -t UUID=<uuid>` to resolve the exact
+//!   on the kernel cmdline. initramfs calls `blkid --uuid <uuid>` to resolve the exact
 //!   boot partition device, then strips the partition suffix to get the base disk.
 //!
 //! - **U-Boot** (`root=/dev/<device>`): full device path set by U-Boot bootargs
@@ -109,30 +109,20 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
     let timeout = Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS);
     let start = Instant::now();
     let boot_part_str = loop {
-        // busybox blkid does not support -t / -o arguments; run without args
-        // and parse output ourselves. Each line has the format:
-        //   /dev/sda1: UUID="xxxx-xxxx" TYPE="vfat" ...
         let output = Command::new(BLKID_CMD)
+            .args(["--uuid", fsuuid])
             .output()
             .map_err(|e| PartitionError::DeviceDetection(format!("failed to run blkid: {}", e)))?;
 
-        // A non-zero exit from blkid means a hard failure (binary missing,
-        // I/O error, etc.) — not just "UUID not found". Treat it as fatal
-        // rather than retrying, to avoid spinning until timeout.
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(PartitionError::DeviceDetection(format!(
-                "blkid exited with status {:?}: {}",
-                output.status.code(),
-                stderr.trim()
-            )));
-        }
-
-        let stdout = std::str::from_utf8(&output.stdout)
-            .map_err(|_| PartitionError::DeviceDetection("blkid output is not UTF-8".into()))?;
-
-        match parse_blkid_output(stdout, fsuuid) {
-            Ok(dev) => {
+        match output.status.code() {
+            Some(0) => {
+                // UUID found; stdout is the device path.
+                let dev = std::str::from_utf8(&output.stdout)
+                    .map_err(|_| {
+                        PartitionError::DeviceDetection("blkid output is not UTF-8".into())
+                    })?
+                    .trim()
+                    .to_string();
                 log::info!(
                     "device_from_fsuuid: UUID={} resolved to {} after {:.1}s",
                     fsuuid,
@@ -141,7 +131,8 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
                 );
                 break dev;
             }
-            Err(_) => {
+            Some(2) => {
+                // UUID not found yet; retry until timeout.
                 if start.elapsed() >= timeout {
                     return Err(PartitionError::DeviceDetection(format!(
                         "blkid found no device with UUID={} within {}s",
@@ -154,6 +145,14 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
                     fsuuid
                 );
                 thread::sleep(Duration::from_millis(DEVICE_POLL_INTERVAL_MS));
+            }
+            code => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(PartitionError::DeviceDetection(format!(
+                    "blkid exited with status {:?}: {}",
+                    code,
+                    stderr.trim()
+                )));
             }
         }
     };
@@ -260,57 +259,9 @@ pub(crate) fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<Str
     Ok(None)
 }
 
-/// Parses busybox `blkid` output (no arguments) and returns the device path
-/// whose `UUID=` field matches `fsuuid`.
-///
-/// Each line has the format:
-///   `/dev/sda1: UUID="xxxx-xxxx" TYPE="vfat" ...`
-fn parse_blkid_output(output: &str, fsuuid: &str) -> Result<String> {
-    let needle = format!("UUID=\"{}\"", fsuuid);
-    output
-        .lines()
-        .find(|line| line.contains(&needle))
-        .and_then(|line| line.split(':').next())
-        .map(|s| s.trim().to_string())
-        .ok_or_else(|| {
-            PartitionError::DeviceDetection(format!("blkid found no device with UUID={}", fsuuid))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_blkid_output_found() {
-        let output = "/dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n\
-                      /dev/sda2: UUID=\"3fbe07d8-7dc2-4afb-8929-f0bdcb4a3ec5\" BLOCK_SIZE=\"4096\" TYPE=\"ext4\"\n";
-        assert_eq!(
-            parse_blkid_output(output, "abcd-1234").unwrap(),
-            "/dev/sda1"
-        );
-        assert_eq!(
-            parse_blkid_output(output, "3fbe07d8-7dc2-4afb-8929-f0bdcb4a3ec5").unwrap(),
-            "/dev/sda2"
-        );
-    }
-
-    #[test]
-    fn test_parse_blkid_output_not_found() {
-        let output = "/dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n";
-        assert!(parse_blkid_output(output, "0000-0000").is_err());
-    }
-
-    #[test]
-    fn test_parse_blkid_output_lvm_skipped() {
-        // LVM member has UUID in a different format; should not match fs UUID
-        let output = "/dev/sda3: UUID=\"cxCxgR-SzbH-ea59-BRsb\" TYPE=\"LVM2_member\"\n\
-                      /dev/sda1: UUID=\"abcd-1234\" TYPE=\"vfat\"\n";
-        assert_eq!(
-            parse_blkid_output(output, "abcd-1234").unwrap(),
-            "/dev/sda1"
-        );
-    }
 
     #[test]
     fn test_parse_cmdline_param_bootpart_fsuuid() {
