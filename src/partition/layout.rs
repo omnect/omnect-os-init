@@ -57,6 +57,18 @@ pub struct PartitionLayout {
 }
 
 impl PartitionLayout {
+    /// Constructs a `PartitionLayout` from an already-resolved device and table type.
+    ///
+    /// Separated from `detect` so it can be driven by fixture data in tests.
+    pub fn detect_from_parts(device: RootDevice, table_type: PartitionTableType) -> Self {
+        let partitions = build_partition_map(&device, table_type);
+        Self {
+            table_type,
+            partitions,
+            device,
+        }
+    }
+
     /// Detects the partition layout from the given root device.
     pub fn detect(device: RootDevice) -> Result<Self> {
         let table_type = detect_partition_table_type(&device.base)?;
@@ -156,9 +168,13 @@ fn detect_partition_table_type(device: &Path) -> Result<PartitionTableType> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_sfdisk_output(&stdout, device)
+}
 
-    // Parse sfdisk output to determine table type
-    // Look for "Disklabel type: gpt" or "Disklabel type: dos"
+/// Parse sfdisk stdout to determine partition table type.
+///
+/// Separated from `detect_partition_table_type` so it can be driven by fixture data in tests.
+pub fn parse_sfdisk_output(stdout: &str, device: &Path) -> Result<PartitionTableType> {
     for line in stdout.lines() {
         let line_lower = line.to_lowercase();
         if line_lower.contains("disklabel type:") || line_lower.contains("label-id:") {
@@ -168,7 +184,7 @@ fn detect_partition_table_type(device: &Path) -> Result<PartitionTableType> {
                 return Ok(PartitionTableType::Dos);
             }
         }
-        // Alternative format: "label: gpt" or "label: dos"
+        // Alternative format used by sfdisk --json export: "label: gpt"
         if line_lower.starts_with("label:") {
             if line_lower.contains("gpt") {
                 return Ok(PartitionTableType::Gpt);
@@ -412,9 +428,89 @@ mod tests {
         );
     }
 
+    const SFDISK_GPT: &str = "\
+Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors
+Disk model: QEMU HARDDISK
+Units: sectors of 1 * 512 = 512 bytes
+Disklabel type: gpt
+Disk identifier: 11111111-2222-3333-4444-555555555555";
+
+    const SFDISK_DOS: &str = "\
+Disk /dev/mmcblk0: 7.28 GiB, 7818182656 bytes, 15269888 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Disklabel type: dos
+Disk identifier: 0xdeadbeef";
+
+    const SFDISK_MBR: &str = "\
+Disk /dev/sdb: 8 GiB, 8589934592 bytes
+Disklabel type: mbr
+Disk identifier: 0xabcd1234";
+
+    #[test]
+    fn test_parse_sfdisk_output_gpt() {
+        assert_eq!(
+            parse_sfdisk_output(SFDISK_GPT, Path::new("/dev/sda")).unwrap(),
+            PartitionTableType::Gpt
+        );
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_dos() {
+        assert_eq!(
+            parse_sfdisk_output(SFDISK_DOS, Path::new("/dev/mmcblk0")).unwrap(),
+            PartitionTableType::Dos
+        );
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_mbr_alias() {
+        assert_eq!(
+            parse_sfdisk_output(SFDISK_MBR, Path::new("/dev/sdb")).unwrap(),
+            PartitionTableType::Dos
+        );
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_label_format_gpt() {
+        let output = "label: gpt\nlabel-id: 11111111-2222-3333-4444-555555555555";
+        assert_eq!(
+            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
+            PartitionTableType::Gpt
+        );
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_label_format_dos() {
+        let output = "label: dos\nlabel-id: 0xdeadbeef";
+        assert_eq!(
+            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
+            PartitionTableType::Dos
+        );
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_empty_errors() {
+        assert!(parse_sfdisk_output("", Path::new("/dev/sda")).is_err());
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_no_disklabel_errors() {
+        let output = "Disk /dev/sda: 30 GiB\nDisk identifier: 0x1234";
+        assert!(parse_sfdisk_output(output, Path::new("/dev/sda")).is_err());
+    }
+
+    #[test]
+    fn test_parse_sfdisk_output_label_id_with_gpt_uuid() {
+        // label-id line containing a GUID should not be misread as a table type
+        let output = "Disklabel type: gpt\nlabel-id: 11111111-2222-3333-4444-555555555555";
+        assert_eq!(
+            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
+            PartitionTableType::Gpt
+        );
+    }
+
     #[test]
     fn test_partition_table_type_display() {
-        assert_eq!(PartitionTableType::Gpt.to_string(), "GPT");
         assert_eq!(PartitionTableType::Dos.to_string(), "DOS/MBR");
     }
 

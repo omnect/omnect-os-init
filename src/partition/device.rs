@@ -157,24 +157,32 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
         }
     };
 
-    let name = PathBuf::from(&boot_part_str)
+    let rd = root_device_from_blkid(&boot_part_str, part_num)?;
+    wait_for_device(&rd.root_partition)?;
+    log::info!(
+        "device_from_fsuuid: root device = {} (partition {})",
+        rd.base.display(),
+        part_num
+    );
+    Ok(rd)
+}
+
+/// Pure pipeline: given the device path returned by `blkid --uuid`, construct a `RootDevice`.
+///
+/// Separated from `device_from_fsuuid` so it can be driven by fixture data in tests.
+pub fn root_device_from_blkid(boot_part_dev: &str, part_num: u32) -> Result<RootDevice> {
+    let name = PathBuf::from(boot_part_dev)
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| {
-            PartitionError::DeviceDetection(format!("invalid blkid output: {}", boot_part_str))
+            PartitionError::DeviceDetection(format!("invalid blkid output: {}", boot_part_dev))
         })?
         .to_string();
 
     let (base_name, sep) = split_partition_suffix(&name)?;
     let base = PathBuf::from("/dev").join(&base_name);
     let root_partition = PathBuf::from(format!("/dev/{}{}{}", base_name, sep, part_num));
-    wait_for_device(&root_partition)?;
 
-    log::info!(
-        "device_from_fsuuid: root device = {} (partition {})",
-        base.display(),
-        part_num
-    );
     Ok(RootDevice {
         base,
         partition_sep: sep,
@@ -249,7 +257,7 @@ fn wait_for_device(device: &std::path::Path) -> Result<()> {
 /// Handles `key=value` format. Values containing spaces are not supported
 /// (the kernel cmdline splits on whitespace; quoted values with spaces
 /// would be split into multiple tokens by `split_whitespace`).
-pub(crate) fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
+pub fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
     let prefix = format!("{}=", key);
     for token in cmdline.split_whitespace() {
         if let Some(value) = token.strip_prefix(&prefix) {
@@ -386,6 +394,61 @@ mod tests {
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/nvme0n1p1"));
         assert_eq!(device.partition_path(7), PathBuf::from("/dev/nvme0n1p7"));
+    }
+
+    #[test]
+    fn test_split_partition_suffix_multi_digit_sata() {
+        assert_eq!(
+            split_partition_suffix("sda12").unwrap(),
+            ("sda".to_string(), String::new())
+        );
+        assert_eq!(
+            split_partition_suffix("sdb100").unwrap(),
+            ("sdb".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn test_split_partition_suffix_multi_digit_nvme() {
+        assert_eq!(
+            split_partition_suffix("nvme1n2p100").unwrap(),
+            ("nvme1n2".to_string(), "p".to_string())
+        );
+    }
+
+    #[test]
+    fn test_split_partition_suffix_multi_digit_mmc() {
+        assert_eq!(
+            split_partition_suffix("mmcblk1p12").unwrap(),
+            ("mmcblk1".to_string(), "p".to_string())
+        );
+    }
+
+    #[test]
+    fn test_split_partition_suffix_virtio_second_disk() {
+        assert_eq!(
+            split_partition_suffix("vdb7").unwrap(),
+            ("vdb".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn test_split_partition_suffix_loop_documents_fallback() {
+        // loop devices fall through to the SATA branch because the name doesn't
+        // contain "nvme" or start with "mmcblk". The result is technically wrong
+        // (base="loop0p") but omnect-os does not target loop devices.
+        assert_eq!(
+            split_partition_suffix("loop0p1").unwrap(),
+            ("loop0p".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn test_split_partition_suffix_whole_disk_errors() {
+        assert!(split_partition_suffix("sda").is_err());
+        // dm-0: trailing digit after hyphen parses as a suffix, yielding base="dm-" —
+        // incorrect, but omnect-os does not target device-mapper devices.
+        assert!(split_partition_suffix("dm-0").is_ok());
     }
 
     #[test]
