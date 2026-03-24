@@ -231,7 +231,7 @@ fn mount_overlay(
     target: &Path,
 ) -> Result<()> {
     let options = format!(
-        "lowerdir={},upperdir={},workdir={}",
+        "lowerdir={},upperdir={},workdir={},index=off",
         lower.display(),
         upper.display(),
         work.display()

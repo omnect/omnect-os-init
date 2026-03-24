@@ -19,6 +19,7 @@ mod flags {
     pub const PRIVATE: MsFlags = MsFlags::MS_PRIVATE;
     pub const REC: MsFlags = MsFlags::MS_REC;
     pub const NOATIME: MsFlags = MsFlags::MS_NOATIME;
+    pub const NODIRATIME: MsFlags = MsFlags::MS_NODIRATIME;
     pub const NOSUID: MsFlags = MsFlags::MS_NOSUID;
     pub const NODEV: MsFlags = MsFlags::MS_NODEV;
     pub const NOEXEC: MsFlags = MsFlags::MS_NOEXEC;
@@ -107,6 +108,12 @@ impl MountOptions {
     /// Add noatime flag
     pub fn noatime(mut self) -> Self {
         self.flags |= flags::NOATIME;
+        self
+    }
+
+    /// Add nodiratime flag
+    pub fn nodiratime(mut self) -> Self {
+        self.flags |= flags::NODIRATIME;
         self
     }
 

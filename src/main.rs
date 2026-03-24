@@ -19,8 +19,8 @@ use omnect_os_init::{
     config::Config,
     error::{FilesystemError, InitramfsError, PartitionError},
     filesystem::{
-        MountManager, OverlayConfig, check_filesystem_lenient, is_path_mounted, setup_data_overlay,
-        setup_etc_overlay, setup_raw_rootfs_mount,
+        MountManager, MountOptions, MountPoint, OverlayConfig, check_filesystem_lenient,
+        is_path_mounted, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
@@ -232,42 +232,62 @@ fn mount_partitions(
     // rootCurrent either: the kernel's own ext4 journal replay is the correct recovery
     // mechanism. Running fsck -y before mount can interfere with journal replay and
     // cause EUCLEAN on a filesystem that the kernel could have mounted cleanly.
-    mm.mount_readonly(root_dev, rootfs, "ext4")?;
+    mm.mount(MountPoint::new(
+        root_dev,
+        rootfs,
+        MountOptions::ext4_readonly().noatime().nodiratime(),
+    ))?;
     info!("Mounted rootfs at {}", rootfs.display());
 
-    // Mount boot partition
+    // Mount boot partition — legacy uses bare mount with no explicit options
     if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
         let boot_mount = rootfs.join("boot");
         fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
         mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
-    // Mount factory partition
+    // Mount factory partition read-only
     if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
         let factory_mount = rootfs.join("mnt/factory");
         fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
-        mm.mount_readonly(factory_dev, &factory_mount, "ext4")?;
+        mm.mount(MountPoint::new(
+            factory_dev,
+            &factory_mount,
+            MountOptions::ext4_readonly().noatime().nodiratime(),
+        ))?;
     }
 
-    // Mount cert partition
+    // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
         let cert_mount = rootfs.join("mnt/cert");
         fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
-        mm.mount_readonly(cert_dev, &cert_mount, "ext4")?;
+        mm.mount(MountPoint::new(
+            cert_dev,
+            &cert_mount,
+            MountOptions::ext4_readwrite().noatime().nodiratime(),
+        ))?;
     }
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
         let etc_mount = rootfs.join("mnt/etc");
         fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
-        mm.mount_readwrite(etc_dev, &etc_mount, "ext4")?;
+        mm.mount(MountPoint::new(
+            etc_dev,
+            &etc_mount,
+            MountOptions::ext4_readwrite().noatime().nodiratime(),
+        ))?;
     }
 
     // Mount data partition
     if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
         let data_mount = rootfs.join("mnt/data");
         fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
-        mm.mount_readwrite(data_dev, &data_mount, "ext4")?;
+        mm.mount(MountPoint::new(
+            data_dev,
+            &data_mount,
+            MountOptions::ext4_readwrite().noatime().nodiratime(),
+        ))?;
     }
 
     // /var/volatile provides a writable mount for volatile data under the read-only rootfs
