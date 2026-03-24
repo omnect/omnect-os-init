@@ -231,7 +231,7 @@ fn mount_overlay(
     target: &Path,
 ) -> Result<()> {
     let options = format!(
-        "lowerdir={},upperdir={},workdir={},index=off",
+        "lowerdir={},upperdir={},workdir={},index=off,uuid=off",
         lower.display(),
         upper.display(),
         work.display()
@@ -239,7 +239,7 @@ fn mount_overlay(
 
     let mount_opts = MountOptions {
         fstype: Some(OVERLAY_FSTYPE.to_string()),
-        flags: MsFlags::empty(),
+        flags: MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME,
         data: Some(options.clone()),
     };
 
