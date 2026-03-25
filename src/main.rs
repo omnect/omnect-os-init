@@ -164,7 +164,7 @@ fn run() -> Result<()> {
     create_fs_links(&config.rootfs_dir)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&ods_status, bootloader.as_deref())?;
+    create_ods_runtime_files(&ods_status, bootloader.as_deref(), &config.rootfs_dir)?;
 
     info!("omnect-os-initramfs completed successfully");
 
