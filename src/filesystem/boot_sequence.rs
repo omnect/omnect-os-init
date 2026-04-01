@@ -195,3 +195,187 @@ pub fn persist_fsck_results(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootloader::{Bootloader, BootloaderType};
+    use crate::error::BootloaderError;
+    use crate::runtime::OdsStatus;
+    use tempfile::TempDir;
+
+    // ---- helpers -------------------------------------------------------
+
+    fn make_ods_with(partition: &str, code: i32, output: &str) -> OdsStatus {
+        let mut s = OdsStatus::new();
+        s.add_fsck_result(partition, code, output.to_string());
+        s
+    }
+    struct TrackingBootloader {
+        saved: Vec<(String, i32, String)>,
+    }
+
+    impl TrackingBootloader {
+        fn new() -> Self {
+            Self { saved: Vec::new() }
+        }
+    }
+
+    impl Bootloader for TrackingBootloader {
+        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+            Ok(None)
+        }
+        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+            Ok(())
+        }
+        fn save_fsck_status(
+            &mut self,
+            partition: &str,
+            code: i32,
+            output: &str,
+        ) -> crate::bootloader::Result<()> {
+            self.saved
+                .push((partition.to_string(), code, output.to_string()));
+            Ok(())
+        }
+        fn get_fsck_status(
+            &self,
+            _partition: &str,
+        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+            Ok(None)
+        }
+        fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
+            Ok(())
+        }
+        fn bootloader_type(&self) -> BootloaderType {
+            BootloaderType::Mock
+        }
+    }
+
+    /// Mock that always fails on save_fsck_status.
+    struct FailingBootloader;
+
+    impl Bootloader for FailingBootloader {
+        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+            Ok(None)
+        }
+        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+            Ok(())
+        }
+        fn save_fsck_status(
+            &mut self,
+            _partition: &str,
+            _code: i32,
+            _output: &str,
+        ) -> crate::bootloader::Result<()> {
+            Err(BootloaderError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected failure".into(),
+            })
+        }
+        fn get_fsck_status(
+            &self,
+            _partition: &str,
+        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+            Ok(None)
+        }
+        fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
+            Ok(())
+        }
+        fn bootloader_type(&self) -> BootloaderType {
+            BootloaderType::Mock
+        }
+    }
+
+    // ---- tests ---------------------------------------------------------
+
+    #[test]
+    fn test_persist_zero_code_not_saved() {
+        // Exit code 0 (clean) must not trigger any bootloader write.
+        let ods = make_ods_with("boot", 0, "clean");
+        let temp = TempDir::new().unwrap();
+        let mut bl = TrackingBootloader::new();
+
+        persist_fsck_results(&ods, &mut bl, temp.path());
+
+        assert!(bl.saved.is_empty(), "zero exit code must not be persisted");
+    }
+
+    #[test]
+    fn test_persist_nonzero_calls_save_fsck_status() {
+        // Non-zero exit code must call save_fsck_status with correct args.
+        let ods = make_ods_with("boot", 1, "errors corrected");
+        let temp = TempDir::new().unwrap();
+        let mut bl = TrackingBootloader::new();
+
+        persist_fsck_results(&ods, &mut bl, temp.path());
+
+        assert_eq!(bl.saved.len(), 1);
+        assert_eq!(bl.saved[0].0, "boot");
+        assert_eq!(bl.saved[0].1, 1);
+        assert_eq!(bl.saved[0].2, "errors corrected");
+    }
+
+    #[test]
+    fn test_persist_empty_output_still_calls_bootloader_but_no_log_dir() {
+        // Empty output: bootloader is still called (code != 0), but no log dir is created.
+        let ods = make_ods_with("data", 4, "");
+        let temp = TempDir::new().unwrap();
+        let mut bl = TrackingBootloader::new();
+
+        persist_fsck_results(&ods, &mut bl, temp.path());
+
+        assert_eq!(bl.saved.len(), 1);
+        // No log dir should be created for empty output.
+        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+    }
+
+    #[test]
+    fn test_persist_multiple_partitions_only_nonzero_saved() {
+        // Mix of zero and non-zero codes — only non-zero ones reach save_fsck_status.
+        let mut ods = OdsStatus::new();
+        ods.add_fsck_result("boot", 0, "clean".to_string());
+        ods.add_fsck_result("data", 1, "errors corrected".to_string());
+        ods.add_fsck_result("etc", 0, "clean".to_string());
+        ods.add_fsck_result("cert", 4, "uncorrected errors".to_string());
+
+        let temp = TempDir::new().unwrap();
+        let mut bl = TrackingBootloader::new();
+
+        persist_fsck_results(&ods, &mut bl, temp.path());
+
+        assert_eq!(bl.saved.len(), 2);
+        let saved_partitions: std::collections::HashSet<&str> =
+            bl.saved.iter().map(|(p, _, _)| p.as_str()).collect();
+        assert!(saved_partitions.contains("data"));
+        assert!(saved_partitions.contains("cert"));
+        assert!(!saved_partitions.contains("boot"));
+        assert!(!saved_partitions.contains("etc"));
+    }
+
+    #[test]
+    fn test_persist_bootloader_save_failure_does_not_abort() {
+        // A failing bootloader must not panic or propagate — it is non-fatal.
+        let ods = make_ods_with("boot", 2, "reboot required");
+        let temp = TempDir::new().unwrap();
+        let mut bl = FailingBootloader;
+
+        // Must not panic.
+        persist_fsck_results(&ods, &mut bl, temp.path());
+    }
+
+    #[test]
+    fn test_persist_data_not_mounted_no_log_dir_created() {
+        // When data partition is not mounted (normal in tests), no log dir is created.
+        let ods = make_ods_with("boot", 1, "some output");
+        let temp = TempDir::new().unwrap();
+        let mut bl = TrackingBootloader::new();
+
+        persist_fsck_results(&ods, &mut bl, temp.path());
+
+        // Bootloader was still called.
+        assert_eq!(bl.saved.len(), 1);
+        // But log dir must not be created (data not mounted).
+        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+    }
+}
