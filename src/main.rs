@@ -63,7 +63,10 @@ fn run() -> Result<()> {
 
     // Load configuration
     let config = Config::load()?;
-    info!("Configuration loaded: rootfs_dir={}", config.rootfs_dir.display());
+    info!(
+        "Configuration loaded: rootfs_dir={}",
+        config.rootfs_dir.display()
+    );
 
     // A single MountManager accumulates all mounts (partitions + overlayfs) so
     // they can all be disarmed with release() before switch_root hands control

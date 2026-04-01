@@ -12,8 +12,7 @@ use crate::bootloader::Bootloader;
 use crate::config::Config;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
-    MountManager, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
-    mount_points,
+    MountManager, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount_points,
 };
 use crate::partition::{PartitionLayout, partition_names};
 use crate::runtime::OdsStatus;
@@ -90,7 +89,10 @@ pub fn mount_partitions(
             fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
             mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
         } else {
-            log::debug!("Boot partition already mounted at {}; skipping", boot_mount.display());
+            log::debug!(
+                "Boot partition already mounted at {}; skipping",
+                boot_mount.display()
+            );
         }
     }
 
@@ -169,7 +171,8 @@ pub fn persist_fsck_results(
     // The data partition log is best-effort: it is only mounted when
     // mount_partitions() succeeds fully, so it may not be available here.
     let log_dir = rootfs_dir.join(FSCK_LOG_DIR);
-    let data_mounted = is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
+    let data_mounted =
+        is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
         if fsck.code == 0 {

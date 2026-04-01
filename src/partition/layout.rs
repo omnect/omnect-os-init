@@ -220,13 +220,34 @@ mod tests {
     fn test_partition_map_gpt_sata() {
         let map = build_partition_map(&sda_root_a());
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
-        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
-        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda4")));
-        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda5")));
-        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda6")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda7")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/sda1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/sda2"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_B),
+            Some(&PathBuf::from("/dev/sda3"))
+        );
+        assert_eq!(
+            map.get(partition_names::FACTORY),
+            Some(&PathBuf::from("/dev/sda4"))
+        );
+        assert_eq!(
+            map.get(partition_names::CERT),
+            Some(&PathBuf::from("/dev/sda5"))
+        );
+        assert_eq!(
+            map.get(partition_names::ETC),
+            Some(&PathBuf::from("/dev/sda6"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/sda7"))
+        );
         assert_eq!(map.get(partition_names::EXTENDED), None);
     }
 
@@ -235,14 +256,38 @@ mod tests {
     fn test_partition_map_dos_sata() {
         let map = build_partition_map(&sda_root_a());
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
-        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
-        assert_eq!(map.get(partition_names::EXTENDED), Some(&PathBuf::from("/dev/sda4")));
-        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda5")));
-        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda6")));
-        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda7")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda8")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/sda1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/sda2"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_B),
+            Some(&PathBuf::from("/dev/sda3"))
+        );
+        assert_eq!(
+            map.get(partition_names::EXTENDED),
+            Some(&PathBuf::from("/dev/sda4"))
+        );
+        assert_eq!(
+            map.get(partition_names::FACTORY),
+            Some(&PathBuf::from("/dev/sda5"))
+        );
+        assert_eq!(
+            map.get(partition_names::CERT),
+            Some(&PathBuf::from("/dev/sda6"))
+        );
+        assert_eq!(
+            map.get(partition_names::ETC),
+            Some(&PathBuf::from("/dev/sda7"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/sda8"))
+        );
     }
 
     #[cfg(feature = "gpt")]
@@ -250,9 +295,18 @@ mod tests {
     fn test_partition_map_gpt_nvme() {
         let map = build_partition_map(&nvme_root_a());
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/nvme0n1p1")));
-        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/nvme0n1p2")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/nvme0n1p7")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/nvme0n1p1"))
+        );
+        assert_eq!(
+            map.get(partition_names::ROOT_A),
+            Some(&PathBuf::from("/dev/nvme0n1p2"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/nvme0n1p7"))
+        );
     }
 
     #[cfg(feature = "dos")]
@@ -260,8 +314,14 @@ mod tests {
     fn test_partition_map_dos_mmc() {
         let map = build_partition_map(&mmc_root_b());
 
-        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/mmcblk0p1")));
-        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/mmcblk0p8")));
+        assert_eq!(
+            map.get(partition_names::BOOT),
+            Some(&PathBuf::from("/dev/mmcblk0p1"))
+        );
+        assert_eq!(
+            map.get(partition_names::DATA),
+            Some(&PathBuf::from("/dev/mmcblk0p8"))
+        );
     }
 
     #[test]

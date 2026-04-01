@@ -140,12 +140,24 @@ pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resu
 
     setup_home_overlay(mm, rootfs, &data_mount)?;
 
-    bind_mount(mm, &data_mount.join(paths::VAR_LIB), &rootfs.join(paths::VAR_LIB))?;
+    bind_mount(
+        mm,
+        &data_mount.join(paths::VAR_LIB),
+        &rootfs.join(paths::VAR_LIB),
+    )?;
     // data partition uses "local" instead of "usr/local"
-    bind_mount(mm, &data_mount.join("local"), &rootfs.join(paths::USR_LOCAL))?;
+    bind_mount(
+        mm,
+        &data_mount.join("local"),
+        &rootfs.join(paths::USR_LOCAL),
+    )?;
 
     if config.persistent_var_log {
-        bind_mount(mm, &data_mount.join(paths::VAR_LOG), &rootfs.join(paths::VAR_LOG))?;
+        bind_mount(
+            mm,
+            &data_mount.join(paths::VAR_LOG),
+            &rootfs.join(paths::VAR_LOG),
+        )?;
     }
 
     Ok(())

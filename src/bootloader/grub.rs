@@ -171,4 +171,3 @@ impl Bootloader for GrubBootloader {
         }
     }
 }
-
