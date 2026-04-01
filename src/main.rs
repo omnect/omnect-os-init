@@ -3,7 +3,6 @@
 //! This binary replaces the bash-based initramfs scripts with a type-safe
 //! Rust implementation.
 
-use std::fs;
 use std::process;
 use std::thread;
 use std::time::Duration;
@@ -37,19 +36,8 @@ fn main() {
         spawn_emergency_shell();
     }
 
-    // Determine release mode from /proc/cmdline — rootfs is not yet mounted
-    // so os-release cannot be read here. This value is intentionally kept
-    // separate from config.is_release_image (updated inside run()): if run()
-    // fails at any point, this cmdline-derived value is the only safe fallback
-    // for handle_fatal_error, which must decide debug vs. release behavior
-    // before the rootfs is available.
-    let is_release_image = match fs::read_to_string("/proc/cmdline") {
-        Ok(s) => s.split_whitespace().any(|p| p == "omnect_release_image=1"),
-        Err(e) => {
-            eprintln!("Warning: failed to read /proc/cmdline: {e}; defaulting to debug mode");
-            false
-        }
-    };
+    // Release vs. debug mode is a build-time property via the `release-image` feature.
+    let is_release_image = cfg!(feature = "release-image");
 
     // Initialize logging
     match KmsgLogger::new() {
@@ -74,14 +62,13 @@ fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
     // Load configuration
-    let mut config = Config::load()?;
-    info!(
-        "Configuration loaded: rootfs_dir={}, release={}",
-        config.rootfs_dir.display(),
-        config.is_release_image
-    );
+    let config = Config::load()?;
+    info!("Configuration loaded: rootfs_dir={}", config.rootfs_dir.display());
 
-    // Initialize mount manager for tracking
+    // A single MountManager accumulates all mounts (partitions + overlayfs) so
+    // they can all be disarmed with release() before switch_root hands control
+    // to the new root. Passing it into mount_partitions (and later overlay setup)
+    // ensures every mount is tracked in one place.
     let mut mount_manager = MountManager::new();
 
     // Detect root device
@@ -113,7 +100,6 @@ fn run() -> Result<()> {
     // reboot path. For GRUB: requires boot partition mounted; best-effort if it isn't.
     let mut bootloader_result = create_bootloader(&config.rootfs_dir);
     if let Ok(ref mut bl) = bootloader_result {
-        info!("Bootloader type: {}", bl.bootloader_type());
         // Persist fsck results: gzip+base64 encoded output (code + full text) to
         // bootloader env, and full output to data partition log.
         // Non-fatal: failures are logged as warnings.
@@ -140,19 +126,12 @@ fn run() -> Result<()> {
         }
     };
 
-    // Now that rootfs is mounted, read os-release for feature flags.
-    // Non-fatal: missing os-release means no features enabled.
-    if let Err(e) = config.load_os_release() {
-        warn!("Failed to read os-release from rootfs: {}", e);
-    }
-    info!("release={}", config.is_release_image);
-
     // Setup raw rootfs mount (before overlays)
     setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;
 
     // Setup overlays
     let overlay_config = OverlayConfig::new(&config.rootfs_dir)
-        .with_persistent_var_log(config.has_persistent_var_log());
+        .with_persistent_var_log(cfg!(feature = "persistent-var-log"));
 
     setup_etc_overlay(&mut mount_manager, &overlay_config)?;
     setup_data_overlay(&mut mount_manager, &overlay_config)?;

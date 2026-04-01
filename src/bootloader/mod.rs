@@ -15,7 +15,6 @@ use crate::error::BootloaderError;
 
 #[cfg(feature = "grub")]
 pub use self::grub::GrubBootloader;
-pub use self::types::BootloaderType;
 #[cfg(feature = "uboot")]
 pub use self::uboot::UBootBootloader;
 
@@ -23,14 +22,8 @@ pub type Result<T> = std::result::Result<T, BootloaderError>;
 
 /// Bootloader environment variable names
 pub mod vars {
-    pub const FACTORY_RESET: &str = "factory-reset";
-    pub const FLASH_MODE: &str = "flash-mode";
-    pub const FLASH_MODE_DEVPATH: &str = "flash-mode-devpath";
-    pub const FLASH_MODE_URL: &str = "flash-mode-url";
-    pub const RESIZED_DATA: &str = "resized-data";
     pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
     pub const OMNECT_BOOTLOADER_UPDATED: &str = "omnect_bootloader_updated";
-    pub const DATA_MOUNT_OPTIONS: &str = "data-mount-options";
 }
 
 /// Prefix for fsck status variables in bootloader environment
@@ -67,9 +60,6 @@ pub trait Bootloader: Send + Sync {
 
     /// Clear fsck status from bootloader environment
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()>;
-
-    /// Get the bootloader type
-    fn bootloader_type(&self) -> BootloaderType;
 }
 
 /// Creates the appropriate bootloader implementation based on the build-time feature flag.
@@ -101,6 +91,7 @@ pub fn create_mock_bootloader() -> MockBootloader {
 
 /// Mock bootloader for testing
 #[cfg(test)]
+#[derive(Default)]
 pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
 }
@@ -108,9 +99,7 @@ pub struct MockBootloader {
 #[cfg(test)]
 impl MockBootloader {
     pub fn new() -> Self {
-        Self {
-            env: std::collections::HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn with_env(mut self, key: &str, value: &str) -> Self {
@@ -154,10 +143,6 @@ impl Bootloader for MockBootloader {
         let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.env.remove(&key);
         Ok(())
-    }
-
-    fn bootloader_type(&self) -> BootloaderType {
-        BootloaderType::Mock
     }
 }
 
@@ -210,11 +195,5 @@ mod tests {
 
         bl.clear_fsck_status("boot").unwrap();
         assert_eq!(bl.get_fsck_status("boot").unwrap(), None);
-    }
-
-    #[test]
-    fn test_bootloader_type() {
-        let bl = MockBootloader::new();
-        assert_eq!(bl.bootloader_type(), BootloaderType::Mock);
     }
 }

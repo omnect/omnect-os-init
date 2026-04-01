@@ -6,7 +6,7 @@
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, BootloaderType, FSCK_VAR_PREFIX, Result,
+    Bootloader, FSCK_VAR_PREFIX, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
@@ -119,10 +119,6 @@ impl Bootloader for UBootBootloader {
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.run_fw_setenv(&var_name, None)
-    }
-
-    fn bootloader_type(&self) -> BootloaderType {
-        BootloaderType::UBoot
     }
 }
 

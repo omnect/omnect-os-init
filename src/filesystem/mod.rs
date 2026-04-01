@@ -17,7 +17,7 @@ pub use self::fsck::{
 };
 pub use self::mount::{MountManager, MountOptions, MountPoint, is_path_mounted};
 pub use self::overlayfs::{
-    OverlayConfig, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
+    OverlayConfig, mount_points, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
 };
 
 use crate::error::FilesystemError;

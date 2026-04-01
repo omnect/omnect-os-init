@@ -20,20 +20,19 @@
 ## 3. Build & Test Commands
 - **Build:** `cargo build` / `cargo build --release`
 - **Check:** `cargo check`
-- **Test:** `cargo test`
-- **Lint:** `cargo clippy -- -D warnings`
 - **Format:** `cargo fmt -- --check`
+- **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
+- **Test:** `cargo test --features <grub|uboot>`
+- **Audit:** `cargo audit`
 
 ## 4. Feature Flags
 | Feature | Purpose |
 |---------|---------|
 | `core` | Default, required functionality |
-| `factory-reset` | Backup/wipe/restore operations |
-| `flash-mode-1` | Disk cloning |
-| `flash-mode-2` | Network flashing |
-| `flash-mode-3` | HTTP/HTTPS flashing |
-| `resize-data` | Auto-resize data partition |
+| `grub` | GRUB bootloader support (mutually exclusive with `uboot`) |
+| `uboot` | U-Boot bootloader support (mutually exclusive with `grub`) |
 | `persistent-var-log` | Persistent `/var/log` mount |
+| `release-image` | Release behaviour: infinite loop on fatal error |
 
 ## 5. Runtime Constraints
 - **No heap allocator dependency** for early init paths
@@ -48,6 +47,8 @@
 - **Bootloader abstraction:** `dyn Bootloader` trait for GRUB/U-Boot
 - **Compression:** fsck exit code and full output stored in bootloader env as gzip+base64(`"exit_code\noutput"`); full output also written to `/data/var/log/fsck/<partition>.log`
 - **Idempotent mounts:** `is_mounted()` check before mounting
+- **No magic path strings:** All filesystem paths must be `const` values. Group related paths in a dedicated `pub mod mount_points` (or equivalent) rather than using inline string literals.
+- **File organization:** `use`, `const`, `static`, and `type` declarations must appear at the top of the file, before any `fn`, `impl`, `struct`, or `enum` definitions. Exceptions: `use super::*` and imports inside `#[cfg(test)] mod tests` blocks are placed within those blocks.
 
 ## 7. Integration Points
 - **Kernel cmdline:** `rootpart=`, `rootblk=`, `root=`, `quiet`

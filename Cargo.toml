@@ -27,12 +27,8 @@ default = ["core"]
 core = []
 grub = ["core"]           # x86-64 EFI targets (GRUB bootloader)
 uboot = ["core"]          # ARM targets (U-Boot bootloader)
-factory-reset = ["core"]
-flash-mode-1 = ["factory-reset"]
-flash-mode-2 = ["flash-mode-1"]
-flash-mode-3 = ["flash-mode-1"]
 persistent-var-log = ["core"]
-resize-data = ["core"]
+release-image = ["core"]  # Enables release-mode error handling (loop on fatal error)
 
 [profile.release]
 opt-level = "z"        # Optimize for size

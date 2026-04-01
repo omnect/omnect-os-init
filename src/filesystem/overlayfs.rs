@@ -35,11 +35,15 @@ mod paths {
     pub const VAR_LOG: &str = "var/log";
 }
 
-/// Mount point paths for partitions
-mod mount_points {
-    pub const ETC_PARTITION: &str = "mnt/etc";
+/// Mount point paths for partitions relative to rootfs
+pub mod mount_points {
+    pub const BOOT: &str = "boot";
+    pub const CERT_PARTITION: &str = "mnt/cert";
     pub const DATA_PARTITION: &str = "mnt/data";
+    pub const ETC_PARTITION: &str = "mnt/etc";
     pub const FACTORY_PARTITION: &str = "mnt/factory";
+    pub const ROOT_CURRENT_PRIVATE: &str = "mnt/rootCurrentPrivate";
+    pub const VAR_VOLATILE: &str = "var/volatile";
 }
 
 /// Configuration for overlay setup
@@ -100,7 +104,9 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
     // Ensure directories exist
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
-    // Check if this is first boot (upper is empty)
+    // Check if this is first boot (upper is empty).
+    // TODO: expose is_first_boot as a global flag so downstream code (e.g. bootarg
+    // construction) can act on it without re-detecting the condition.
     let is_first_boot = is_directory_empty(&upper_dir)?;
 
     if is_first_boot {
@@ -132,16 +138,14 @@ pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resu
     let rootfs = &config.rootfs_dir;
     let data_mount = rootfs.join(mount_points::DATA_PARTITION);
 
-    // Setup home overlay (no factory_mount parameter needed)
     setup_home_overlay(mm, rootfs, &data_mount)?;
 
-    // Setup bind mounts
-    setup_var_lib_bind(mm, rootfs, &data_mount)?;
-    setup_usr_local_bind(mm, rootfs, &data_mount)?;
+    bind_mount(mm, &data_mount.join(paths::VAR_LIB), &rootfs.join(paths::VAR_LIB))?;
+    // data partition uses "local" instead of "usr/local"
+    bind_mount(mm, &data_mount.join("local"), &rootfs.join(paths::USR_LOCAL))?;
 
-    // Optional: persistent /var/log
     if config.persistent_var_log {
-        setup_var_log_bind(mm, rootfs, &data_mount)?;
+        bind_mount(mm, &data_mount.join(paths::VAR_LOG), &rootfs.join(paths::VAR_LOG))?;
     }
 
     Ok(())
@@ -172,53 +176,12 @@ fn setup_home_overlay(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -
     Ok(())
 }
 
-/// Setup bind mount for /var/lib
-fn setup_var_lib_bind(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -> Result<()> {
-    let source = data_mount.join(paths::VAR_LIB);
-    let target = rootfs.join(paths::VAR_LIB);
-
-    ensure_dir(&source)?;
-    ensure_dir(&target)?;
-
-    mm.mount_bind(&source, &target)?;
-
+/// Bind mount source -> target, creating both dirs if needed.
+fn bind_mount(mm: &mut MountManager, source: &Path, target: &Path) -> Result<()> {
+    ensure_dir(source)?;
+    ensure_dir(target)?;
+    mm.mount_bind(source, target)?;
     log::info!("Bind mounted {} -> {}", source.display(), target.display());
-
-    Ok(())
-}
-
-/// Setup bind mount for /usr/local
-fn setup_usr_local_bind(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -> Result<()> {
-    // Data partition uses "local" instead of "usr/local"
-    let source = data_mount.join("local");
-    let target = rootfs.join(paths::USR_LOCAL);
-
-    ensure_dir(&source)?;
-    ensure_dir(&target)?;
-
-    mm.mount_bind(&source, &target)?;
-
-    log::info!("Bind mounted {} -> {}", source.display(), target.display());
-
-    Ok(())
-}
-
-/// Setup bind mount for persistent /var/log
-fn setup_var_log_bind(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -> Result<()> {
-    let source = data_mount.join(paths::VAR_LOG);
-    let target = rootfs.join(paths::VAR_LOG);
-
-    ensure_dir(&source)?;
-    ensure_dir(&target)?;
-
-    mm.mount_bind(&source, &target)?;
-
-    log::info!(
-        "Bind mounted persistent var/log: {} -> {}",
-        source.display(),
-        target.display()
-    );
-
     Ok(())
 }
 
@@ -321,7 +284,7 @@ fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
 /// Creates a private bind mount at /mnt/rootCurrentPrivate that provides
 /// access to the raw rootfs without overlay modifications.
 pub fn setup_raw_rootfs_mount(mm: &mut MountManager, rootfs_dir: &Path) -> Result<()> {
-    let raw_mount = rootfs_dir.join("mnt/rootCurrentPrivate");
+    let raw_mount = rootfs_dir.join(mount_points::ROOT_CURRENT_PRIVATE);
 
     ensure_dir(&raw_mount)?;
 

@@ -13,9 +13,13 @@ use crate::config::Config;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
     MountManager, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
+    mount_points,
 };
 use crate::partition::{PartitionLayout, partition_names};
 use crate::runtime::OdsStatus;
+
+/// Path within the mounted data partition where fsck logs are written.
+const FSCK_LOG_DIR: &str = "mnt/data/var/log/fsck";
 
 /// Run fsck on a partition and record the result (including output) in `ods_status`.
 ///
@@ -77,16 +81,22 @@ pub fn mount_partitions(
     ))?;
     log::info!("Mounted rootfs at {}", rootfs.display());
 
-    // Mount boot partition — legacy uses bare mount with no explicit options
+    // Mount boot partition — skip if already mounted (idempotent guard).
+    // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
+    // grubenv on the boot partition; atime writes are acceptable on vfat.
     if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
-        let boot_mount = rootfs.join("boot");
-        fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
-        mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+        let boot_mount = rootfs.join(mount_points::BOOT);
+        if !is_path_mounted(&boot_mount)? {
+            fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
+            mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+        } else {
+            log::debug!("Boot partition already mounted at {}; skipping", boot_mount.display());
+        }
     }
 
     // Mount factory partition read-only
     if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
-        let factory_mount = rootfs.join("mnt/factory");
+        let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
         fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
         mm.mount(MountPoint::new(
             factory_dev,
@@ -97,7 +107,7 @@ pub fn mount_partitions(
 
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
-        let cert_mount = rootfs.join("mnt/cert");
+        let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
         fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
         mm.mount(MountPoint::new(
             cert_dev,
@@ -108,7 +118,7 @@ pub fn mount_partitions(
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
-        let etc_mount = rootfs.join("mnt/etc");
+        let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
         fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
         mm.mount(MountPoint::new(
             etc_dev,
@@ -119,7 +129,7 @@ pub fn mount_partitions(
 
     // Mount data partition
     if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
-        let data_mount = rootfs.join("mnt/data");
+        let data_mount = rootfs.join(mount_points::DATA_PARTITION);
         fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
         mm.mount(MountPoint::new(
             data_dev,
@@ -129,7 +139,7 @@ pub fn mount_partitions(
     }
 
     // /var/volatile provides a writable mount for volatile data under the read-only rootfs
-    let var_volatile = rootfs.join("var/volatile");
+    let var_volatile = rootfs.join(mount_points::VAR_VOLATILE);
     mm.mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
 
     // /run is NOT mounted here: the initramfs /run tmpfs (mounted by
@@ -158,8 +168,8 @@ pub fn persist_fsck_results(
     //
     // The data partition log is best-effort: it is only mounted when
     // mount_partitions() succeeds fully, so it may not be available here.
-    let log_dir = rootfs_dir.join("mnt/data/var/log/fsck");
-    let data_mounted = is_path_mounted(&rootfs_dir.join("mnt/data")).unwrap_or(false);
+    let log_dir = rootfs_dir.join(FSCK_LOG_DIR);
+    let data_mounted = is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
         if fsck.code == 0 {
@@ -199,7 +209,7 @@ pub fn persist_fsck_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{Bootloader, BootloaderType};
+    use crate::bootloader::Bootloader;
     use crate::error::BootloaderError;
     use crate::runtime::OdsStatus;
     use tempfile::TempDir;
@@ -247,9 +257,6 @@ mod tests {
         fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
             Ok(())
         }
-        fn bootloader_type(&self) -> BootloaderType {
-            BootloaderType::Mock
-        }
     }
 
     /// Mock that always fails on save_fsck_status.
@@ -281,9 +288,6 @@ mod tests {
         }
         fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
             Ok(())
-        }
-        fn bootloader_type(&self) -> BootloaderType {
-            BootloaderType::Mock
         }
     }
 

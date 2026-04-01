@@ -27,12 +27,6 @@ pub enum InitramfsError {
     #[error("Filesystem error: {0}")]
     Filesystem(#[from] FilesystemError),
 
-    #[error("Factory reset error: {0}")]
-    FactoryReset(#[from] FactoryResetError),
-
-    #[error("Flash mode error: {0}")]
-    FlashMode(#[from] FlashModeError),
-
     #[error("Logging error: {0}")]
     Logging(#[from] LoggingError),
 
@@ -154,47 +148,6 @@ pub enum FilesystemError {
         fstype: String,
         reason: String,
     },
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-/// Errors related to factory reset operations
-#[derive(Error, Debug)]
-pub enum FactoryResetError {
-    #[error("Invalid factory reset configuration: {0}")]
-    InvalidConfig(String),
-
-    #[error("Backup failed for path '{path}': {reason}")]
-    BackupFailed { path: String, reason: String },
-
-    #[error("Restore failed for path '{path}': {reason}")]
-    RestoreFailed { path: String, reason: String },
-
-    #[error("Wipe failed for partition '{partition}': {reason}")]
-    WipeFailed { partition: String, reason: String },
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-/// Errors related to flash mode operations
-#[derive(Error, Debug)]
-pub enum FlashModeError {
-    #[error("Invalid flash mode: {0}")]
-    InvalidMode(String),
-
-    #[error("Destination device not found: {}", .0.display())]
-    DestinationNotFound(PathBuf),
-
-    #[error("Clone failed: {0}")]
-    CloneFailed(String),
-
-    #[error("Network setup failed: {0}")]
-    NetworkFailed(String),
-
-    #[error("Download failed: {0}")]
-    DownloadFailed(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, BootloaderType, Result,
+    Bootloader, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
@@ -170,24 +170,5 @@ impl Bootloader for GrubBootloader {
             Ok(())
         }
     }
-
-    fn bootloader_type(&self) -> BootloaderType {
-        BootloaderType::Grub
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_grubenv_path_construction() {
-        let rootfs = PathBuf::from("/rootfs");
-        let expected = PathBuf::from("/rootfs/boot/EFI/BOOT/grubenv");
-
-        // Can't actually test new() without the file existing
-        // but we can verify the path construction logic
-        let path = rootfs.join("boot").join(GRUBENV_RELATIVE_PATH);
-        assert_eq!(path, expected);
-    }
-}

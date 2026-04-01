@@ -184,15 +184,6 @@ impl MountManager {
 
     /// Mount a filesystem and track it
     pub fn mount(&mut self, mp: MountPoint) -> Result<()> {
-        // Ensure target directory exists
-        if !mp.target.exists() {
-            std::fs::create_dir_all(&mp.target).map_err(|e| FilesystemError::MountFailed {
-                src_path: mp.source.clone(),
-                target: mp.target.clone(),
-                reason: format!("Failed to create mount point: {}", e),
-            })?;
-        }
-
         // Perform the mount
         let source: Option<&Path> = if mp.source.as_os_str().is_empty() {
             None
@@ -215,7 +206,7 @@ impl MountManager {
             "Mounted {} on {} ({})",
             mp.source.display(),
             mp.target.display(),
-            mp.options.fstype.as_deref().unwrap_or("bind")
+            mp.options.fstype.as_deref().unwrap_or("<none>")
         );
 
         self.mounts.push(mp);

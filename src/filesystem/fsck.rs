@@ -4,12 +4,27 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use crate::error::FilesystemError;
 use crate::filesystem::Result;
 
 /// fsck command name
 const FSCK_CMD: &str = "/sbin/fsck";
+
+/// Always pass -y (auto-repair): this binary runs unattended in initramfs.
+/// Kept separate from FSCK_CMD because Command::new takes only the executable path.
+const FSCK_AUTO_REPAIR_FLAG: &str = "-y";
+
+/// Progress flag for ext filesystems (-C0: write progress to fd 0 / stdout).
+/// e2fsck-specific — fsck.vfat and other backends reject it.
+const FSCK_PROGRESS_FLAG: &str = "-C0";
+
+const PRINTK_RATELIMIT_PATH: &str = "/proc/sys/kernel/printk_ratelimit";
+const PRINTK_RATELIMIT_BURST_PATH: &str = "/proc/sys/kernel/printk_ratelimit_burst";
+
+/// Saved rate limit values for restoration
+static SAVED_RATELIMIT: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// fsck exit codes
 mod exit_code {
@@ -76,15 +91,11 @@ pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     let _ratelimit_guard = KmsgRatelimitGuard;
 
     let mut cmd = Command::new(FSCK_CMD);
+    cmd.arg(FSCK_AUTO_REPAIR_FLAG);
 
-    // Always repair automatically; this is an unattended initramfs boot.
-    cmd.arg("-y");
-
-    // -C0 (write progress to stdout) is only supported by e2fsck; fsck.vfat and
-    // other non-ext implementations reject or mishandle it. Pass it only for ext
-    // filesystems to avoid spurious non-zero exit codes on vfat.
+    // -C0 is e2fsck-only: passing it to fsck.vfat causes spurious non-zero exit codes.
     if fstype.starts_with("ext") {
-        cmd.arg("-C0");
+        cmd.arg(FSCK_PROGRESS_FLAG);
     }
     cmd.arg(device);
 
@@ -155,10 +166,10 @@ pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     Ok(result)
 }
 
-/// Run fsck on a device, ignoring non-critical errors
+/// Run fsck on a device, tolerating non-critical errors.
 ///
-/// This variant returns Ok even if fsck reports errors, unless a reboot is required.
-/// Useful for partitions where we want to log errors but continue booting.
+/// Returns `Ok` even if fsck reports correctable errors, unless a reboot is required.
+/// Useful for partitions where errors should be logged but boot should continue.
 pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResult> {
     match check_filesystem(device, fstype) {
         Ok(result) => Ok(result),
@@ -202,14 +213,6 @@ impl Drop for KmsgRatelimitGuard {
         enable_kmsg_ratelimit();
     }
 }
-
-const PRINTK_RATELIMIT_PATH: &str = "/proc/sys/kernel/printk_ratelimit";
-const PRINTK_RATELIMIT_BURST_PATH: &str = "/proc/sys/kernel/printk_ratelimit_burst";
-
-use std::sync::Mutex;
-
-/// Saved rate limit values for restoration
-static SAVED_RATELIMIT: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// Disable kernel message rate limiting
 ///
