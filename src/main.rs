@@ -82,7 +82,6 @@ fn run() -> Result<()> {
 
     // Detect partition layout
     let layout = PartitionLayout::detect(root_device)?;
-    info!("Partition table: {}", layout.table_type);
 
     // Create /dev/omnect/* symlinks
     create_omnect_symlinks(&layout)?;

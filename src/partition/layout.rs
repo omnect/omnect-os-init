@@ -1,35 +1,13 @@
-//! Partition layout detection
+//! Partition layout
 //!
-//! Detects GPT vs DOS partition tables and builds a partition map
-//! with appropriate partition numbers for each type.
+//! Builds the partition map using the partition table type selected at build
+//! time via the `gpt` or `dos` Cargo feature.  There is no runtime detection:
+//! the table type is a fixed property of the Yocto image.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
-use crate::error::PartitionError;
 use crate::partition::{Result, RootDevice};
-
-/// Command to query partition table
-const SFDISK_CMD: &str = "/sbin/sfdisk";
-
-/// Partition table types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PartitionTableType {
-    /// GUID Partition Table (modern, used on x86-64 EFI)
-    Gpt,
-    /// DOS/MBR partition table (legacy, used on some ARM)
-    Dos,
-}
-
-impl std::fmt::Display for PartitionTableType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gpt => write!(f, "GPT"),
-            Self::Dos => write!(f, "DOS/MBR"),
-        }
-    }
-}
 
 /// Partition names used in omnect-os
 pub mod partition_names {
@@ -48,8 +26,6 @@ pub mod partition_names {
 /// Partition layout for a block device
 #[derive(Debug, Clone)]
 pub struct PartitionLayout {
-    /// Partition table type
-    pub table_type: PartitionTableType,
     /// Map of partition name to device path
     pub partitions: HashMap<String, PathBuf>,
     /// The root device
@@ -57,28 +33,18 @@ pub struct PartitionLayout {
 }
 
 impl PartitionLayout {
-    /// Constructs a `PartitionLayout` from an already-resolved device and table type.
+    /// Constructs a `PartitionLayout` from an already-resolved device.
     ///
     /// Separated from `detect` so it can be driven by fixture data in tests.
-    pub fn detect_from_parts(device: RootDevice, table_type: PartitionTableType) -> Self {
-        let partitions = build_partition_map(&device, table_type);
-        Self {
-            table_type,
-            partitions,
-            device,
-        }
+    pub fn detect_from_parts(device: RootDevice) -> Self {
+        let partitions = build_partition_map(&device);
+        Self { partitions, device }
     }
 
-    /// Detects the partition layout from the given root device.
+    /// Builds the partition layout for the given root device.
     pub fn detect(device: RootDevice) -> Result<Self> {
-        let table_type = detect_partition_table_type(&device.base)?;
-        let partitions = build_partition_map(&device, table_type);
-
-        Ok(Self {
-            table_type,
-            partitions,
-            device,
-        })
+        let partitions = build_partition_map(&device);
+        Ok(Self { partitions, device })
     }
 
     /// Get the device path for a named partition
@@ -116,21 +82,32 @@ impl PartitionLayout {
     }
 }
 
-/// Partition numbers for GPT layout
+/// Partition numbers shared by both GPT and DOS layouts
 const PARTITION_NUM_BOOT: u32 = 1;
 const PARTITION_NUM_ROOT_A: u32 = 2;
 const PARTITION_NUM_ROOT_B: u32 = 3;
-const PARTITION_NUM_FACTORY_GPT: u32 = 4;
-const PARTITION_NUM_CERT_GPT: u32 = 5;
-const PARTITION_NUM_ETC_GPT: u32 = 6;
-const PARTITION_NUM_DATA_GPT: u32 = 7;
 
-/// Partition numbers for DOS layout (with extended partition)
-const PARTITION_NUM_EXTENDED_DOS: u32 = 4;
-const PARTITION_NUM_FACTORY_DOS: u32 = 5;
-const PARTITION_NUM_CERT_DOS: u32 = 6;
-const PARTITION_NUM_ETC_DOS: u32 = 7;
-const PARTITION_NUM_DATA_DOS: u32 = 8;
+/// GPT layout — partitions 4-7 are all primary
+#[cfg(feature = "gpt")]
+const PARTITION_NUM_FACTORY: u32 = 4;
+#[cfg(feature = "gpt")]
+const PARTITION_NUM_CERT: u32 = 5;
+#[cfg(feature = "gpt")]
+const PARTITION_NUM_ETC: u32 = 6;
+#[cfg(feature = "gpt")]
+const PARTITION_NUM_DATA: u32 = 7;
+
+/// DOS layout — partition 4 is the extended container; logical partitions start at 5
+#[cfg(feature = "dos")]
+const PARTITION_NUM_EXTENDED: u32 = 4;
+#[cfg(feature = "dos")]
+const PARTITION_NUM_FACTORY: u32 = 5;
+#[cfg(feature = "dos")]
+const PARTITION_NUM_CERT: u32 = 6;
+#[cfg(feature = "dos")]
+const PARTITION_NUM_ETC: u32 = 7;
+#[cfg(feature = "dos")]
+const PARTITION_NUM_DATA: u32 = 8;
 
 /// Parse the trailing numeric partition suffix from a device path.
 ///
@@ -139,9 +116,8 @@ const PARTITION_NUM_DATA_DOS: u32 = 8;
 ///
 /// Uses the *trailing* digit run, not the first digit found, so that devices
 /// like `mmcblk0p2` (which contain digits in the base name) are handled correctly.
-fn partition_suffix(path: &Path) -> u32 {
+fn partition_suffix(path: &std::path::Path) -> u32 {
     let s = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    // Find the start of the last all-digit run at the end of the name.
     let digit_start = s
         .rfind(|c: char| !c.is_ascii_digit())
         .map(|i| i + 1)
@@ -149,65 +125,18 @@ fn partition_suffix(path: &Path) -> u32 {
     s[digit_start..].parse().unwrap_or(0)
 }
 
-/// Detect partition table type using sfdisk
-fn detect_partition_table_type(device: &Path) -> Result<PartitionTableType> {
-    let output = Command::new(SFDISK_CMD)
-        .arg("-l")
-        .arg(device)
-        .output()
-        .map_err(|e| PartitionError::InvalidPartitionTable {
-            device: device.to_path_buf(),
-            reason: format!("Failed to run sfdisk: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(PartitionError::InvalidPartitionTable {
-            device: device.to_path_buf(),
-            reason: format!("sfdisk failed: {}", String::from_utf8_lossy(&output.stderr)),
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_sfdisk_output(&stdout, device)
-}
-
-/// Parse sfdisk stdout to determine partition table type.
+/// Build the partition map for the given device.
 ///
-/// Separated from `detect_partition_table_type` so it can be driven by fixture data in tests.
-pub fn parse_sfdisk_output(stdout: &str, device: &Path) -> Result<PartitionTableType> {
-    for line in stdout.lines() {
-        let line_lower = line.to_lowercase();
-        if line_lower.contains("disklabel type:") || line_lower.contains("label-id:") {
-            if line_lower.contains("gpt") {
-                return Ok(PartitionTableType::Gpt);
-            } else if line_lower.contains("dos") || line_lower.contains("mbr") {
-                return Ok(PartitionTableType::Dos);
-            }
-        }
-        // Alternative format used by sfdisk --json export: "label: gpt"
-        if line_lower.starts_with("label:") {
-            if line_lower.contains("gpt") {
-                return Ok(PartitionTableType::Gpt);
-            } else if line_lower.contains("dos") {
-                return Ok(PartitionTableType::Dos);
-            }
-        }
-    }
+/// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
+fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
+    #[cfg(all(feature = "gpt", feature = "dos"))]
+    compile_error!("features `gpt` and `dos` are mutually exclusive; enable exactly one");
 
-    Err(PartitionError::InvalidPartitionTable {
-        device: device.to_path_buf(),
-        reason: "Could not determine partition table type from sfdisk output".to_string(),
-    })
-}
+    #[cfg(not(any(feature = "gpt", feature = "dos")))]
+    compile_error!("exactly one of features `gpt` or `dos` must be enabled");
 
-/// Build partition map based on table type
-fn build_partition_map(
-    device: &RootDevice,
-    table_type: PartitionTableType,
-) -> HashMap<String, PathBuf> {
     let mut partitions = HashMap::new();
 
-    // Common partitions (same number for both GPT and DOS)
     partitions.insert(
         partition_names::BOOT.to_string(),
         device.partition_path(PARTITION_NUM_BOOT),
@@ -221,11 +150,7 @@ fn build_partition_map(
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
-    // Determine current root by parsing the numeric partition suffix.
-    // String suffix matching (e.g. ends_with("p2")) is wrong for devices
-    // with 10+ partitions (nvme0n1p12 would falsely match).
     let is_root_a = partition_suffix(&device.root_partition) == PARTITION_NUM_ROOT_A;
-
     partitions.insert(
         partition_names::ROOT_CURRENT.to_string(),
         if is_root_a {
@@ -235,50 +160,28 @@ fn build_partition_map(
         },
     );
 
-    // Table-type specific partitions
-    match table_type {
-        PartitionTableType::Gpt => {
-            partitions.insert(
-                partition_names::FACTORY.to_string(),
-                device.partition_path(PARTITION_NUM_FACTORY_GPT),
-            );
-            partitions.insert(
-                partition_names::CERT.to_string(),
-                device.partition_path(PARTITION_NUM_CERT_GPT),
-            );
-            partitions.insert(
-                partition_names::ETC.to_string(),
-                device.partition_path(PARTITION_NUM_ETC_GPT),
-            );
-            partitions.insert(
-                partition_names::DATA.to_string(),
-                device.partition_path(PARTITION_NUM_DATA_GPT),
-            );
-        }
-        PartitionTableType::Dos => {
-            // DOS has an extended partition container
-            partitions.insert(
-                partition_names::EXTENDED.to_string(),
-                device.partition_path(PARTITION_NUM_EXTENDED_DOS),
-            );
-            partitions.insert(
-                partition_names::FACTORY.to_string(),
-                device.partition_path(PARTITION_NUM_FACTORY_DOS),
-            );
-            partitions.insert(
-                partition_names::CERT.to_string(),
-                device.partition_path(PARTITION_NUM_CERT_DOS),
-            );
-            partitions.insert(
-                partition_names::ETC.to_string(),
-                device.partition_path(PARTITION_NUM_ETC_DOS),
-            );
-            partitions.insert(
-                partition_names::DATA.to_string(),
-                device.partition_path(PARTITION_NUM_DATA_DOS),
-            );
-        }
-    }
+    #[cfg(feature = "dos")]
+    partitions.insert(
+        partition_names::EXTENDED.to_string(),
+        device.partition_path(PARTITION_NUM_EXTENDED),
+    );
+
+    partitions.insert(
+        partition_names::FACTORY.to_string(),
+        device.partition_path(PARTITION_NUM_FACTORY),
+    );
+    partitions.insert(
+        partition_names::CERT.to_string(),
+        device.partition_path(PARTITION_NUM_CERT),
+    );
+    partitions.insert(
+        partition_names::ETC.to_string(),
+        device.partition_path(PARTITION_NUM_ETC),
+    );
+    partitions.insert(
+        partition_names::DATA.to_string(),
+        device.partition_path(PARTITION_NUM_DATA),
+    );
 
     partitions
 }
@@ -287,7 +190,7 @@ fn build_partition_map(
 mod tests {
     use super::*;
 
-    fn create_test_device_sda() -> RootDevice {
+    fn sda_root_a() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/sda"),
             partition_sep: "",
@@ -295,7 +198,8 @@ mod tests {
         }
     }
 
-    fn create_test_device_nvme() -> RootDevice {
+    #[cfg(feature = "gpt")]
+    fn nvme_root_a() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/nvme0n1"),
             partition_sep: "p",
@@ -303,251 +207,83 @@ mod tests {
         }
     }
 
-    fn create_test_device_mmc() -> RootDevice {
+    fn mmc_root_b() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/mmcblk0"),
             partition_sep: "p",
-            root_partition: PathBuf::from("/dev/mmcblk0p3"), // rootB
+            root_partition: PathBuf::from("/dev/mmcblk0p3"),
         }
     }
 
+    #[cfg(feature = "gpt")]
     #[test]
     fn test_partition_map_gpt_sata() {
-        let device = create_test_device_sda();
-        let map = build_partition_map(&device, PartitionTableType::Gpt);
+        let map = build_partition_map(&sda_root_a());
 
-        assert_eq!(
-            map.get(partition_names::BOOT),
-            Some(&PathBuf::from("/dev/sda1"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_A),
-            Some(&PathBuf::from("/dev/sda2"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_B),
-            Some(&PathBuf::from("/dev/sda3"))
-        );
-        assert_eq!(
-            map.get(partition_names::FACTORY),
-            Some(&PathBuf::from("/dev/sda4"))
-        );
-        assert_eq!(
-            map.get(partition_names::CERT),
-            Some(&PathBuf::from("/dev/sda5"))
-        );
-        assert_eq!(
-            map.get(partition_names::ETC),
-            Some(&PathBuf::from("/dev/sda6"))
-        );
-        assert_eq!(
-            map.get(partition_names::DATA),
-            Some(&PathBuf::from("/dev/sda7"))
-        );
-        assert_eq!(map.get(partition_names::EXTENDED), None); // No extended partition in GPT
+        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
+        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
+        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
+        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda4")));
+        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda5")));
+        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda6")));
+        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda7")));
+        assert_eq!(map.get(partition_names::EXTENDED), None);
     }
 
+    #[cfg(feature = "dos")]
     #[test]
     fn test_partition_map_dos_sata() {
-        let device = create_test_device_sda();
-        let map = build_partition_map(&device, PartitionTableType::Dos);
+        let map = build_partition_map(&sda_root_a());
 
-        assert_eq!(
-            map.get(partition_names::BOOT),
-            Some(&PathBuf::from("/dev/sda1"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_A),
-            Some(&PathBuf::from("/dev/sda2"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_B),
-            Some(&PathBuf::from("/dev/sda3"))
-        );
-        assert_eq!(
-            map.get(partition_names::EXTENDED),
-            Some(&PathBuf::from("/dev/sda4"))
-        );
-        assert_eq!(
-            map.get(partition_names::FACTORY),
-            Some(&PathBuf::from("/dev/sda5"))
-        );
-        assert_eq!(
-            map.get(partition_names::CERT),
-            Some(&PathBuf::from("/dev/sda6"))
-        );
-        assert_eq!(
-            map.get(partition_names::ETC),
-            Some(&PathBuf::from("/dev/sda7"))
-        );
-        assert_eq!(
-            map.get(partition_names::DATA),
-            Some(&PathBuf::from("/dev/sda8"))
-        );
+        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/sda1")));
+        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/sda2")));
+        assert_eq!(map.get(partition_names::ROOT_B), Some(&PathBuf::from("/dev/sda3")));
+        assert_eq!(map.get(partition_names::EXTENDED), Some(&PathBuf::from("/dev/sda4")));
+        assert_eq!(map.get(partition_names::FACTORY), Some(&PathBuf::from("/dev/sda5")));
+        assert_eq!(map.get(partition_names::CERT), Some(&PathBuf::from("/dev/sda6")));
+        assert_eq!(map.get(partition_names::ETC), Some(&PathBuf::from("/dev/sda7")));
+        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/sda8")));
     }
 
+    #[cfg(feature = "gpt")]
     #[test]
     fn test_partition_map_gpt_nvme() {
-        let device = create_test_device_nvme();
-        let map = build_partition_map(&device, PartitionTableType::Gpt);
+        let map = build_partition_map(&nvme_root_a());
 
-        assert_eq!(
-            map.get(partition_names::BOOT),
-            Some(&PathBuf::from("/dev/nvme0n1p1"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_A),
-            Some(&PathBuf::from("/dev/nvme0n1p2"))
-        );
-        assert_eq!(
-            map.get(partition_names::DATA),
-            Some(&PathBuf::from("/dev/nvme0n1p7"))
-        );
+        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/nvme0n1p1")));
+        assert_eq!(map.get(partition_names::ROOT_A), Some(&PathBuf::from("/dev/nvme0n1p2")));
+        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/nvme0n1p7")));
     }
 
+    #[cfg(feature = "dos")]
     #[test]
     fn test_partition_map_dos_mmc() {
-        let device = create_test_device_mmc();
-        let map = build_partition_map(&device, PartitionTableType::Dos);
+        let map = build_partition_map(&mmc_root_b());
 
-        assert_eq!(
-            map.get(partition_names::BOOT),
-            Some(&PathBuf::from("/dev/mmcblk0p1"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_A),
-            Some(&PathBuf::from("/dev/mmcblk0p2"))
-        );
-        assert_eq!(
-            map.get(partition_names::ROOT_B),
-            Some(&PathBuf::from("/dev/mmcblk0p3"))
-        );
-        assert_eq!(
-            map.get(partition_names::DATA),
-            Some(&PathBuf::from("/dev/mmcblk0p8"))
-        );
-    }
-
-    const SFDISK_GPT: &str = "\
-Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors
-Disk model: QEMU HARDDISK
-Units: sectors of 1 * 512 = 512 bytes
-Disklabel type: gpt
-Disk identifier: 11111111-2222-3333-4444-555555555555";
-
-    const SFDISK_DOS: &str = "\
-Disk /dev/mmcblk0: 7.28 GiB, 7818182656 bytes, 15269888 sectors
-Units: sectors of 1 * 512 = 512 bytes
-Disklabel type: dos
-Disk identifier: 0xdeadbeef";
-
-    const SFDISK_MBR: &str = "\
-Disk /dev/sdb: 8 GiB, 8589934592 bytes
-Disklabel type: mbr
-Disk identifier: 0xabcd1234";
-
-    #[test]
-    fn test_parse_sfdisk_output_gpt() {
-        assert_eq!(
-            parse_sfdisk_output(SFDISK_GPT, Path::new("/dev/sda")).unwrap(),
-            PartitionTableType::Gpt
-        );
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_dos() {
-        assert_eq!(
-            parse_sfdisk_output(SFDISK_DOS, Path::new("/dev/mmcblk0")).unwrap(),
-            PartitionTableType::Dos
-        );
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_mbr_alias() {
-        assert_eq!(
-            parse_sfdisk_output(SFDISK_MBR, Path::new("/dev/sdb")).unwrap(),
-            PartitionTableType::Dos
-        );
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_label_format_gpt() {
-        let output = "label: gpt\nlabel-id: 11111111-2222-3333-4444-555555555555";
-        assert_eq!(
-            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
-            PartitionTableType::Gpt
-        );
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_label_format_dos() {
-        let output = "label: dos\nlabel-id: 0xdeadbeef";
-        assert_eq!(
-            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
-            PartitionTableType::Dos
-        );
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_empty_errors() {
-        assert!(parse_sfdisk_output("", Path::new("/dev/sda")).is_err());
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_no_disklabel_errors() {
-        let output = "Disk /dev/sda: 30 GiB\nDisk identifier: 0x1234";
-        assert!(parse_sfdisk_output(output, Path::new("/dev/sda")).is_err());
-    }
-
-    #[test]
-    fn test_parse_sfdisk_output_label_id_with_gpt_uuid() {
-        // label-id line containing a GUID should not be misread as a table type
-        let output = "Disklabel type: gpt\nlabel-id: 11111111-2222-3333-4444-555555555555";
-        assert_eq!(
-            parse_sfdisk_output(output, Path::new("/dev/sda")).unwrap(),
-            PartitionTableType::Gpt
-        );
-    }
-
-    #[test]
-    fn test_partition_table_type_display() {
-        assert_eq!(PartitionTableType::Dos.to_string(), "DOS/MBR");
+        assert_eq!(map.get(partition_names::BOOT), Some(&PathBuf::from("/dev/mmcblk0p1")));
+        assert_eq!(map.get(partition_names::DATA), Some(&PathBuf::from("/dev/mmcblk0p8")));
     }
 
     #[test]
     fn test_root_current_root_a() {
-        let device = create_test_device_sda(); // root_partition ends with 2 (rootA)
-        let layout = PartitionLayout {
-            table_type: PartitionTableType::Gpt,
-            partitions: build_partition_map(&device, PartitionTableType::Gpt),
-            device,
-        };
-
+        let device = sda_root_a();
+        let layout = PartitionLayout::detect_from_parts(device);
         assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
     }
 
     #[test]
     fn test_root_current_root_b() {
-        let device = create_test_device_mmc(); // root_partition ends with 3 (rootB)
-        let layout = PartitionLayout {
-            table_type: PartitionTableType::Dos,
-            partitions: build_partition_map(&device, PartitionTableType::Dos),
-            device,
-        };
-
+        let device = mmc_root_b();
+        let layout = PartitionLayout::detect_from_parts(device);
         assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p3"));
     }
 
     #[test]
     fn test_partition_suffix() {
-        // Plain SATA: digit at end
         assert_eq!(partition_suffix(&PathBuf::from("/dev/sda2")), 2);
-        // MMC: base name contains a digit (mmcblk0), partition suffix is after 'p'
         assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p2")), 2);
         assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p3")), 3);
-        // NVMe: base name contains multiple digits, partition number > 9
         assert_eq!(partition_suffix(&PathBuf::from("/dev/nvme0n1p12")), 12);
-        // No suffix
         assert_eq!(partition_suffix(&PathBuf::from("/dev/sda")), 0);
     }
 }

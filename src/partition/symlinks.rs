@@ -27,8 +27,7 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     }
 
     log::info!(
-        "Created /dev/omnect symlinks for {} device {}, rootCurrent -> {}",
-        layout.table_type,
+        "Created /dev/omnect symlinks for device {}, rootCurrent -> {}",
         layout.device.base.display(),
         layout.root_current().display()
     );

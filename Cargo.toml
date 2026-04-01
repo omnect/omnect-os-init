@@ -27,6 +27,8 @@ default = ["core"]
 core = []
 grub = ["core"]           # x86-64 EFI targets (GRUB bootloader)
 uboot = ["core"]          # ARM targets (U-Boot bootloader)
+gpt = ["core"]            # GPT partition table (primary partitions 1-7)
+dos = ["core"]            # DOS/MBR partition table (extended container at slot 4, logical partitions 5-8)
 persistent-var-log = ["core"]
 release-image = ["core"]  # Enables release-mode error handling (loop on fatal error)
 

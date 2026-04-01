@@ -14,5 +14,5 @@ pub type Result<T> = std::result::Result<T, PartitionError>;
 
 // Re-export main types
 pub use device::{RootDevice, detect_root_device, parse_cmdline_param, root_device_from_blkid};
-pub use layout::{PartitionLayout, PartitionTableType, parse_sfdisk_output, partition_names};
+pub use layout::{PartitionLayout, partition_names};
 pub use symlinks::{create_omnect_symlinks, verify_symlinks};

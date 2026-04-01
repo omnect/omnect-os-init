@@ -31,6 +31,8 @@
 | `core` | Default, required functionality |
 | `grub` | GRUB bootloader support (mutually exclusive with `uboot`) |
 | `uboot` | U-Boot bootloader support (mutually exclusive with `grub`) |
+| `gpt` | GPT partition table (primary partitions 1-7; mutually exclusive with `dos`) |
+| `dos` | DOS/MBR partition table (extended at slot 4, logical 5-8; mutually exclusive with `gpt`) |
 | `persistent-var-log` | Persistent `/var/log` mount |
 | `release-image` | Release behaviour: infinite loop on fatal error |
 

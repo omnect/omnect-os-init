@@ -1,35 +1,20 @@
 //! Integration tests for boot device detection.
 //!
-//! Tests the pure pipelines extracted from `device_from_fsuuid` and
-//! `detect_partition_table_type` with realistic fixture strings, covering all
-//! storage types and boot paths used in omnect-os.
+//! Tests the pure pipelines extracted from `device_from_fsuuid`
+//! with realistic fixture strings, covering all storage types and boot paths
+//! used in omnect-os.
 
 use std::path::PathBuf;
 
-use omnect_os_init::partition::device::parse_cmdline_param;
 use omnect_os_init::partition::layout::PartitionLayout;
-use omnect_os_init::partition::{
-    RootDevice, parse_sfdisk_output, partition_names, root_device_from_blkid,
-};
+use omnect_os_init::partition::{RootDevice, partition_names, root_device_from_blkid};
+
+#[cfg(feature = "gpt")]
+use omnect_os_init::partition::device::parse_cmdline_param;
 
 // ---------------------------------------------------------------------------
 // Fixture strings
 // ---------------------------------------------------------------------------
-
-const SFDISK_GPT: &str = "\
-Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors
-Disk model: QEMU HARDDISK
-Units: sectors of 1 * 512 = 512 bytes
-Sector size (logical/physical): 512 bytes / 512 bytes
-Disklabel type: gpt
-Disk identifier: 11111111-2222-3333-4444-555555555555";
-
-const SFDISK_DOS: &str = "\
-Disk /dev/mmcblk0: 7.28 GiB, 7818182656 bytes, 15269888 sectors
-Units: sectors of 1 * 512 = 512 bytes
-Sector size (logical/physical): 512 bytes / 512 bytes
-Disklabel type: dos
-Disk identifier: 0xdeadbeef";
 
 // ---------------------------------------------------------------------------
 // 6a: GRUB pipeline — root_device_from_blkid
@@ -143,15 +128,14 @@ fn test_uboot_sd_root_b() {
 }
 
 // ---------------------------------------------------------------------------
-// 6c: Full pipeline — cmdline → root_device_from_blkid → parse_sfdisk_output
-//     → PartitionLayout
+// 6c: Full pipeline — cmdline → root_device_from_blkid → PartitionLayout
 // ---------------------------------------------------------------------------
 
-fn build_layout(rd: RootDevice, sfdisk_out: &str) -> PartitionLayout {
-    let table_type = parse_sfdisk_output(sfdisk_out, &rd.base).unwrap();
-    PartitionLayout::detect_from_parts(rd, table_type)
+fn build_layout(rd: RootDevice) -> PartitionLayout {
+    PartitionLayout::detect_from_parts(rd)
 }
 
+#[cfg(feature = "gpt")]
 #[test]
 fn test_full_pipeline_x86_sata_grub_root_a() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
@@ -162,7 +146,7 @@ fn test_full_pipeline_x86_sata_grub_root_a() {
         .unwrap();
 
     let rd = root_device_from_blkid("/dev/sda1", part_num).unwrap();
-    let layout = build_layout(rd, SFDISK_GPT);
+    let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/sda"));
     assert_eq!(
@@ -172,6 +156,7 @@ fn test_full_pipeline_x86_sata_grub_root_a() {
     assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
 }
 
+#[cfg(feature = "gpt")]
 #[test]
 fn test_full_pipeline_x86_nvme_grub_root_b() {
     let cmdline = "rootpart=3 bootpart_fsuuid=ABCD-1234 ro quiet";
@@ -182,7 +167,7 @@ fn test_full_pipeline_x86_nvme_grub_root_b() {
         .unwrap();
 
     let rd = root_device_from_blkid("/dev/nvme0n1p1", part_num).unwrap();
-    let layout = build_layout(rd, SFDISK_GPT);
+    let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/nvme0n1"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/nvme0n1p3"));
@@ -192,10 +177,11 @@ fn test_full_pipeline_x86_nvme_grub_root_b() {
     );
 }
 
+#[cfg(feature = "dos")]
 #[test]
 fn test_full_pipeline_arm_emmc_uboot_root_a() {
     let rd = root_device_from_blkid("/dev/mmcblk0p2", 2).unwrap();
-    let layout = build_layout(rd, SFDISK_DOS);
+    let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk0"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p2"));
@@ -205,15 +191,17 @@ fn test_full_pipeline_arm_emmc_uboot_root_a() {
     );
 }
 
+#[cfg(feature = "dos")]
 #[test]
 fn test_full_pipeline_arm_sd_uboot_root_b() {
     let rd = root_device_from_blkid("/dev/mmcblk1p3", 3).unwrap();
-    let layout = build_layout(rd, SFDISK_DOS);
+    let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk1"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk1p3"));
 }
 
+#[cfg(feature = "gpt")]
 #[test]
 fn test_full_pipeline_x86_virtio_grub() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
@@ -224,7 +212,7 @@ fn test_full_pipeline_x86_virtio_grub() {
         .unwrap();
 
     let rd = root_device_from_blkid("/dev/vda1", part_num).unwrap();
-    let layout = build_layout(rd, SFDISK_GPT);
+    let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/vda"));
     assert_eq!(
