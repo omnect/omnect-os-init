@@ -99,16 +99,16 @@ pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined_output = format!("{}{}", stdout, stderr);
 
+    let reboot_required = exit_code & exit_code::REBOOT_REQUIRED != 0;
     let result = FsckResult {
         device: device.to_path_buf(),
         exit_code,
         output: combined_output.clone(),
-        // Exit code 1: errors were corrected by -y. The filesystem is now clean
-        // and safe to mount — no reboot needed. Matches legacy bash behaviour.
-        // Exit code 2: fsck explicitly requests a reboot (e.g. kernel needs to
-        // replay journal). Only this code triggers a reboot.
-        success: exit_code == exit_code::OK || exit_code == exit_code::CORRECTED,
-        reboot_required: exit_code & exit_code::REBOOT_REQUIRED != 0,
+        // Use exact match (not bitwise) so exit code 3 (CORRECTED | REBOOT_REQUIRED)
+        // never sets success=true. When REBOOT_REQUIRED is set, reboot takes precedence.
+        success: (exit_code == exit_code::OK || exit_code == exit_code::CORRECTED)
+            && !reboot_required,
+        reboot_required,
     };
 
     // Log the result
@@ -234,6 +234,10 @@ fn disable_kmsg_ratelimit() {
 
     if let Ok(mut saved) = SAVED_RATELIMIT.lock() {
         *saved = Some((ratelimit, burst));
+    } else {
+        log::debug!(
+            "SAVED_RATELIMIT mutex poisoned; original ratelimit values will not be restored"
+        );
     }
 
     let _ = std::fs::write(PRINTK_RATELIMIT_PATH, "0");

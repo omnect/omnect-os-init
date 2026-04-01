@@ -27,7 +27,10 @@ pub struct UBootBootloader {
 }
 
 impl UBootBootloader {
-    /// Create a new U-Boot bootloader instance
+    /// Create a new U-Boot bootloader instance.
+    ///
+    /// Returns `Result<Self>` for API symmetry with `GrubBootloader::new()`,
+    /// even though this constructor currently cannot fail.
     pub fn new() -> Result<Self> {
         Ok(Self {})
     }

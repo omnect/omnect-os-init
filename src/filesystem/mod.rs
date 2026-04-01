@@ -6,10 +6,12 @@
 //! - Overlayfs setup for etc and home
 //! - Tracking mounts for cleanup on error
 
+mod boot_sequence;
 mod fsck;
 mod mount;
 mod overlayfs;
 
+pub use self::boot_sequence::{fsck_and_record, mount_partitions, persist_fsck_results};
 pub use self::fsck::{
     FsckResult, check_filesystem, check_filesystem_lenient, describe_fsck_exit_code,
 };

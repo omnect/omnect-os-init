@@ -290,7 +290,7 @@ mod tests {
     fn create_test_device_sda() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/sda"),
-            partition_sep: "".to_string(),
+            partition_sep: "",
             root_partition: PathBuf::from("/dev/sda2"),
         }
     }
@@ -298,7 +298,7 @@ mod tests {
     fn create_test_device_nvme() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/nvme0n1"),
-            partition_sep: "p".to_string(),
+            partition_sep: "p",
             root_partition: PathBuf::from("/dev/nvme0n1p2"),
         }
     }
@@ -306,7 +306,7 @@ mod tests {
     fn create_test_device_mmc() -> RootDevice {
         RootDevice {
             base: PathBuf::from("/dev/mmcblk0"),
-            partition_sep: "p".to_string(),
+            partition_sep: "p",
             root_partition: PathBuf::from("/dev/mmcblk0p3"), // rootB
         }
     }

@@ -27,7 +27,7 @@ pub struct RootDevice {
     /// Base block device path (e.g., `/dev/sda`, `/dev/nvme0n1`, `/dev/mmcblk0`)
     pub base: PathBuf,
     /// Partition separator ("" for sda/vda, "p" for nvme0n1/mmcblk0)
-    pub partition_sep: String,
+    pub partition_sep: &'static str,
     /// Root partition device path (e.g., `/dev/sda2`, `/dev/mmcblk0p2`)
     pub root_partition: PathBuf,
 }
@@ -211,21 +211,21 @@ fn device_from_path(path: &str) -> Result<RootDevice> {
 /// Splits a partition device name into `(base_name, separator)`.
 ///
 /// Examples: `"sda2"` → `("sda", "")`, `"mmcblk1p2"` → `("mmcblk1", "p")`
-fn split_partition_suffix(name: &str) -> Result<(String, String)> {
+fn split_partition_suffix(name: &str) -> Result<(String, &'static str)> {
     // NVMe / MMC: partition number follows a "p" separator
     if (name.contains("nvme") || name.starts_with("mmcblk"))
         && let Some(pos) = name.rfind('p')
     {
         let suffix = &name[pos + 1..];
         if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-            return Ok((name[..pos].to_string(), "p".to_string()));
+            return Ok((name[..pos].to_string(), "p"));
         }
     }
 
     // SATA / virtio: partition number appended directly (e.g. sda2, vda2)
     let base_end = name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
     if base_end > 0 && base_end < name.len() {
-        return Ok((name[..base_end].to_string(), String::new()));
+        return Ok((name[..base_end].to_string(), ""));
     }
 
     Err(PartitionError::DeviceDetection(format!(
@@ -335,7 +335,7 @@ mod tests {
     fn test_split_partition_suffix_sata() {
         assert_eq!(
             split_partition_suffix("sda2").unwrap(),
-            ("sda".to_string(), String::new())
+            ("sda".to_string(), "")
         );
     }
 
@@ -343,7 +343,7 @@ mod tests {
     fn test_split_partition_suffix_mmc() {
         assert_eq!(
             split_partition_suffix("mmcblk1p2").unwrap(),
-            ("mmcblk1".to_string(), "p".to_string())
+            ("mmcblk1".to_string(), "p")
         );
     }
 
@@ -351,7 +351,7 @@ mod tests {
     fn test_split_partition_suffix_nvme() {
         assert_eq!(
             split_partition_suffix("nvme0n1p2").unwrap(),
-            ("nvme0n1".to_string(), "p".to_string())
+            ("nvme0n1".to_string(), "p")
         );
     }
 
@@ -359,7 +359,7 @@ mod tests {
     fn test_split_partition_suffix_virtio() {
         assert_eq!(
             split_partition_suffix("vda2").unwrap(),
-            ("vda".to_string(), String::new())
+            ("vda".to_string(), "")
         );
     }
 
@@ -367,7 +367,7 @@ mod tests {
     fn test_root_device_partition_path_sata() {
         let device = RootDevice {
             base: PathBuf::from("/dev/sda"),
-            partition_sep: String::new(),
+            partition_sep: "",
             root_partition: PathBuf::from("/dev/sda2"),
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/sda1"));
@@ -378,7 +378,7 @@ mod tests {
     fn test_root_device_partition_path_mmc() {
         let device = RootDevice {
             base: PathBuf::from("/dev/mmcblk0"),
-            partition_sep: "p".to_string(),
+            partition_sep: "p",
             root_partition: PathBuf::from("/dev/mmcblk0p2"),
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/mmcblk0p1"));
@@ -389,7 +389,7 @@ mod tests {
     fn test_root_device_partition_path_nvme() {
         let device = RootDevice {
             base: PathBuf::from("/dev/nvme0n1"),
-            partition_sep: "p".to_string(),
+            partition_sep: "p",
             root_partition: PathBuf::from("/dev/nvme0n1p2"),
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/nvme0n1p1"));
@@ -400,11 +400,11 @@ mod tests {
     fn test_split_partition_suffix_multi_digit_sata() {
         assert_eq!(
             split_partition_suffix("sda12").unwrap(),
-            ("sda".to_string(), String::new())
+            ("sda".to_string(), "")
         );
         assert_eq!(
             split_partition_suffix("sdb100").unwrap(),
-            ("sdb".to_string(), String::new())
+            ("sdb".to_string(), "")
         );
     }
 
@@ -412,7 +412,7 @@ mod tests {
     fn test_split_partition_suffix_multi_digit_nvme() {
         assert_eq!(
             split_partition_suffix("nvme1n2p100").unwrap(),
-            ("nvme1n2".to_string(), "p".to_string())
+            ("nvme1n2".to_string(), "p")
         );
     }
 
@@ -420,7 +420,7 @@ mod tests {
     fn test_split_partition_suffix_multi_digit_mmc() {
         assert_eq!(
             split_partition_suffix("mmcblk1p12").unwrap(),
-            ("mmcblk1".to_string(), "p".to_string())
+            ("mmcblk1".to_string(), "p")
         );
     }
 
@@ -428,7 +428,7 @@ mod tests {
     fn test_split_partition_suffix_virtio_second_disk() {
         assert_eq!(
             split_partition_suffix("vdb7").unwrap(),
-            ("vdb".to_string(), String::new())
+            ("vdb".to_string(), "")
         );
     }
 
@@ -439,7 +439,7 @@ mod tests {
         // (base="loop0p") but omnect-os does not target loop devices.
         assert_eq!(
             split_partition_suffix("loop0p1").unwrap(),
-            ("loop0p".to_string(), String::new())
+            ("loop0p".to_string(), "")
         );
     }
 
@@ -455,7 +455,7 @@ mod tests {
     fn test_root_device_partition_path_virtio() {
         let device = RootDevice {
             base: PathBuf::from("/dev/vda"),
-            partition_sep: String::new(),
+            partition_sep: "",
             root_partition: PathBuf::from("/dev/vda2"),
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/vda1"));

@@ -55,10 +55,14 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
             .stdout(Stdio::piped())
             .spawn()?;
 
-        gzip.stdin
+        let mut stdin = gzip
+            .stdin
             .take()
-            .ok_or_else(|| std::io::Error::other("no gzip stdin"))?
-            .write_all(raw.as_bytes())?;
+            .ok_or_else(|| std::io::Error::other("no gzip stdin"))?;
+        stdin.write_all(raw.as_bytes())?;
+        // Drop stdin to close the pipe; gzip won't flush output until EOF on its input.
+        // Without this, wait_with_output() deadlocks if gzip output fills the OS pipe buffer.
+        drop(stdin);
 
         let out = gzip.wait_with_output()?;
         if !out.status.success() {
@@ -86,10 +90,12 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
             .stdout(Stdio::piped())
             .spawn()?;
 
-        b64.stdin
+        let mut stdin = b64
+            .stdin
             .take()
-            .ok_or_else(|| std::io::Error::other("no base64 stdin"))?
-            .write_all(&compressed)?;
+            .ok_or_else(|| std::io::Error::other("no base64 stdin"))?;
+        stdin.write_all(&compressed)?;
+        drop(stdin);
 
         let out = b64.wait_with_output()?;
         if !out.status.success() {
@@ -121,11 +127,12 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
         .stdout(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child
+            let mut stdin = child
                 .stdin
                 .take()
-                .ok_or_else(|| std::io::Error::other("no stdin"))?
-                .write_all(encoded.as_bytes())?;
+                .ok_or_else(|| std::io::Error::other("no stdin"))?;
+            stdin.write_all(encoded.as_bytes())?;
+            drop(stdin);
             child.wait_with_output()
         })
         .ok()
@@ -138,11 +145,12 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
         .stdout(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child
+            let mut stdin = child
                 .stdin
                 .take()
-                .ok_or_else(|| std::io::Error::other("no stdin"))?
-                .write_all(&b64_out.stdout)?;
+                .ok_or_else(|| std::io::Error::other("no stdin"))?;
+            stdin.write_all(&b64_out.stdout)?;
+            drop(stdin);
             child.wait_with_output()
         })
         .ok()

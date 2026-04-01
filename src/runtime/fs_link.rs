@@ -263,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_relative_path_absolute_rejected() {
+        assert!(validate_relative_path("/etc/foo").is_err());
+        assert!(validate_relative_path("/").is_err());
+    }
+
+    #[test]
+    fn test_validate_relative_path_dotdot_rejected() {
+        assert!(validate_relative_path("../foo").is_err());
+        assert!(validate_relative_path("foo/../../bar").is_err());
+        assert!(validate_relative_path("..").is_err());
+    }
+
+    #[test]
+    fn test_validate_relative_path_valid() {
+        assert!(validate_relative_path("foo/bar").is_ok());
+        assert!(validate_relative_path("opt/app").is_ok());
+        assert!(validate_relative_path("etc/omnect/config.json").is_ok());
+    }
+
+    #[test]
+    fn test_validate_relative_path_single_dot_allowed() {
+        // "." contains no ".." component so it passes
+        assert!(validate_relative_path("./foo").is_ok());
+        assert!(validate_relative_path("foo/./bar").is_ok());
+    }
+
+    #[test]
+    fn test_validate_relative_path_empty_string_allowed() {
+        // empty string is relative and contains no ".." — passes validation
+        assert!(validate_relative_path("").is_ok());
+    }
+
+    #[test]
     fn test_load_empty_config() {
         let temp = TempDir::new().unwrap();
         let config = load_fs_link_config(temp.path()).unwrap();

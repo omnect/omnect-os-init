@@ -276,12 +276,12 @@ fn is_directory_empty(path: &Path) -> Result<bool> {
         return Ok(true);
     }
 
-    let entries = fs::read_dir(path).map_err(|e| FilesystemError::OverlayFailed {
+    let mut entries = fs::read_dir(path).map_err(|e| FilesystemError::OverlayFailed {
         target: path.to_path_buf(),
         reason: format!("Failed to read directory: {}", e),
     })?;
 
-    Ok(entries.count() == 0)
+    Ok(entries.next().is_none())
 }
 
 /// Copy contents of one directory to another
