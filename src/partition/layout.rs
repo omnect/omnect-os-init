@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::partition::{Result, RootDevice};
+use crate::partition::RootDevice;
 
 /// Partition names used in omnect-os
 pub mod partition_names {
@@ -33,18 +33,12 @@ pub struct PartitionLayout {
 }
 
 impl PartitionLayout {
-    /// Constructs a `PartitionLayout` from an already-resolved device.
+    /// Builds the partition map for the given root device.
     ///
-    /// Separated from `detect` so it can be driven by fixture data in tests.
-    pub fn detect_from_parts(device: RootDevice) -> Self {
+    /// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
+    pub fn new(device: RootDevice) -> Self {
         let partitions = build_partition_map(&device);
         Self { partitions, device }
-    }
-
-    /// Builds the partition layout for the given root device.
-    pub fn detect(device: RootDevice) -> Result<Self> {
-        let partitions = build_partition_map(&device);
-        Ok(Self { partitions, device })
     }
 
     /// Get the device path for a named partition
@@ -327,14 +321,14 @@ mod tests {
     #[test]
     fn test_root_current_root_a() {
         let device = sda_root_a();
-        let layout = PartitionLayout::detect_from_parts(device);
+        let layout = PartitionLayout::new(device);
         assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
     }
 
     #[test]
     fn test_root_current_root_b() {
         let device = mmc_root_b();
-        let layout = PartitionLayout::detect_from_parts(device);
+        let layout = PartitionLayout::new(device);
         assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p3"));
     }
 

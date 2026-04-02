@@ -132,7 +132,7 @@ fn test_uboot_sd_root_b() {
 // ---------------------------------------------------------------------------
 
 fn build_layout(rd: RootDevice) -> PartitionLayout {
-    PartitionLayout::detect_from_parts(rd)
+    PartitionLayout::new(rd)
 }
 
 #[cfg(feature = "gpt")]
