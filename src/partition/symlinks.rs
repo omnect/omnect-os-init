@@ -35,30 +35,6 @@ pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     Ok(())
 }
 
-/// Remove all /dev/omnect/* symlinks
-///
-/// Useful for cleanup on error or re-detection.
-pub fn remove_omnect_symlinks() -> Result<()> {
-    let omnect_dir = Path::new(OMNECT_DEV_DIR);
-
-    if !omnect_dir.exists() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(omnect_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_symlink() {
-            fs::remove_file(&path).map_err(|e| PartitionError::SymlinkRemoveFailed {
-                path: path.clone(),
-                reason: e.to_string(),
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Create the /dev/omnect directory if it doesn't exist
 fn create_symlink_dir() -> Result<()> {
     let omnect_dir = Path::new(OMNECT_DEV_DIR);
