@@ -9,16 +9,18 @@ use crate::error::FilesystemError;
 use crate::filesystem::Result;
 use crate::logging::{KmsgRatelimitGuard, disable_kmsg_ratelimit};
 
-/// fsck command name
+/// fsck command — util-linux wrapper that dispatches to fsck.ext4 / fsck.fat
+/// based on the -t argument. Requires e2fsprogs-e2fsck in the initramfs image
+/// to provide the fsck.ext4 backend.
 const FSCK_CMD: &str = "/sbin/fsck";
 
 /// Always pass -y (auto-repair): this binary runs unattended in initramfs.
 /// Kept separate from FSCK_CMD because Command::new takes only the executable path.
 const FSCK_AUTO_REPAIR_FLAG: &str = "-y";
 
-/// Progress flag for ext filesystems (-C0: write progress to fd 0 / stdout).
-/// e2fsck-specific — fsck.vfat and other backends reject it.
-const FSCK_PROGRESS_FLAG: &str = "-C0";
+/// Filesystem type flag: tells the wrapper which backend to dispatch to (fsck.ext4 / fsck.fat).
+/// Without -t, the wrapper falls back to blkid probing which is absent in initramfs.
+const FSCK_TYPE_FLAG: &str = "-t";
 
 /// fsck exit codes
 mod exit_code {
@@ -87,10 +89,10 @@ pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     let mut cmd = Command::new(FSCK_CMD);
     cmd.arg(FSCK_AUTO_REPAIR_FLAG);
 
-    // -C0 is e2fsck-only: passing it to fsck.vfat causes spurious non-zero exit codes.
-    if fstype.starts_with("ext") {
-        cmd.arg(FSCK_PROGRESS_FLAG);
-    }
+    // Explicitly specify the filesystem type so the wrapper dispatches
+    // directly to fsck.ext4 / fsck.fat without needing blkid probing.
+    cmd.args([FSCK_TYPE_FLAG, fstype]);
+
     cmd.arg(device);
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
