@@ -69,6 +69,17 @@ pub fn mount_partitions(
                 "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
             ))
         })?;
+
+    // The mount target must exist before mount(2) is called. The directory is
+    // not baked into the initramfs image — create it here on every boot.
+    fs::create_dir_all(rootfs).map_err(|e| {
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to create rootfs mount point {}: {}",
+            rootfs.display(),
+            e
+        )))
+    })?;
+
     // rootCurrent is mounted directly — no fsck. Legacy bash never runs check_fs on
     // rootCurrent either: the kernel's own ext4 journal replay is the correct recovery
     // mechanism. Running fsck -y before mount can interfere with journal replay and
