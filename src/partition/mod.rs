@@ -13,6 +13,8 @@ pub use crate::error::PartitionError;
 pub type Result<T> = std::result::Result<T, PartitionError>;
 
 // Re-export main types
-pub use device::{RootDevice, detect_root_device, parse_cmdline_param, root_device_from_blkid};
+#[cfg(feature = "grub")]
+pub use device::root_device_from_blkid;
+pub use device::{RootDevice, detect_root_device, parse_cmdline_param};
 pub use layout::{PartitionLayout, partition_names};
 pub use symlinks::{create_omnect_symlinks, verify_symlinks};

@@ -19,6 +19,8 @@ use crate::partition::{PartitionError, Result};
 
 const DEVICE_WAIT_TIMEOUT_SECS: u64 = 30;
 const DEVICE_POLL_INTERVAL_MS: u64 = 100;
+
+#[cfg(feature = "grub")]
 const BLKID_CMD: &str = "/sbin/blkid";
 
 /// Represents the detected root block device and its properties.
@@ -58,6 +60,7 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
     // GRUB: rootpart=N + bootpart_fsuuid=<uuid>
     // GRUB and initramfs always ship in the same image, so bootpart_fsuuid is
     // always present on GRUB boots — no fallback paths needed.
+    #[cfg(feature = "grub")]
     if let Some(part_str) = parse_cmdline_param(&cmdline, "rootpart")? {
         let part_num: u32 = part_str.parse().map_err(|_| {
             PartitionError::DeviceDetection(format!(
@@ -76,6 +79,7 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
     }
 
     // U-Boot: root=/dev/<device> (full partition path in bootargs)
+    #[cfg(feature = "uboot")]
     if let Some(root) = parse_cmdline_param(&cmdline, "root")? {
         if !root.starts_with("/dev/") {
             return Err(PartitionError::DeviceDetection(format!(
@@ -86,8 +90,14 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
         return device_from_path(&root);
     }
 
+    #[cfg(feature = "grub")]
+    return Err(PartitionError::DeviceDetection(
+        "rootpart= (GRUB) not found in kernel cmdline".into(),
+    ));
+
+    #[cfg(feature = "uboot")]
     Err(PartitionError::DeviceDetection(
-        "neither rootpart= (GRUB) nor root= (U-Boot) found in kernel cmdline".into(),
+        "root= (U-Boot) not found in kernel cmdline".into(),
     ))
 }
 
@@ -96,6 +106,7 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
 /// GRUB runs `probe --fs-uuid` on `${root}` (the boot partition) and passes the result
 /// on the kernel cmdline. `blkid` is retried in a loop until the UUID is found or the
 /// timeout expires — block devices may not be ready immediately at initramfs startup.
+#[cfg(feature = "grub")]
 fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
     use std::process::Command;
 
@@ -170,6 +181,7 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
 /// Pure pipeline: given the device path returned by `blkid --uuid`, construct a `RootDevice`.
 ///
 /// Separated from `device_from_fsuuid` so it can be driven by fixture data in tests.
+#[cfg(feature = "grub")]
 pub fn root_device_from_blkid(boot_part_dev: &str, part_num: u32) -> Result<RootDevice> {
     let name = PathBuf::from(boot_part_dev)
         .file_name()
@@ -191,6 +203,7 @@ pub fn root_device_from_blkid(boot_part_dev: &str, part_num: u32) -> Result<Root
 }
 
 /// Builds a `RootDevice` from a full `root=/dev/<device>` path (U-Boot boot path).
+#[cfg(feature = "uboot")]
 fn device_from_path(path: &str) -> Result<RootDevice> {
     let root_partition = PathBuf::from(path);
     wait_for_device(&root_partition)?;
