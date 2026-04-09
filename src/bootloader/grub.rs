@@ -4,7 +4,7 @@
 //! using the `grub-editenv` command.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
 use crate::bootloader::{
@@ -31,39 +31,28 @@ const FSCK_REBOOT_REQUESTED: i32 = 2;
 /// GRUB bootloader implementation
 ///
 /// Uses `grub-editenv` to read/write environment variables from the grubenv file.
-pub struct GrubBootloader {
-    grubenv_path: PathBuf,
-    /// Mount point of the boot partition (parent of EFI/BOOT/grubenv)
-    boot_dir: PathBuf,
-}
+pub struct GrubBootloader;
 
 impl GrubBootloader {
     /// Create a new GRUB bootloader instance.
-    ///
-    /// Paths are derived from the compile-time rootfs constant — in initramfs the
-    /// rootfs mount point is always `/rootfs` and grubenv is always pre-provisioned
-    /// by the Yocto image, so both paths are effectively static.
     ///
     /// # Errors
     /// Returns an error if the grubenv file doesn't exist (indicates a corrupted
     /// boot partition, not a missing file on first boot).
     pub fn new() -> Result<Self> {
-        let grubenv_path = PathBuf::from(GRUBENV_PATH);
-
-        if !grubenv_path.is_file() {
-            return Err(BootloaderError::EnvFileNotFound { path: grubenv_path });
+        if !Path::new(GRUBENV_PATH).is_file() {
+            return Err(BootloaderError::EnvFileNotFound {
+                path: GRUBENV_PATH.into(),
+            });
         }
 
-        Ok(Self {
-            grubenv_path,
-            boot_dir: PathBuf::from(BOOT_DIR_PATH),
-        })
+        Ok(Self)
     }
 
     /// Run grub-editenv with the given arguments
     fn run_grub_editenv(&self, args: &[&str]) -> Result<String> {
         let output = Command::new(GRUB_EDITENV_CMD)
-            .arg(&self.grubenv_path)
+            .arg(GRUBENV_PATH)
             .args(args)
             .output()
             .map_err(|e| BootloaderError::CommandFailed {
@@ -129,7 +118,7 @@ impl Bootloader for GrubBootloader {
             // For non-boot partitions: write to a file on the boot partition instead
             // of grubenv. grubenv is a fixed 1024-byte block — storing multiple large
             // encoded blobs there would overflow it. Matches legacy bash behaviour.
-            let file_path = self.boot_dir.join(format!("fsck.{partition}"));
+            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
             fs::write(&file_path, &encoded).map_err(|e| BootloaderError::CommandFailed {
                 command: format!("write {}", file_path.display()),
                 reason: e.to_string(),
@@ -143,7 +132,7 @@ impl Bootloader for GrubBootloader {
                 .get_env(BOOT_FSCK_VAR)?
                 .and_then(|v| decode_fsck_output(&v)))
         } else {
-            let file_path = self.boot_dir.join(format!("fsck.{partition}"));
+            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
             if !file_path.is_file() {
                 return Ok(None);
             }
@@ -162,7 +151,7 @@ impl Bootloader for GrubBootloader {
         if partition == "boot" {
             self.set_env(BOOT_FSCK_VAR, None)
         } else {
-            let file_path = self.boot_dir.join(format!("fsck.{partition}"));
+            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
             if file_path.exists() {
                 fs::remove_file(&file_path).map_err(|e| BootloaderError::CommandFailed {
                     command: format!("remove {}", file_path.display()),
