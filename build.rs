@@ -88,27 +88,18 @@ fn fmt_option(val: Option<u64>) -> String {
 }
 
 /// Enforce mutually-exclusive feature combinations at build time.
-///
-/// Emitting `cargo:error=` here (rather than inline `compile_error!`) keeps
-/// the validation in one place and avoids dead-code in the source tree.
 fn check_feature_flags() {
-    let has_grub = env::var("CARGO_FEATURE_GRUB").is_ok();
-    let has_uboot = env::var("CARGO_FEATURE_UBOOT").is_ok();
-
-    if has_grub && has_uboot {
+    if cfg!(all(feature = "grub", feature = "uboot")) {
         println!(
             "cargo:error=features `grub` and `uboot` are mutually exclusive; enable exactly one"
         );
-    } else if !has_grub && !has_uboot {
+    } else if cfg!(not(any(feature = "grub", feature = "uboot"))) {
         println!("cargo:error=exactly one of features `grub` or `uboot` must be enabled");
     }
 
-    let has_gpt = env::var("CARGO_FEATURE_GPT").is_ok();
-    let has_dos = env::var("CARGO_FEATURE_DOS").is_ok();
-
-    if has_gpt && has_dos {
+    if cfg!(all(feature = "gpt", feature = "dos")) {
         println!("cargo:error=features `gpt` and `dos` are mutually exclusive; enable exactly one");
-    } else if !has_gpt && !has_dos {
+    } else if cfg!(not(any(feature = "gpt", feature = "dos"))) {
         println!("cargo:error=exactly one of features `gpt` or `dos` must be enabled");
     }
 }
