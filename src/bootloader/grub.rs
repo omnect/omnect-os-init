@@ -4,7 +4,7 @@
 //! using the `grub-editenv` command.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::bootloader::{
@@ -16,15 +16,11 @@ use crate::error::BootloaderError;
 /// Command name for GRUB environment manipulation
 const GRUB_EDITENV_CMD: &str = "/bin/grub-editenv";
 
-/// Root filesystem mount point. In production initramfs this is always /rootfs;
-/// the path is fixed by the Yocto image layout and never varies at runtime.
-const ROOTFS_DIR: &str = "/rootfs";
+/// Path to the boot partition mount point
+const BOOT_DIR_PATH: &str = "/rootfs/boot";
 
-/// Path to the boot partition mount point relative to rootfs
-const BOOT_DIR_PATH: &str = "boot";
-
-/// Path to the grubenv file relative to rootfs (boot/EFI/BOOT/grubenv)
-const GRUBENV_PATH: &str = "boot/EFI/BOOT/grubenv";
+/// Absolute path to the grubenv file
+const GRUBENV_PATH: &str = "/rootfs/boot/EFI/BOOT/grubenv";
 
 /// grubenv key used for boot partition fsck status
 const BOOT_FSCK_VAR: &str = "omnect_fsck_boot";
@@ -52,18 +48,15 @@ impl GrubBootloader {
     /// Returns an error if the grubenv file doesn't exist (indicates a corrupted
     /// boot partition, not a missing file on first boot).
     pub fn new() -> Result<Self> {
-        let rootfs = Path::new(ROOTFS_DIR);
-        let grubenv_path = rootfs.join(GRUBENV_PATH);
+        let grubenv_path = PathBuf::from(GRUBENV_PATH);
 
         if !grubenv_path.is_file() {
             return Err(BootloaderError::EnvFileNotFound { path: grubenv_path });
         }
 
-        let boot_dir = rootfs.join(BOOT_DIR_PATH);
-
         Ok(Self {
             grubenv_path,
-            boot_dir,
+            boot_dir: PathBuf::from(BOOT_DIR_PATH),
         })
     }
 
