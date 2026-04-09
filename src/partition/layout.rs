@@ -122,13 +122,8 @@ fn partition_suffix(path: &std::path::Path) -> u32 {
 /// Build the partition map for the given device.
 ///
 /// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
+/// Exactly one of `gpt` or `dos` must be enabled; build.rs enforces this.
 fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
-    #[cfg(all(feature = "gpt", feature = "dos"))]
-    compile_error!("features `gpt` and `dos` are mutually exclusive; enable exactly one");
-
-    #[cfg(not(any(feature = "gpt", feature = "dos")))]
-    compile_error!("exactly one of features `gpt` or `dos` must be enabled");
-
     let mut partitions = HashMap::new();
 
     partitions.insert(

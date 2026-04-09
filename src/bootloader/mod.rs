@@ -68,14 +68,8 @@ pub trait Bootloader: Send + Sync {
 /// - `grub` feature: x86-64 EFI targets using GRUB (`grub-editenv`)
 /// - `uboot` feature: ARM targets using U-Boot (`fw_printenv`/`fw_setenv`)
 ///
-/// Exactly one of `grub` or `uboot` must be enabled; the build will fail otherwise.
+/// Exactly one of `grub` or `uboot` must be enabled; build.rs enforces this.
 pub fn create_bootloader(_rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
-    #[cfg(all(feature = "grub", feature = "uboot"))]
-    compile_error!("features `grub` and `uboot` are mutually exclusive; enable exactly one");
-
-    #[cfg(not(any(feature = "grub", feature = "uboot")))]
-    compile_error!("exactly one of features `grub` or `uboot` must be enabled");
-
     #[cfg(feature = "grub")]
     return Ok(Box::new(GrubBootloader::new(_rootfs_dir)?));
 

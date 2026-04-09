@@ -22,6 +22,8 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
+    check_feature_flags();
+
     // Tell Cargo to re-run this build script whenever any of these env vars change.
     println!("cargo:rerun-if-env-changed=OMNECT_PART_OFFSET_UBOOT_ENV1");
     println!("cargo:rerun-if-env-changed=OMNECT_PART_OFFSET_UBOOT_ENV2");
@@ -82,5 +84,31 @@ fn fmt_option(val: Option<u64>) -> String {
     match val {
         Some(n) => format!("Some({n}_u64)"),
         None => "None".to_string(),
+    }
+}
+
+/// Enforce mutually-exclusive feature combinations at build time.
+///
+/// Emitting `cargo:error=` here (rather than inline `compile_error!`) keeps
+/// the validation in one place and avoids dead-code in the source tree.
+fn check_feature_flags() {
+    let has_grub = env::var("CARGO_FEATURE_GRUB").is_ok();
+    let has_uboot = env::var("CARGO_FEATURE_UBOOT").is_ok();
+
+    if has_grub && has_uboot {
+        println!(
+            "cargo:error=features `grub` and `uboot` are mutually exclusive; enable exactly one"
+        );
+    } else if !has_grub && !has_uboot {
+        println!("cargo:error=exactly one of features `grub` or `uboot` must be enabled");
+    }
+
+    let has_gpt = env::var("CARGO_FEATURE_GPT").is_ok();
+    let has_dos = env::var("CARGO_FEATURE_DOS").is_ok();
+
+    if has_gpt && has_dos {
+        println!("cargo:error=features `gpt` and `dos` are mutually exclusive; enable exactly one");
+    } else if !has_gpt && !has_dos {
+        println!("cargo:error=exactly one of features `gpt` or `dos` must be enabled");
     }
 }
