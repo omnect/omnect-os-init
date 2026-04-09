@@ -85,15 +85,18 @@ pub fn mount_partitions(
     // grubenv on the boot partition; atime writes are acceptable on vfat.
     if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
         let boot_mount = rootfs.join(mount_points::BOOT);
-        if !is_path_mounted(&boot_mount)? {
-            fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
-            mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
-        } else {
-            log::debug!(
-                "Boot partition already mounted at {}; skipping",
-                boot_mount.display()
-            );
+        if is_path_mounted(&boot_mount)? {
+            // Boot already mounted at this stage is a logic error: mount_partitions
+            // is called exactly once, after rootfs is freshly mounted. If boot is
+            // already present something has gone wrong in the boot sequence.
+            return Err(InitramfsError::Filesystem(FilesystemError::MountFailed {
+                src_path: boot_dev.clone(),
+                target: boot_mount,
+                reason: "boot partition already mounted at start of mount_partitions".to_string(),
+            }));
         }
+        fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
+        mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition read-only
