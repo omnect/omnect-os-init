@@ -15,16 +15,8 @@ use nix::unistd::{chdir, chroot};
 
 use crate::error::{InitramfsError, Result};
 
-/// Default init path
+/// Default init binary path, used when `init=` is absent from the kernel cmdline.
 const DEFAULT_INIT: &str = "/sbin/init";
-
-/// Alternative init paths to try
-const INIT_PATHS: &[&str] = &[
-    "/sbin/init",
-    "/usr/sbin/init",
-    "/lib/systemd/systemd",
-    "/usr/lib/systemd/systemd",
-];
 
 /// Switch root to the new rootfs and exec init
 pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
@@ -45,7 +37,7 @@ pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
     // Verify the init binary exists BEFORE moving any mounts. If init is
     // missing we want to fail while /dev, /proc, /sys, /run are still on
     // the initramfs so the debug shell / fatal-error path still works.
-    let init_full_path = find_init(new_root, init_path)?;
+    let init_full_path = resolve_init_path(new_root, init_path)?;
 
     // Ensure target mountpoint directories exist under new_root.
     // MS_MOVE fails with ENOENT if the target directory is missing.
@@ -173,11 +165,17 @@ fn is_executable_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Find the init binary in the new root.
+/// Resolve the init binary path within the new root.
 ///
-/// Always returns an absolute path string (starts with `/`) so that
-/// `Command::new` on PID 1 does not fall back to PATH lookup.
-fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
+/// Validates the path and checks that the binary exists and is executable.
+/// No fallback probing is performed — the caller must supply a valid `init=`
+/// kernel cmdline parameter or the default `/sbin/init`. If the path is wrong,
+/// that is a system configuration error and should surface immediately rather
+/// than silently selecting an unexpected binary.
+///
+/// Returns an absolute path string (starting with `/`) so that `Command::new`
+/// on PID 1 does not fall back to a PATH lookup.
+fn resolve_init_path(new_root: &Path, requested_init: &str) -> Result<String> {
     // Reject paths containing ".." to prevent escaping new_root before chroot.
     if requested_init.split('/').any(|c| c == "..") {
         return Err(InitramfsError::Io(std::io::Error::new(
@@ -187,32 +185,23 @@ fn find_init(new_root: &Path, requested_init: &str) -> Result<String> {
     }
 
     // Ensure the caller-supplied path is absolute to avoid PATH lookup on exec.
-    let requested_init = if requested_init.starts_with('/') {
+    let init_path = if requested_init.starts_with('/') {
         requested_init.to_string()
     } else {
         format!("/{}", requested_init)
     };
 
-    let requested_path = new_root.join(requested_init.trim_start_matches('/'));
-    if is_executable_file(&requested_path) {
-        return Ok(requested_init);
-    }
-
-    for init_path in INIT_PATHS {
-        let full_path = new_root.join(init_path.trim_start_matches('/'));
-        if is_executable_file(&full_path) {
-            log::debug!("Found init at {}", init_path);
-            return Ok((*init_path).to_string());
-        }
+    let full_path = new_root.join(init_path.trim_start_matches('/'));
+    if is_executable_file(&full_path) {
+        return Ok(init_path);
     }
 
     Err(InitramfsError::Io(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         format!(
-            "Init binary not found in {}. Tried: {}, {:?}",
+            "Init binary not found or not executable at {}: {}",
             new_root.display(),
-            requested_init,
-            INIT_PATHS
+            init_path
         ),
     )))
 }
@@ -236,27 +225,16 @@ mod tests {
         fs::create_dir_all(&sbin).unwrap();
         write_executable(&sbin.join("init"), "#!/bin/sh");
 
-        let result = find_init(temp.path(), "/sbin/init");
+        let result = resolve_init_path(temp.path(), "/sbin/init");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/sbin/init");
     }
 
     #[test]
-    fn test_find_init_systemd() {
-        let temp = TempDir::new().unwrap();
-        let systemd_dir = temp.path().join("lib/systemd");
-        fs::create_dir_all(&systemd_dir).unwrap();
-        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
-
-        let result = find_init(temp.path(), "/sbin/init");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/lib/systemd/systemd");
-    }
-
-    #[test]
     fn test_find_init_not_found() {
         let temp = TempDir::new().unwrap();
-        let result = find_init(temp.path(), "/sbin/init");
+        // No fallback probing: absent init is always an error.
+        let result = resolve_init_path(temp.path(), "/sbin/init");
         assert!(result.is_err());
     }
 
@@ -269,7 +247,32 @@ mod tests {
         fs::write(sbin.join("init"), "#!/bin/sh").unwrap();
         fs::set_permissions(sbin.join("init"), fs::Permissions::from_mode(0o644)).unwrap();
 
-        let result = find_init(temp.path(), "/sbin/init");
+        let result = resolve_init_path(temp.path(), "/sbin/init");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_init_no_fallback_to_systemd() {
+        // Requesting /sbin/init when only systemd is present must fail — no silent fallback.
+        let temp = TempDir::new().unwrap();
+        let systemd_dir = temp.path().join("lib/systemd");
+        fs::create_dir_all(&systemd_dir).unwrap();
+        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
+
+        let result = resolve_init_path(temp.path(), "/sbin/init");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_init_explicit_systemd() {
+        // Explicitly requesting systemd as init path must work.
+        let temp = TempDir::new().unwrap();
+        let systemd_dir = temp.path().join("lib/systemd");
+        fs::create_dir_all(&systemd_dir).unwrap();
+        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
+
+        let result = resolve_init_path(temp.path(), "/lib/systemd/systemd");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/lib/systemd/systemd");
     }
 }
