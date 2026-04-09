@@ -16,8 +16,15 @@ use crate::error::BootloaderError;
 /// Command name for GRUB environment manipulation
 const GRUB_EDITENV_CMD: &str = "/bin/grub-editenv";
 
-/// Path to grubenv file relative to boot partition
-const GRUBENV_RELATIVE_PATH: &str = "EFI/BOOT/grubenv";
+/// Root filesystem mount point. In production initramfs this is always /rootfs;
+/// the path is fixed by the Yocto image layout and never varies at runtime.
+const ROOTFS_DIR: &str = "/rootfs";
+
+/// Path to the boot partition mount point relative to rootfs
+const BOOT_DIR_PATH: &str = "boot";
+
+/// Path to the grubenv file relative to rootfs (boot/EFI/BOOT/grubenv)
+const GRUBENV_PATH: &str = "boot/EFI/BOOT/grubenv";
 
 /// grubenv key used for boot partition fsck status
 const BOOT_FSCK_VAR: &str = "omnect_fsck_boot";
@@ -35,22 +42,24 @@ pub struct GrubBootloader {
 }
 
 impl GrubBootloader {
-    /// Create a new GRUB bootloader instance
+    /// Create a new GRUB bootloader instance.
     ///
-    /// # Arguments
-    /// * `rootfs_dir` - Path to the mounted rootfs (e.g., `/rootfs`)
+    /// Paths are derived from the compile-time rootfs constant — in initramfs the
+    /// rootfs mount point is always `/rootfs` and grubenv is always pre-provisioned
+    /// by the Yocto image, so both paths are effectively static.
     ///
     /// # Errors
-    /// Returns an error if the grubenv file doesn't exist
-    pub fn new(rootfs_dir: &Path) -> Result<Self> {
-        let grubenv_path = rootfs_dir.join("boot").join(GRUBENV_RELATIVE_PATH);
+    /// Returns an error if the grubenv file doesn't exist (indicates a corrupted
+    /// boot partition, not a missing file on first boot).
+    pub fn new() -> Result<Self> {
+        let rootfs = Path::new(ROOTFS_DIR);
+        let grubenv_path = rootfs.join(GRUBENV_PATH);
 
         if !grubenv_path.is_file() {
             return Err(BootloaderError::EnvFileNotFound { path: grubenv_path });
         }
 
-        // boot_dir = rootfs/boot (3 levels above grubenv)
-        let boot_dir = rootfs_dir.join("boot");
+        let boot_dir = rootfs.join(BOOT_DIR_PATH);
 
         Ok(Self {
             grubenv_path,

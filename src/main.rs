@@ -100,7 +100,7 @@ fn run() -> Result<()> {
     // Attempt to create bootloader and persist fsck results before propagating any
     // mount error. This ensures results are stored even on the FsckRequiresReboot
     // reboot path. For GRUB: requires boot partition mounted; best-effort if it isn't.
-    let mut bootloader_result = create_bootloader(&config.rootfs_dir);
+    let mut bootloader_result = create_bootloader();
     if let Ok(ref mut bl) = bootloader_result {
         // Persist fsck results: gzip+base64 encoded output (code + full text) to
         // bootloader env, and full output to data partition log.

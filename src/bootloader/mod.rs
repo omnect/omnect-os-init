@@ -9,8 +9,6 @@ mod types;
 #[cfg(feature = "uboot")]
 mod uboot;
 
-use std::path::Path;
-
 use crate::error::BootloaderError;
 
 #[cfg(feature = "grub")]
@@ -69,9 +67,9 @@ pub trait Bootloader: Send + Sync {
 /// - `uboot` feature: ARM targets using U-Boot (`fw_printenv`/`fw_setenv`)
 ///
 /// Exactly one of `grub` or `uboot` must be enabled; build.rs enforces this.
-pub fn create_bootloader(_rootfs_dir: &Path) -> Result<Box<dyn Bootloader>> {
+pub fn create_bootloader() -> Result<Box<dyn Bootloader>> {
     #[cfg(feature = "grub")]
-    return Ok(Box::new(GrubBootloader::new(_rootfs_dir)?));
+    return Ok(Box::new(GrubBootloader::new()?));
 
     #[cfg(feature = "uboot")]
     return Ok(Box::new(UBootBootloader::new()?));
