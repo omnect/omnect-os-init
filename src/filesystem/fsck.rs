@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
 
 use crate::error::FilesystemError;
 use crate::filesystem::Result;
+use crate::logging::{KmsgRatelimitGuard, disable_kmsg_ratelimit};
 
 /// fsck command name
 const FSCK_CMD: &str = "/sbin/fsck";
@@ -19,12 +19,6 @@ const FSCK_AUTO_REPAIR_FLAG: &str = "-y";
 /// Progress flag for ext filesystems (-C0: write progress to fd 0 / stdout).
 /// e2fsck-specific — fsck.vfat and other backends reject it.
 const FSCK_PROGRESS_FLAG: &str = "-C0";
-
-const PRINTK_RATELIMIT_PATH: &str = "/proc/sys/kernel/printk_ratelimit";
-const PRINTK_RATELIMIT_BURST_PATH: &str = "/proc/sys/kernel/printk_ratelimit_burst";
-
-/// Saved rate limit values for restoration
-static SAVED_RATELIMIT: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// fsck exit codes
 mod exit_code {
@@ -201,59 +195,6 @@ pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResul
             })
         }
         Err(e) => Err(e),
-    }
-}
-
-/// RAII guard that re-enables kmsg rate limiting when dropped.
-/// Guarantees restoration on all exit paths including early error returns.
-struct KmsgRatelimitGuard;
-
-impl Drop for KmsgRatelimitGuard {
-    fn drop(&mut self) {
-        enable_kmsg_ratelimit();
-    }
-}
-
-/// Disable kernel message rate limiting
-///
-/// This ensures fsck output isn't throttled in dmesg.
-fn disable_kmsg_ratelimit() {
-    let ratelimit = match std::fs::read_to_string(PRINTK_RATELIMIT_PATH) {
-        Ok(s) => s.trim().to_string(),
-        Err(e) => {
-            log::warn!("Failed to read {PRINTK_RATELIMIT_PATH}: {e}; skipping ratelimit save");
-            return;
-        }
-    };
-    let burst = match std::fs::read_to_string(PRINTK_RATELIMIT_BURST_PATH) {
-        Ok(s) => s.trim().to_string(),
-        Err(e) => {
-            log::warn!(
-                "Failed to read {PRINTK_RATELIMIT_BURST_PATH}: {e}; skipping ratelimit save"
-            );
-            return;
-        }
-    };
-
-    if let Ok(mut saved) = SAVED_RATELIMIT.lock() {
-        *saved = Some((ratelimit, burst));
-    } else {
-        log::debug!(
-            "SAVED_RATELIMIT mutex poisoned; original ratelimit values will not be restored"
-        );
-    }
-
-    let _ = std::fs::write(PRINTK_RATELIMIT_PATH, "0");
-    let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, "0");
-}
-
-/// Re-enable kernel message rate limiting
-fn enable_kmsg_ratelimit() {
-    if let Ok(mut saved) = SAVED_RATELIMIT.lock()
-        && let Some((ratelimit, burst)) = saved.take()
-    {
-        let _ = std::fs::write(PRINTK_RATELIMIT_PATH, ratelimit);
-        let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, burst);
     }
 }
 

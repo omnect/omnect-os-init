@@ -4,4 +4,7 @@
 
 mod kmsg;
 
-pub use self::kmsg::{KmsgLogger, log_direct, log_fatal};
+pub use self::kmsg::{
+    KmsgLogger, KmsgRatelimitGuard, disable_kmsg_ratelimit, disable_printk_ratelimit, log_direct,
+    log_fatal,
+};

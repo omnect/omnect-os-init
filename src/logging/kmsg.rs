@@ -125,3 +125,78 @@ pub fn log_direct(message: &str) {
         let _ = writeln!(file, "{}{}{}", kernel_level::INFO, LOG_PREFIX, message);
     }
 }
+
+/// Path to kernel printk rate limit control files
+const PRINTK_RATELIMIT_PATH: &str = "/proc/sys/kernel/printk_ratelimit";
+const PRINTK_RATELIMIT_BURST_PATH: &str = "/proc/sys/kernel/printk_ratelimit_burst";
+
+/// Path to the printk devkmsg control file
+const PRINTK_DEVKMSG_PATH: &str = "/proc/sys/kernel/printk_devkmsg";
+
+/// Saved rate limit values for restoration
+static SAVED_RATELIMIT: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+/// RAII guard that re-enables kmsg rate limiting when dropped.
+///
+/// Guarantees restoration on all exit paths including early error returns.
+pub struct KmsgRatelimitGuard;
+
+impl Drop for KmsgRatelimitGuard {
+    fn drop(&mut self) {
+        enable_kmsg_ratelimit();
+    }
+}
+
+/// Disable kernel message rate limiting for the duration of an operation.
+///
+/// Saves the current ratelimit and burst values and zeroes them out so
+/// that high-volume output (e.g. fsck) is not suppressed in dmesg.
+/// Call `enable_kmsg_ratelimit` (or drop `KmsgRatelimitGuard`) to restore.
+pub fn disable_kmsg_ratelimit() {
+    let ratelimit = match std::fs::read_to_string(PRINTK_RATELIMIT_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            log::warn!("Failed to read {PRINTK_RATELIMIT_PATH}: {e}; skipping ratelimit save");
+            return;
+        }
+    };
+    let burst = match std::fs::read_to_string(PRINTK_RATELIMIT_BURST_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            log::warn!(
+                "Failed to read {PRINTK_RATELIMIT_BURST_PATH}: {e}; skipping ratelimit save"
+            );
+            return;
+        }
+    };
+
+    if let Ok(mut saved) = SAVED_RATELIMIT.lock() {
+        *saved = Some((ratelimit, burst));
+    } else {
+        log::debug!(
+            "SAVED_RATELIMIT mutex poisoned; original ratelimit values will not be restored"
+        );
+    }
+
+    let _ = std::fs::write(PRINTK_RATELIMIT_PATH, "0");
+    let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, "0");
+}
+
+/// Re-enable kernel message rate limiting by restoring previously saved values.
+fn enable_kmsg_ratelimit() {
+    if let Ok(mut saved) = SAVED_RATELIMIT.lock()
+        && let Some((ratelimit, burst)) = saved.take()
+    {
+        let _ = std::fs::write(PRINTK_RATELIMIT_PATH, ratelimit);
+        let _ = std::fs::write(PRINTK_RATELIMIT_BURST_PATH, burst);
+    }
+}
+
+/// Disable per-message rate limiting for /dev/kmsg writes.
+///
+/// The kernel rate-limits messages written to /dev/kmsg by default. During
+/// early init we want all messages logged without suppression.
+/// Best-effort: failures are silently ignored.
+pub fn disable_printk_ratelimit() {
+    let _ = std::fs::write(PRINTK_DEVKMSG_PATH, "on\n");
+}
