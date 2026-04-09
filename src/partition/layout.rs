@@ -48,7 +48,7 @@ impl PartitionLayout {
 
     /// Check if current root is rootA (partition 2)
     fn is_root_a(&self) -> bool {
-        partition_suffix(&self.device.root_partition) == PARTITION_NUM_ROOT_A
+        partition_suffix(&self.device.root_partition) == Some(PARTITION_NUM_ROOT_A)
     }
 
     /// Get the current root partition path (rootA or rootB based on boot).
@@ -105,18 +105,18 @@ const PARTITION_NUM_DATA: u32 = 8;
 
 /// Parse the trailing numeric partition suffix from a device path.
 ///
-/// Examples: `sda2` → 2, `mmcblk0p3` → 3, `nvme0n1p12` → 12.
-/// Returns 0 if the suffix cannot be parsed.
+/// Examples: `sda2` → Some(2), `mmcblk0p3` → Some(3), `nvme0n1p12` → Some(12).
+/// Returns None if the path has no file name or no trailing digit suffix.
 ///
 /// Uses the *trailing* digit run, not the first digit found, so that devices
 /// like `mmcblk0p2` (which contain digits in the base name) are handled correctly.
-fn partition_suffix(path: &std::path::Path) -> u32 {
-    let s = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+fn partition_suffix(path: &std::path::Path) -> Option<u32> {
+    let s = path.file_name().and_then(|s| s.to_str())?;
     let digit_start = s
         .rfind(|c: char| !c.is_ascii_digit())
         .map(|i| i + 1)
         .unwrap_or(0);
-    s[digit_start..].parse().unwrap_or(0)
+    s[digit_start..].parse().ok()
 }
 
 /// Build the partition map for the given device.
@@ -139,7 +139,7 @@ fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
-    let is_root_a = partition_suffix(&device.root_partition) == PARTITION_NUM_ROOT_A;
+    let is_root_a = partition_suffix(&device.root_partition) == Some(PARTITION_NUM_ROOT_A);
     partitions.insert(
         partition_names::ROOT_CURRENT.to_string(),
         if is_root_a {
@@ -329,10 +329,13 @@ mod tests {
 
     #[test]
     fn test_partition_suffix() {
-        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda2")), 2);
-        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p2")), 2);
-        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p3")), 3);
-        assert_eq!(partition_suffix(&PathBuf::from("/dev/nvme0n1p12")), 12);
-        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda")), 0);
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda2")), Some(2));
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p2")), Some(2));
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/mmcblk0p3")), Some(3));
+        assert_eq!(
+            partition_suffix(&PathBuf::from("/dev/nvme0n1p12")),
+            Some(12)
+        );
+        assert_eq!(partition_suffix(&PathBuf::from("/dev/sda")), None);
     }
 }
