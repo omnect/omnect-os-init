@@ -80,7 +80,7 @@ pub fn mount_partitions(
     ))?;
     log::info!("Mounted rootfs at {}", rootfs.display());
 
-    // Mount boot partition — skip if already mounted (idempotent guard).
+    // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
     if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
