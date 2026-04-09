@@ -7,7 +7,12 @@
 use std::path::PathBuf;
 
 use omnect_os_init::partition::layout::PartitionLayout;
-use omnect_os_init::partition::{RootDevice, partition_names, root_device_from_blkid};
+use omnect_os_init::partition::{RootDevice, partition_names};
+
+#[cfg(feature = "uboot")]
+use omnect_os_init::partition::parse_device_path;
+#[cfg(feature = "grub")]
+use omnect_os_init::partition::root_device_from_blkid;
 
 #[cfg(feature = "gpt")]
 use omnect_os_init::partition::device::parse_cmdline_param;
@@ -20,6 +25,7 @@ use omnect_os_init::partition::device::parse_cmdline_param;
 // 6a: GRUB pipeline — root_device_from_blkid
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_sata_root_a() {
     let rd = root_device_from_blkid("/dev/sda1", 2).unwrap();
@@ -28,6 +34,7 @@ fn test_grub_sata_root_a() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/sda2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_sata_root_b() {
     let rd = root_device_from_blkid("/dev/sda1", 3).unwrap();
@@ -36,6 +43,7 @@ fn test_grub_sata_root_b() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/sda3"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_nvme_root_a() {
     let rd = root_device_from_blkid("/dev/nvme0n1p1", 2).unwrap();
@@ -44,6 +52,7 @@ fn test_grub_nvme_root_a() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/nvme0n1p2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_nvme_root_b() {
     let rd = root_device_from_blkid("/dev/nvme0n1p1", 3).unwrap();
@@ -52,6 +61,7 @@ fn test_grub_nvme_root_b() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/nvme0n1p3"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_nvme_multi_namespace() {
     let rd = root_device_from_blkid("/dev/nvme1n2p1", 2).unwrap();
@@ -60,6 +70,7 @@ fn test_grub_nvme_multi_namespace() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/nvme1n2p2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_emmc() {
     let rd = root_device_from_blkid("/dev/mmcblk0p1", 2).unwrap();
@@ -68,6 +79,7 @@ fn test_grub_emmc() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/mmcblk0p2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_sd_second_slot() {
     let rd = root_device_from_blkid("/dev/mmcblk1p1", 2).unwrap();
@@ -76,6 +88,7 @@ fn test_grub_sd_second_slot() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/mmcblk1p2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_usb_sata_naming() {
     let rd = root_device_from_blkid("/dev/sdb1", 2).unwrap();
@@ -84,6 +97,7 @@ fn test_grub_usb_sata_naming() {
     assert_eq!(rd.root_partition, PathBuf::from("/dev/sdb2"));
 }
 
+#[cfg(feature = "grub")]
 #[test]
 fn test_grub_virtio() {
     let rd = root_device_from_blkid("/dev/vda1", 2).unwrap();
@@ -93,35 +107,33 @@ fn test_grub_virtio() {
 }
 
 // ---------------------------------------------------------------------------
-// 6b: U-Boot pipeline — split_partition_suffix via RootDevice construction
+// 6b: U-Boot pipeline — device_from_path
 //
-// The U-Boot path calls device_from_path which is not pub; test the same
-// logic via root_device_from_blkid using the full root partition path as
-// the boot_part_dev argument with part_num equal to the partition's own
-// number (boot and root are the same call site in the pure function).
+// The U-Boot path uses device_from_path which takes the full root= device path.
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "uboot")]
 #[test]
 fn test_uboot_emmc_root_a() {
-    // U-Boot passes root=/dev/mmcblk0p2 — boot part is the same device.
-    // We verify the suffix-splitting logic produces the right base + sep.
-    let rd = root_device_from_blkid("/dev/mmcblk0p2", 2).unwrap();
+    let rd = parse_device_path("/dev/mmcblk0p2").unwrap();
     assert_eq!(rd.base, PathBuf::from("/dev/mmcblk0"));
     assert_eq!(rd.partition_sep, "p");
     assert_eq!(rd.root_partition, PathBuf::from("/dev/mmcblk0p2"));
 }
 
+#[cfg(feature = "uboot")]
 #[test]
 fn test_uboot_emmc_root_b() {
-    let rd = root_device_from_blkid("/dev/mmcblk0p3", 3).unwrap();
+    let rd = parse_device_path("/dev/mmcblk0p3").unwrap();
     assert_eq!(rd.base, PathBuf::from("/dev/mmcblk0"));
     assert_eq!(rd.partition_sep, "p");
     assert_eq!(rd.root_partition, PathBuf::from("/dev/mmcblk0p3"));
 }
 
+#[cfg(feature = "uboot")]
 #[test]
 fn test_uboot_sd_root_b() {
-    let rd = root_device_from_blkid("/dev/mmcblk1p3", 3).unwrap();
+    let rd = parse_device_path("/dev/mmcblk1p3").unwrap();
     assert_eq!(rd.base, PathBuf::from("/dev/mmcblk1"));
     assert_eq!(rd.partition_sep, "p");
     assert_eq!(rd.root_partition, PathBuf::from("/dev/mmcblk1p3"));
@@ -180,7 +192,7 @@ fn test_full_pipeline_x86_nvme_grub_root_b() {
 #[cfg(feature = "dos")]
 #[test]
 fn test_full_pipeline_arm_emmc_uboot_root_a() {
-    let rd = root_device_from_blkid("/dev/mmcblk0p2", 2).unwrap();
+    let rd = parse_device_path("/dev/mmcblk0p2").unwrap();
     let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk0"));
@@ -194,7 +206,7 @@ fn test_full_pipeline_arm_emmc_uboot_root_a() {
 #[cfg(feature = "dos")]
 #[test]
 fn test_full_pipeline_arm_sd_uboot_root_b() {
-    let rd = root_device_from_blkid("/dev/mmcblk1p3", 3).unwrap();
+    let rd = parse_device_path("/dev/mmcblk1p3").unwrap();
     let layout = build_layout(rd);
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk1"));

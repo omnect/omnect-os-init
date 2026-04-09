@@ -202,23 +202,32 @@ pub fn root_device_from_blkid(boot_part_dev: &str, part_num: u32) -> Result<Root
     })
 }
 
-/// Builds a `RootDevice` from a full `root=/dev/<device>` path (U-Boot boot path).
+/// Parses a `root=/dev/<device>` path string into a `RootDevice` without waiting
+/// for the device node to appear. Used directly in tests and by `device_from_path`.
 #[cfg(feature = "uboot")]
-fn device_from_path(path: &str) -> Result<RootDevice> {
+pub fn parse_device_path(path: &str) -> Result<RootDevice> {
     let root_partition = PathBuf::from(path);
-    wait_for_device(&root_partition)?;
     let name = root_partition
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| PartitionError::DeviceDetection(format!("invalid device path: {}", path)))?;
     let (base_name, sep) = split_partition_suffix(name)?;
     let base = PathBuf::from("/dev").join(&base_name);
-    log::info!("root device from root= (U-Boot): {}", base.display());
     Ok(RootDevice {
         base,
         partition_sep: sep,
         root_partition,
     })
+}
+
+/// Builds a `RootDevice` from a full `root=/dev/<device>` path (U-Boot boot path).
+#[cfg(feature = "uboot")]
+pub fn device_from_path(path: &str) -> Result<RootDevice> {
+    let root_partition = PathBuf::from(path);
+    wait_for_device(&root_partition)?;
+    let rd = parse_device_path(path)?;
+    log::info!("root device from root= (U-Boot): {}", rd.base.display());
+    Ok(rd)
 }
 
 /// Splits a partition device name into `(base_name, separator)`.
