@@ -135,7 +135,9 @@ pub fn create_ods_runtime_files(
     set_mode(&ods_dir.join(ODS_STATUS_FILE), FILE_MODE_RESTRICTED)?;
 
     // Handle update validation — requires a functional bootloader.
-    // Skipped if bootloader is unavailable (e.g. missing grubenv on first boot).
+    // grubenv is always pre-provisioned in the Yocto image and present on first
+    // boot; a None bootloader here indicates a corrupted boot partition, not a
+    // normal first-boot condition.
     if let Some(bl) = bootloader {
         handle_update_validation(ods_dir, bl, uid, gid)?;
     }
@@ -184,6 +186,9 @@ fn handle_update_validation(
     let validate_update = match bootloader.get_env(vars::OMNECT_VALIDATE_UPDATE) {
         Ok(val) => val,
         Err(e) => {
+            // get_env returns Ok(None) when the variable is absent, so this
+            // warn fires only on actual bootloader communication errors, not on
+            // normal (non-update) boots where the variable is simply unset.
             log::warn!(
                 "failed to read omnect_validate_update from bootloader: {}",
                 e
@@ -193,7 +198,7 @@ fn handle_update_validation(
     };
 
     if let Some(value) = validate_update {
-        if value == "1" || value.to_lowercase() == "true" {
+        if value == "1" {
             let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
             fs::write(&trigger_path, "1").map_err(|e| {
                 InitramfsError::Io(std::io::Error::other(format!(
@@ -232,7 +237,7 @@ fn handle_update_validation(
     };
 
     if let Some(value) = bootloader_updated
-        && (value == "1" || value.to_lowercase() == "true")
+        && value == "1"
     {
         let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);
         fs::write(&marker_path, "1").map_err(|e| {
@@ -464,14 +469,15 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_update_validation_value_true() {
+    fn test_handle_update_validation_value_true_not_accepted() {
+        // Only "1" is a valid truthy value; "true" must not create the trigger file.
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
             .with_env(vars::OMNECT_VALIDATE_UPDATE, "true");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
-        assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
     }
 
     #[test]
