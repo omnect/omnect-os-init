@@ -134,10 +134,7 @@ pub fn create_ods_runtime_files(
     set_ownership(&ods_dir.join(ODS_STATUS_FILE), uid, gid)?;
     set_mode(&ods_dir.join(ODS_STATUS_FILE), FILE_MODE_RESTRICTED)?;
 
-    // Handle update validation — requires a functional bootloader.
-    // grubenv is always pre-provisioned in the Yocto image and present on first
-    // boot; a None bootloader here indicates a corrupted boot partition, not a
-    // normal first-boot condition.
+    // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
         handle_update_validation(ods_dir, bl, uid, gid)?;
     }
