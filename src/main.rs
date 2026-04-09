@@ -84,7 +84,7 @@ fn run() -> Result<()> {
     );
 
     // Detect partition layout
-    let layout = PartitionLayout::new(root_device);
+    let layout = PartitionLayout::new(root_device)?;
 
     // Create /dev/omnect/* symlinks
     create_omnect_symlinks(&layout)?;

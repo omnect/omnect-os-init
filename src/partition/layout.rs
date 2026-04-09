@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::error::PartitionError;
 use crate::partition::RootDevice;
 
 /// Partition names used in omnect-os
@@ -36,9 +37,9 @@ impl PartitionLayout {
     /// Builds the partition map for the given root device.
     ///
     /// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
-    pub fn new(device: RootDevice) -> Self {
-        let partitions = build_partition_map(&device);
-        Self { partitions, device }
+    pub fn new(device: RootDevice) -> crate::partition::Result<Self> {
+        let partitions = build_partition_map(&device)?;
+        Ok(Self { partitions, device })
     }
 
     /// Get the device path for a named partition
@@ -123,7 +124,7 @@ fn partition_suffix(path: &std::path::Path) -> Option<u32> {
 ///
 /// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
 /// Exactly one of `gpt` or `dos` must be enabled; build.rs enforces this.
-fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
+fn build_partition_map(device: &RootDevice) -> crate::partition::Result<HashMap<String, PathBuf>> {
     let mut partitions = HashMap::new();
 
     partitions.insert(
@@ -139,15 +140,16 @@ fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
-    let is_root_a = partition_suffix(&device.root_partition) == Some(PARTITION_NUM_ROOT_A);
-    partitions.insert(
-        partition_names::ROOT_CURRENT.to_string(),
-        if is_root_a {
-            device.partition_path(PARTITION_NUM_ROOT_A)
-        } else {
-            device.partition_path(PARTITION_NUM_ROOT_B)
-        },
-    );
+    let root_current = match partition_suffix(&device.root_partition) {
+        Some(n) if n == PARTITION_NUM_ROOT_A => device.partition_path(PARTITION_NUM_ROOT_A),
+        Some(n) if n == PARTITION_NUM_ROOT_B => device.partition_path(PARTITION_NUM_ROOT_B),
+        _ => {
+            return Err(PartitionError::UnknownRootPartition {
+                path: device.root_partition.clone(),
+            });
+        }
+    };
+    partitions.insert(partition_names::ROOT_CURRENT.to_string(), root_current);
 
     #[cfg(feature = "dos")]
     partitions.insert(
@@ -172,7 +174,7 @@ fn build_partition_map(device: &RootDevice) -> HashMap<String, PathBuf> {
         device.partition_path(PARTITION_NUM_DATA),
     );
 
-    partitions
+    Ok(partitions)
 }
 
 #[cfg(test)]
@@ -207,7 +209,7 @@ mod tests {
     #[cfg(feature = "gpt")]
     #[test]
     fn test_partition_map_gpt_sata() {
-        let map = build_partition_map(&sda_root_a());
+        let map = build_partition_map(&sda_root_a()).unwrap();
 
         assert_eq!(
             map.get(partition_names::BOOT),
@@ -243,7 +245,7 @@ mod tests {
     #[cfg(feature = "dos")]
     #[test]
     fn test_partition_map_dos_sata() {
-        let map = build_partition_map(&sda_root_a());
+        let map = build_partition_map(&sda_root_a()).unwrap();
 
         assert_eq!(
             map.get(partition_names::BOOT),
@@ -282,7 +284,7 @@ mod tests {
     #[cfg(feature = "gpt")]
     #[test]
     fn test_partition_map_gpt_nvme() {
-        let map = build_partition_map(&nvme_root_a());
+        let map = build_partition_map(&nvme_root_a()).unwrap();
 
         assert_eq!(
             map.get(partition_names::BOOT),
@@ -301,7 +303,7 @@ mod tests {
     #[cfg(feature = "dos")]
     #[test]
     fn test_partition_map_dos_mmc() {
-        let map = build_partition_map(&mmc_root_b());
+        let map = build_partition_map(&mmc_root_b()).unwrap();
 
         assert_eq!(
             map.get(partition_names::BOOT),
@@ -316,14 +318,14 @@ mod tests {
     #[test]
     fn test_root_current_root_a() {
         let device = sda_root_a();
-        let layout = PartitionLayout::new(device);
+        let layout = PartitionLayout::new(device).unwrap();
         assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
     }
 
     #[test]
     fn test_root_current_root_b() {
         let device = mmc_root_b();
-        let layout = PartitionLayout::new(device);
+        let layout = PartitionLayout::new(device).unwrap();
         assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p3"));
     }
 

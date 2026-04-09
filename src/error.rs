@@ -108,6 +108,9 @@ pub enum PartitionError {
     #[error("symlink removal failed for {}: {reason}", path.display())]
     SymlinkRemoveFailed { path: PathBuf, reason: String },
 
+    #[error("unknown root partition {}: expected root_a or root_b", path.display())]
+    UnknownRootPartition { path: PathBuf },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

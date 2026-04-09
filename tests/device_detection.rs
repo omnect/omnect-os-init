@@ -144,7 +144,7 @@ fn test_uboot_sd_root_b() {
 // ---------------------------------------------------------------------------
 
 fn build_layout(rd: RootDevice) -> PartitionLayout {
-    PartitionLayout::new(rd)
+    PartitionLayout::new(rd).unwrap()
 }
 
 #[cfg(feature = "gpt")]
