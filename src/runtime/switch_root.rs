@@ -19,8 +19,8 @@ use crate::error::{InitramfsError, Result};
 const DEFAULT_INIT: &str = "/sbin/init";
 
 /// Switch root to the new rootfs and exec init
-pub fn switch_root(new_root: &Path, init: Option<&str>) -> Result<()> {
-    let init_path = init.unwrap_or(DEFAULT_INIT);
+pub fn switch_root(new_root: &Path) -> Result<()> {
+    let init_path = DEFAULT_INIT;
 
     log::info!(
         "Switching root to {} with init {}",

@@ -151,8 +151,7 @@ fn run() -> Result<()> {
     mount_manager.release();
 
     // Switch root to final rootfs
-    let init = config.cmdline_params.get("init").map(String::as_str);
-    switch_root(&config.rootfs_dir, init)?;
+    switch_root(&config.rootfs_dir)?;
 
     // This should never be reached
     Ok(())
