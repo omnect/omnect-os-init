@@ -11,7 +11,8 @@ use nix::mount::MsFlags;
 use crate::bootloader::Bootloader;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
-    MountManager, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount_points,
+    MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount, mount_points,
+    mount_readwrite, mount_tmpfs,
 };
 use crate::partition::{PartitionLayout, partition_names};
 use crate::runtime::OdsStatus;
@@ -52,12 +53,10 @@ pub fn fsck_and_record(
 
 /// Mount all required partitions in the correct order.
 pub fn mount_partitions(
-    mm: &mut MountManager,
     layout: &PartitionLayout,
     rootfs: &Path,
     ods_status: &mut OdsStatus,
 ) -> crate::error::Result<()> {
-
     // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout
         .partitions
@@ -82,7 +81,7 @@ pub fn mount_partitions(
     // rootCurrent either: the kernel's own ext4 journal replay is the correct recovery
     // mechanism. Running fsck -y before mount can interfere with journal replay and
     // cause EUCLEAN on a filesystem that the kernel could have mounted cleanly.
-    mm.mount(MountPoint::new(
+    mount(MountPoint::new(
         root_dev,
         rootfs,
         MountOptions::ext4_readonly().noatime().nodiratime(),
@@ -105,14 +104,14 @@ pub fn mount_partitions(
             }));
         }
         fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
-        mm.mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+        mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition read-only
     if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
         fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
-        mm.mount(MountPoint::new(
+        mount(MountPoint::new(
             factory_dev,
             &factory_mount,
             MountOptions::ext4_readonly().noatime().nodiratime(),
@@ -123,7 +122,7 @@ pub fn mount_partitions(
     if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
         fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
-        mm.mount(MountPoint::new(
+        mount(MountPoint::new(
             cert_dev,
             &cert_mount,
             MountOptions::ext4_readwrite().noatime().nodiratime(),
@@ -134,7 +133,7 @@ pub fn mount_partitions(
     if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
         fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
-        mm.mount(MountPoint::new(
+        mount(MountPoint::new(
             etc_dev,
             &etc_mount,
             MountOptions::ext4_readwrite().noatime().nodiratime(),
@@ -145,7 +144,7 @@ pub fn mount_partitions(
     if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
         fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
-        mm.mount(MountPoint::new(
+        mount(MountPoint::new(
             data_dev,
             &data_mount,
             MountOptions::ext4_readwrite().noatime().nodiratime(),
@@ -154,7 +153,7 @@ pub fn mount_partitions(
 
     // /var/volatile provides a writable mount for volatile data under the read-only rootfs
     let var_volatile = rootfs.join(mount_points::VAR_VOLATILE);
-    mm.mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
+    mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
 
     // /run is NOT mounted here: the initramfs /run tmpfs (mounted by
     // mount_essential_filesystems) is moved into the new root by switch_root

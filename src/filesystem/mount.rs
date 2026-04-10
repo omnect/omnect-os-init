@@ -1,11 +1,11 @@
-//! Mount operations with tracking for cleanup
+//! Mount operations
 //!
-//! Provides a MountManager that tracks all mounts and can unmount them
-//! in reverse order on error or cleanup.
+//! Provides free functions for performing mount operations, along with
+//! `MountOptions` and `MountPoint` builder types for composing mount flags.
 
 use std::path::{Path, PathBuf};
 
-use nix::mount::{MntFlags, MsFlags, mount, umount2};
+use nix::mount::{MsFlags, mount as nix_mount};
 
 use crate::error::FilesystemError;
 use crate::filesystem::Result;
@@ -168,227 +168,94 @@ impl MountPoint {
     }
 }
 
-/// Manages filesystem mounts with tracking for cleanup
-///
-/// Tracks all mounts made and provides methods to unmount them
-/// in reverse order (LIFO) for proper cleanup.
-pub struct MountManager {
-    mounts: Vec<MountPoint>,
+/// Mount a filesystem described by `mp`.
+pub fn mount(mp: MountPoint) -> Result<()> {
+    let source: Option<&Path> = if mp.source.as_os_str().is_empty() {
+        None
+    } else {
+        Some(&mp.source)
+    };
+
+    let fstype: Option<&str> = mp.options.fstype.as_deref();
+    let data: Option<&str> = mp.options.data.as_deref();
+
+    nix_mount(source, &mp.target, fstype, mp.options.flags, data).map_err(|e| {
+        FilesystemError::MountFailed {
+            src_path: mp.source.clone(),
+            target: mp.target.clone(),
+            reason: e.to_string(),
+        }
+    })?;
+
+    log::info!(
+        "Mounted {} on {} ({})",
+        mp.source.display(),
+        mp.target.display(),
+        mp.options.fstype.as_deref().unwrap_or("<none>")
+    );
+
+    Ok(())
 }
 
-impl MountManager {
-    /// Create a new mount manager
-    pub fn new() -> Self {
-        Self { mounts: Vec::new() }
-    }
-
-    /// Mount a filesystem and track it
-    pub fn mount(&mut self, mp: MountPoint) -> Result<()> {
-        // Perform the mount
-        let source: Option<&Path> = if mp.source.as_os_str().is_empty() {
-            None
-        } else {
-            Some(&mp.source)
-        };
-
-        let fstype: Option<&str> = mp.options.fstype.as_deref();
-        let data: Option<&str> = mp.options.data.as_deref();
-
-        mount(source, &mp.target, fstype, mp.options.flags, data).map_err(|e| {
-            FilesystemError::MountFailed {
-                src_path: mp.source.clone(),
-                target: mp.target.clone(),
-                reason: e.to_string(),
-            }
-        })?;
-
-        log::info!(
-            "Mounted {} on {} ({})",
-            mp.source.display(),
-            mp.target.display(),
-            mp.options.fstype.as_deref().unwrap_or("<none>")
-        );
-
-        self.mounts.push(mp);
-        Ok(())
-    }
-
-    /// Mount a filesystem read-only
-    pub fn mount_readonly(
-        &mut self,
-        source: impl Into<PathBuf>,
-        target: impl Into<PathBuf>,
-        fstype: &str,
-    ) -> Result<()> {
-        let options = MountOptions {
-            fstype: Some(fstype.to_string()),
-            flags: flags::RDONLY,
-            data: None,
-        };
-        self.mount(MountPoint::new(source, target, options))
-    }
-
-    /// Mount a filesystem read-write
-    pub fn mount_readwrite(
-        &mut self,
-        source: impl Into<PathBuf>,
-        target: impl Into<PathBuf>,
-        fstype: &str,
-    ) -> Result<()> {
-        let options = MountOptions {
+/// Mount a filesystem read-write.
+pub fn mount_readwrite(
+    source: impl Into<PathBuf>,
+    target: impl Into<PathBuf>,
+    fstype: &str,
+) -> Result<()> {
+    mount(MountPoint::new(
+        source,
+        target,
+        MountOptions {
             fstype: Some(fstype.to_string()),
             flags: MsFlags::empty(),
             data: None,
-        };
-        self.mount(MountPoint::new(source, target, options))
-    }
+        },
+    ))
+}
 
-    /// Mount a tmpfs filesystem
-    pub fn mount_tmpfs(
-        &mut self,
-        target: impl Into<PathBuf>,
-        flags: MsFlags,
-        data: Option<&str>,
-    ) -> Result<()> {
-        let options = MountOptions {
+/// Mount a tmpfs filesystem.
+pub fn mount_tmpfs(target: impl Into<PathBuf>, flags: MsFlags, data: Option<&str>) -> Result<()> {
+    mount(MountPoint::new(
+        "tmpfs",
+        target,
+        MountOptions {
             fstype: Some(fstype::TMPFS.to_string()),
             flags,
             data: data.map(|s| s.to_string()),
-        };
-        self.mount(MountPoint::new("tmpfs", target, options))
-    }
-
-    /// Create a bind mount
-    pub fn mount_bind(
-        &mut self,
-        source: impl Into<PathBuf>,
-        target: impl Into<PathBuf>,
-    ) -> Result<()> {
-        self.mount(MountPoint::new(source, target, MountOptions::bind()))
-    }
-
-    /// Create a private bind mount (doesn't propagate submounts)
-    pub fn mount_bind_private(
-        &mut self,
-        source: impl Into<PathBuf>,
-        target: impl Into<PathBuf>,
-    ) -> Result<()> {
-        let source = source.into();
-        let target = target.into();
-
-        // First, create the bind mount
-        self.mount(MountPoint::new(
-            source.clone(),
-            target.clone(),
-            MountOptions::bind(),
-        ))?;
-
-        // Then make it private (remount with MS_PRIVATE)
-        self.make_private(&target)?;
-
-        Ok(())
-    }
-
-    /// Make a mount point private (no propagation)
-    pub fn make_private(&mut self, target: &Path) -> Result<()> {
-        mount(
-            None::<&str>,
-            target,
-            None::<&str>,
-            flags::PRIVATE | flags::REC,
-            None::<&str>,
-        )
-        .map_err(|e| FilesystemError::MountFailed {
-            src_path: PathBuf::new(),
-            target: target.to_path_buf(),
-            reason: format!("Failed to make mount private: {}", e),
-        })?;
-
-        log::debug!("Made {} private", target.display());
-        Ok(())
-    }
-
-    /// Unmount a specific target
-    pub fn umount(&mut self, target: &Path) -> Result<()> {
-        umount2(target, MntFlags::empty()).map_err(|e| FilesystemError::UnmountFailed {
-            target: target.to_path_buf(),
-            reason: e.to_string(),
-        })?;
-
-        // Remove from tracking
-        self.mounts.retain(|mp| mp.target != target);
-
-        log::info!("Unmounted {}", target.display());
-        Ok(())
-    }
-
-    /// Unmount all tracked mounts in reverse order
-    ///
-    /// Continues on error, collecting all errors.
-    pub fn umount_all(&mut self) -> Result<()> {
-        let mut errors = Vec::new();
-
-        // Unmount in reverse order (LIFO)
-        while let Some(mp) = self.mounts.pop() {
-            if let Err(e) = umount2(&mp.target, MntFlags::empty()) {
-                log::warn!("Failed to unmount {}: {}", mp.target.display(), e);
-                errors.push(FilesystemError::UnmountFailed {
-                    target: mp.target,
-                    reason: e.to_string(),
-                });
-            } else {
-                log::info!("Unmounted {}", mp.target.display());
-            }
-        }
-
-        if let Some(first_error) = errors.into_iter().next() {
-            Err(first_error)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Get the number of tracked mounts
-    pub fn mount_count(&self) -> usize {
-        self.mounts.len()
-    }
-
-    /// Check if a path is currently mounted (tracked)
-    pub fn is_mounted(&self, target: &Path) -> bool {
-        self.mounts.iter().any(|mp| mp.target == target)
-    }
-
-    /// Get all tracked mount points
-    pub fn mounts(&self) -> &[MountPoint] {
-        &self.mounts
-    }
-
-    /// Forget all tracked mounts without unmounting them.
-    ///
-    /// Call this immediately before exec-ing into the new root so that
-    /// the Drop impl does not tear down mounts that must survive into
-    /// the new userspace.
-    pub fn release(&mut self) {
-        self.mounts.clear();
-    }
+        },
+    ))
 }
 
-impl Default for MountManager {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Create a bind mount.
+pub fn mount_bind(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Result<()> {
+    mount(MountPoint::new(source, target, MountOptions::bind()))
 }
 
-impl Drop for MountManager {
-    fn drop(&mut self) {
-        if !self.mounts.is_empty() {
-            log::warn!(
-                "MountManager dropped with {} active mounts - unmounting",
-                self.mounts.len()
-            );
-            let _ = self.umount_all();
-        }
-    }
+/// Create a private bind mount (propagation isolated).
+pub fn mount_bind_private(source: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Result<()> {
+    let source = source.into();
+    let target = target.into();
+    mount(MountPoint::new(
+        source,
+        target.clone(),
+        MountOptions::bind(),
+    ))?;
+    // Isolate propagation so overlay mounts on top don't bleed into adjacent namespaces.
+    nix_mount(
+        None::<&str>,
+        &target,
+        None::<&str>,
+        flags::PRIVATE | flags::REC,
+        None::<&str>,
+    )
+    .map_err(|e| FilesystemError::MountFailed {
+        src_path: PathBuf::new(),
+        target: target.clone(),
+        reason: format!("Failed to make mount private: {e}"),
+    })?;
+    log::debug!("Made {} private", target.display());
+    Ok(())
 }
 
 /// Check if a path is mounted by reading /proc/mounts
@@ -447,48 +314,5 @@ mod tests {
         assert_eq!(mp.source, PathBuf::from("/dev/sda1"));
         assert_eq!(mp.target, PathBuf::from("/mnt/boot"));
         assert_eq!(mp.options.fstype, Some("vfat".to_string()));
-    }
-
-    #[test]
-    fn test_mount_manager_new() {
-        let mm = MountManager::new();
-        assert_eq!(mm.mount_count(), 0);
-    }
-
-    #[test]
-    fn test_mount_manager_tracking() {
-        let mut mm = MountManager::new();
-
-        // Manually add a mount point for testing (without actually mounting)
-        mm.mounts.push(MountPoint::new(
-            "/dev/sda1",
-            "/mnt/test",
-            MountOptions::ext4_readonly(),
-        ));
-
-        assert_eq!(mm.mount_count(), 1);
-        assert!(mm.is_mounted(Path::new("/mnt/test")));
-        assert!(!mm.is_mounted(Path::new("/mnt/other")));
-    }
-
-    #[test]
-    fn test_mount_manager_mounts_accessor() {
-        let mut mm = MountManager::new();
-
-        mm.mounts.push(MountPoint::new(
-            "/dev/sda1",
-            "/mnt/a",
-            MountOptions::default(),
-        ));
-        mm.mounts.push(MountPoint::new(
-            "/dev/sda2",
-            "/mnt/b",
-            MountOptions::default(),
-        ));
-
-        let mounts = mm.mounts();
-        assert_eq!(mounts.len(), 2);
-        assert_eq!(mounts[0].target, PathBuf::from("/mnt/a"));
-        assert_eq!(mounts[1].target, PathBuf::from("/mnt/b"));
     }
 }

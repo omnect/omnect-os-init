@@ -14,7 +14,7 @@ use omnect_os_init::{
     bootloader::create_bootloader,
     error::{FilesystemError, InitramfsError},
     filesystem::{
-        MountManager, OverlayConfig, mount_partitions, persist_fsck_results, setup_data_overlay,
+        OverlayConfig, mount_partitions, persist_fsck_results, setup_data_overlay,
         setup_etc_overlay, setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
@@ -64,12 +64,6 @@ fn run() -> Result<()> {
 
     let rootfs = std::path::Path::new(ROOTFS_DIR);
 
-    // A single MountManager accumulates all mounts (partitions + overlayfs) so
-    // they can all be disarmed with release() before switch_root hands control
-    // to the new root. Passing it into mount_partitions (and later overlay setup)
-    // ensures every mount is tracked in one place.
-    let mut mount_manager = MountManager::new();
-
     // Detect root device
     info!("Detecting root device...");
     let root_device = detect_root_device()?;
@@ -91,7 +85,7 @@ fn run() -> Result<()> {
     // Run fsck on partitions and mount them.
     // Boot partition must be mounted before create_bootloader() so that
     // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    let mount_result = mount_partitions(&mut mount_manager, &layout, rootfs, &mut ods_status);
+    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
 
     // Attempt to create bootloader and persist fsck results before propagating any
     // mount error. This ensures results are stored even on the FsckRequiresReboot
@@ -125,14 +119,14 @@ fn run() -> Result<()> {
     };
 
     // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(&mut mount_manager, rootfs)?;
+    setup_raw_rootfs_mount(rootfs)?;
 
     // Setup overlays
-    let overlay_config = OverlayConfig::new(rootfs)
-        .with_persistent_var_log(cfg!(feature = "persistent-var-log"));
+    let overlay_config =
+        OverlayConfig::new(rootfs).with_persistent_var_log(cfg!(feature = "persistent-var-log"));
 
-    setup_etc_overlay(&mut mount_manager, &overlay_config)?;
-    setup_data_overlay(&mut mount_manager, &overlay_config)?;
+    setup_etc_overlay(&overlay_config)?;
+    setup_data_overlay(&overlay_config)?;
 
     // Create fs-links
     create_fs_links(rootfs)?;
@@ -141,10 +135,6 @@ fn run() -> Result<()> {
     create_ods_runtime_files(&ods_status, bootloader.as_deref(), rootfs)?;
 
     info!("omnect-os-initramfs completed successfully");
-
-    // Release all tracked mounts before exec. The mounts themselves must
-    // survive into the new root; the RAII destructor must not unmount them.
-    mount_manager.release();
 
     // Switch root to final rootfs
     switch_root(rootfs)?;

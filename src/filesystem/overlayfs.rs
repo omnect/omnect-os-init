@@ -13,7 +13,7 @@ use std::process::Command;
 use nix::mount::MsFlags;
 
 use crate::error::FilesystemError;
-use crate::filesystem::{MountManager, MountOptions, MountPoint, Result};
+use crate::filesystem::{MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private};
 
 /// Overlay filesystem type
 const OVERLAY_FSTYPE: &str = "overlay";
@@ -87,7 +87,7 @@ impl OverlayConfig {
 /// - Upper layer: mnt/etc/upper (persistent changes)
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
-pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Result<()> {
+pub fn setup_etc_overlay(config: &OverlayConfig) -> Result<()> {
     let rootfs = &config.rootfs_dir;
     let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
     let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
@@ -115,7 +115,7 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
     }
 
     // Mount the overlay
-    mount_overlay(mm, &lower_dir, &upper_dir, &work_dir, &target)?;
+    mount_overlay(&lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(
         "Setup etc overlay: lower={}, upper={} -> {}",
@@ -134,27 +134,21 @@ pub fn setup_etc_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resul
 /// - Bind mount: data/var/lib -> rootfs/var/lib
 /// - Bind mount: data/local -> rootfs/usr/local
 /// - Optional: data/var/log -> rootfs/var/log (if persistent_var_log enabled)
-pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Result<()> {
+pub fn setup_data_overlay(config: &OverlayConfig) -> Result<()> {
     let rootfs = &config.rootfs_dir;
     let data_mount = rootfs.join(mount_points::DATA_PARTITION);
 
-    setup_home_overlay(mm, rootfs, &data_mount)?;
+    setup_home_overlay(rootfs, &data_mount)?;
 
     bind_mount(
-        mm,
         &data_mount.join(paths::VAR_LIB),
         &rootfs.join(paths::VAR_LIB),
     )?;
     // data partition uses "local" instead of "usr/local"
-    bind_mount(
-        mm,
-        &data_mount.join("local"),
-        &rootfs.join(paths::USR_LOCAL),
-    )?;
+    bind_mount(&data_mount.join("local"), &rootfs.join(paths::USR_LOCAL))?;
 
     if config.persistent_var_log {
         bind_mount(
-            mm,
             &data_mount.join(paths::VAR_LOG),
             &rootfs.join(paths::VAR_LOG),
         )?;
@@ -164,7 +158,7 @@ pub fn setup_data_overlay(mm: &mut MountManager, config: &OverlayConfig) -> Resu
 }
 
 /// Setup home directory overlay
-fn setup_home_overlay(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -> Result<()> {
+fn setup_home_overlay(rootfs: &Path, data_mount: &Path) -> Result<()> {
     let home_data = data_mount.join(paths::HOME);
     let upper_dir = home_data.join(overlay_dirs::UPPER);
     let work_dir = home_data.join(overlay_dirs::WORK);
@@ -176,7 +170,7 @@ fn setup_home_overlay(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
     // Mount the overlay with rootfs/home as lower layer
-    mount_overlay(mm, &lower_dir, &upper_dir, &work_dir, &target)?;
+    mount_overlay(&lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(
         "Setup home overlay: lower={}, upper={} -> {}",
@@ -189,22 +183,16 @@ fn setup_home_overlay(mm: &mut MountManager, rootfs: &Path, data_mount: &Path) -
 }
 
 /// Bind mount source -> target, creating both dirs if needed.
-fn bind_mount(mm: &mut MountManager, source: &Path, target: &Path) -> Result<()> {
+fn bind_mount(source: &Path, target: &Path) -> Result<()> {
     ensure_dir(source)?;
     ensure_dir(target)?;
-    mm.mount_bind(source, target)?;
+    mount_bind(source, target)?;
     log::info!("Bind mounted {} -> {}", source.display(), target.display());
     Ok(())
 }
 
 /// Mount an overlayfs
-fn mount_overlay(
-    mm: &mut MountManager,
-    lower: &Path,
-    upper: &Path,
-    work: &Path,
-    target: &Path,
-) -> Result<()> {
+fn mount_overlay(lower: &Path, upper: &Path, work: &Path, target: &Path) -> Result<()> {
     let options = format!(
         "lowerdir={},upperdir={},workdir={},index=off,uuid=off",
         lower.display(),
@@ -218,13 +206,12 @@ fn mount_overlay(
         data: Some(options.clone()),
     };
 
-    mm.mount(MountPoint::new(OVERLAY_FSTYPE, target, mount_opts))
-        .map_err(|e| FilesystemError::OverlayFailed {
+    mount(MountPoint::new(OVERLAY_FSTYPE, target, mount_opts)).map_err(|e| {
+        FilesystemError::OverlayFailed {
             target: target.to_path_buf(),
-            reason: format!("{}: options={}", e, options),
-        })?;
-
-    Ok(())
+            reason: format!("{e}: options={options}"),
+        }
+    })
 }
 
 /// Ensure overlay directories (upper and work) exist
@@ -295,13 +282,14 @@ fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
 ///
 /// Creates a private bind mount at /mnt/rootCurrentPrivate that provides
 /// access to the raw rootfs without overlay modifications.
-pub fn setup_raw_rootfs_mount(mm: &mut MountManager, rootfs_dir: &Path) -> Result<()> {
+pub fn setup_raw_rootfs_mount(rootfs_dir: &Path) -> Result<()> {
     let raw_mount = rootfs_dir.join(mount_points::ROOT_CURRENT_PRIVATE);
 
     ensure_dir(&raw_mount)?;
 
-    // Create private bind mount
-    mm.mount_bind_private(rootfs_dir, &raw_mount)?;
+    // Private bind mount isolates propagation so overlay mounts on top
+    // don't bleed into this raw view of rootfs.
+    mount_bind_private(rootfs_dir, &raw_mount)?;
 
     log::info!(
         "Created raw rootfs mount: {} -> {}",
