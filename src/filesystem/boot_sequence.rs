@@ -9,7 +9,6 @@ use std::{fs, path::Path};
 use nix::mount::MsFlags;
 
 use crate::bootloader::Bootloader;
-use crate::config::Config;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
     MountManager, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount_points,
@@ -55,10 +54,9 @@ pub fn fsck_and_record(
 pub fn mount_partitions(
     mm: &mut MountManager,
     layout: &PartitionLayout,
-    config: &Config,
+    rootfs: &Path,
     ods_status: &mut OdsStatus,
 ) -> crate::error::Result<()> {
-    let rootfs = &config.rootfs_dir;
 
     // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout

@@ -12,7 +12,6 @@ use log::{error, info, warn};
 use omnect_os_init::{
     Result,
     bootloader::create_bootloader,
-    config::Config,
     error::{FilesystemError, InitramfsError},
     filesystem::{
         MountManager, OverlayConfig, mount_partitions, persist_fsck_results, setup_data_overlay,
@@ -28,6 +27,8 @@ use omnect_os_init::{
 const FATAL_ERROR_SLEEP_SECS: u64 = 60;
 const BASH_CMD: &str = "/bin/bash";
 const SH_CMD: &str = "/bin/sh";
+/// Mount point for the real rootfs inside the initramfs.
+const ROOTFS_DIR: &str = "/rootfs";
 
 fn main() {
     // Mount essential filesystems first (/dev, /proc, /sys, /run)
@@ -61,12 +62,7 @@ fn main() {
 fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
-    // Load configuration
-    let config = Config::load()?;
-    info!(
-        "Configuration loaded: rootfs_dir={}",
-        config.rootfs_dir.display()
-    );
+    let rootfs = std::path::Path::new(ROOTFS_DIR);
 
     // A single MountManager accumulates all mounts (partitions + overlayfs) so
     // they can all be disarmed with release() before switch_root hands control
@@ -95,7 +91,7 @@ fn run() -> Result<()> {
     // Run fsck on partitions and mount them.
     // Boot partition must be mounted before create_bootloader() so that
     // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    let mount_result = mount_partitions(&mut mount_manager, &layout, &config, &mut ods_status);
+    let mount_result = mount_partitions(&mut mount_manager, &layout, rootfs, &mut ods_status);
 
     // Attempt to create bootloader and persist fsck results before propagating any
     // mount error. This ensures results are stored even on the FsckRequiresReboot
@@ -105,7 +101,7 @@ fn run() -> Result<()> {
         // Persist fsck results: gzip+base64 encoded output (code + full text) to
         // bootloader env, and full output to data partition log.
         // Non-fatal: failures are logged as warnings.
-        persist_fsck_results(&ods_status, bl.as_mut(), &config.rootfs_dir);
+        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
     } else {
         warn!("Could not create bootloader; fsck results will not be persisted to bootloader env");
     }
@@ -129,20 +125,20 @@ fn run() -> Result<()> {
     };
 
     // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(&mut mount_manager, &config.rootfs_dir)?;
+    setup_raw_rootfs_mount(&mut mount_manager, rootfs)?;
 
     // Setup overlays
-    let overlay_config = OverlayConfig::new(&config.rootfs_dir)
+    let overlay_config = OverlayConfig::new(rootfs)
         .with_persistent_var_log(cfg!(feature = "persistent-var-log"));
 
     setup_etc_overlay(&mut mount_manager, &overlay_config)?;
     setup_data_overlay(&mut mount_manager, &overlay_config)?;
 
     // Create fs-links
-    create_fs_links(&config.rootfs_dir)?;
+    create_fs_links(rootfs)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&ods_status, bootloader.as_deref(), &config.rootfs_dir)?;
+    create_ods_runtime_files(&ods_status, bootloader.as_deref(), rootfs)?;
 
     info!("omnect-os-initramfs completed successfully");
 
@@ -151,7 +147,7 @@ fn run() -> Result<()> {
     mount_manager.release();
 
     // Switch root to final rootfs
-    switch_root(&config.rootfs_dir)?;
+    switch_root(rootfs)?;
 
     // This should never be reached
     Ok(())

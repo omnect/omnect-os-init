@@ -18,9 +18,6 @@ pub enum InitramfsError {
     #[error("Early init error: {0}")]
     EarlyInit(#[from] EarlyInitError),
 
-    #[error("Config error: {0}")]
-    Config(#[from] ConfigError),
-
     #[error("Partition error: {0}")]
     Partition(#[from] PartitionError),
 
@@ -68,22 +65,6 @@ pub enum BootloaderError {
 
     #[error("Invalid environment value for '{key}': {reason}")]
     InvalidValue { key: String, reason: String },
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-/// Errors related to configuration parsing
-#[derive(Error, Debug)]
-pub enum ConfigError {
-    #[error("Failed to read {path}: {reason}")]
-    ReadFailed { path: String, reason: String },
-
-    #[error("Missing required kernel parameter: {0}")]
-    MissingParameter(String),
-
-    #[error("Invalid parameter value for '{key}': {value}")]
-    InvalidParameter { key: String, value: String },
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

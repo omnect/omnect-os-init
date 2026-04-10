@@ -14,7 +14,6 @@ pub mod runtime;
 
 // Re-export main types for convenience
 pub use crate::bootloader::{Bootloader, create_bootloader};
-pub use crate::config::Config;
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
