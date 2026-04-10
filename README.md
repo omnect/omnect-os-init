@@ -46,7 +46,10 @@ cargo build --release --features "grub,persistent-var-log,resize-data"
 | `core` | Core boot sequence (default) | Implemented |
 | `grub` | GRUB bootloader support — x86-64 EFI targets | Implemented |
 | `uboot` | U-Boot bootloader support — ARM targets | Implemented |
+| `gpt` | GPT partition table layout | Implemented |
+| `dos` | DOS/MBR partition table layout | Implemented |
 | `persistent-var-log` | Bind-mount `/var/log` to data partition | Implemented |
+| `release-image` | Release error handling (loop on fatal error) | Implemented |
 | `factory-reset` | Factory reset support | Planned |
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
@@ -83,8 +86,9 @@ src/
 │   └── mod.rs               # /proc/cmdline + /etc/os-release parser
 ├── filesystem/
 │   ├── mod.rs               # Public API
+│   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
 │   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
-│   ├── mount.rs             # MountManager (RAII, LIFO unmount)
+│   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
 │   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
 ├── logging/
 │   ├── mod.rs               # KmsgLogger initializer
