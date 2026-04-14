@@ -79,7 +79,7 @@ impl FsckResult {
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
 /// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
-pub fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
+fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
     // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
