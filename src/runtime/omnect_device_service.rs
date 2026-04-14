@@ -180,19 +180,13 @@ fn handle_update_validation(
     uid: u32,
     gid: u32,
 ) -> Result<()> {
-    let validate_update = match bootloader.get_env(vars::OMNECT_VALIDATE_UPDATE) {
-        Ok(val) => val,
-        Err(e) => {
-            // get_env returns Ok(None) when the variable is absent, so this
-            // warn fires only on actual bootloader communication errors, not on
-            // normal (non-update) boots where the variable is simply unset.
-            log::warn!(
-                "failed to read omnect_validate_update from bootloader: {}",
-                e
-            );
-            None
-        }
-    };
+    let validate_update = bootloader
+        .get_env(vars::OMNECT_VALIDATE_UPDATE)
+        .map_err(|e| {
+            InitramfsError::Io(std::io::Error::other(format!(
+                "failed to read omnect_validate_update from bootloader: {e}"
+            )))
+        })?;
 
     if let Some(value) = validate_update {
         if value == "1" {
@@ -222,16 +216,13 @@ fn handle_update_validation(
         }
     }
 
-    let bootloader_updated = match bootloader.get_env(vars::OMNECT_BOOTLOADER_UPDATED) {
-        Ok(val) => val,
-        Err(e) => {
-            log::warn!(
-                "failed to read omnect_bootloader_updated from bootloader: {}",
-                e
-            );
-            None
-        }
-    };
+    let bootloader_updated = bootloader
+        .get_env(vars::OMNECT_BOOTLOADER_UPDATED)
+        .map_err(|e| {
+            InitramfsError::Io(std::io::Error::other(format!(
+                "failed to read omnect_bootloader_updated from bootloader: {e}"
+            )))
+        })?;
 
     if let Some(value) = bootloader_updated
         && value == "1"
