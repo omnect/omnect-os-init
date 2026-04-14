@@ -159,10 +159,12 @@ fn rollback_critical_mounts(moved: &[&str], new_root: &Path) {
 ///
 /// Checking only `is_file()` is insufficient — a non-executable file would cause
 /// `exec` to fail after critical mounts have already been moved to the new root.
-fn is_executable_file(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+/// Errors from `metadata()` (e.g. permission denied) are propagated immediately
+/// rather than silently collapsing to false, which would produce a misleading
+/// "not found or not executable" message.
+fn is_executable_file(path: &Path) -> std::io::Result<bool> {
+    let m = path.metadata()?;
+    Ok(m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 /// Resolve the init binary path within the new root.
@@ -192,7 +194,7 @@ fn resolve_init_path(new_root: &Path, requested_init: &str) -> Result<String> {
     };
 
     let full_path = new_root.join(init_path.trim_start_matches('/'));
-    if is_executable_file(&full_path) {
+    if is_executable_file(&full_path)? {
         return Ok(init_path);
     }
 
