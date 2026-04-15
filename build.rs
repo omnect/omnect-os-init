@@ -88,18 +88,26 @@ fn fmt_option(val: Option<u64>) -> String {
 }
 
 /// Enforce mutually-exclusive feature combinations at build time.
+///
+/// Features must be read from `CARGO_FEATURE_<NAME>` env vars — `cfg!(feature = "...")` in a
+/// build script checks the build script's own features, not the crate's. The build is aborted
+/// with `panic!` because `cargo:error=` is not a recognised Cargo directive and is silently
+/// ignored.
 fn check_feature_flags() {
-    if cfg!(all(feature = "grub", feature = "uboot")) {
-        println!(
-            "cargo:error=features `grub` and `uboot` are mutually exclusive; enable exactly one"
-        );
-    } else if cfg!(not(any(feature = "grub", feature = "uboot"))) {
-        println!("cargo:error=exactly one of features `grub` or `uboot` must be enabled");
+    let has_grub = env::var("CARGO_FEATURE_GRUB").is_ok();
+    let has_uboot = env::var("CARGO_FEATURE_UBOOT").is_ok();
+    let has_gpt = env::var("CARGO_FEATURE_GPT").is_ok();
+    let has_dos = env::var("CARGO_FEATURE_DOS").is_ok();
+
+    if has_grub && has_uboot {
+        panic!("features `grub` and `uboot` are mutually exclusive; enable exactly one");
+    } else if !has_grub && !has_uboot {
+        panic!("exactly one of features `grub` or `uboot` must be enabled");
     }
 
-    if cfg!(all(feature = "gpt", feature = "dos")) {
-        println!("cargo:error=features `gpt` and `dos` are mutually exclusive; enable exactly one");
-    } else if cfg!(not(any(feature = "gpt", feature = "dos"))) {
-        println!("cargo:error=exactly one of features `gpt` or `dos` must be enabled");
+    if has_gpt && has_dos {
+        panic!("features `gpt` and `dos` are mutually exclusive; enable exactly one");
+    } else if !has_gpt && !has_dos {
+        panic!("exactly one of features `gpt` or `dos` must be enabled");
     }
 }
