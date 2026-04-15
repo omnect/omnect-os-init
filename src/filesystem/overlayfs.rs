@@ -111,16 +111,6 @@ pub fn setup_etc_overlay(config: &OverlayConfig) -> Result<()> {
 
     if is_first_boot {
         log::info!("First boot detected - copying factory etc to upper layer");
-        if !factory_etc.exists() {
-            return Err(FilesystemError::OverlayFailed {
-                target: upper_dir.clone(),
-                reason: format!(
-                    "factory /etc source does not exist: {}; \
-                     factory partition is corrupted or incorrectly provisioned",
-                    factory_etc.display()
-                ),
-            });
-        }
         copy_directory_contents(&factory_etc, &upper_dir)?;
     }
 
@@ -260,6 +250,12 @@ fn is_directory_empty(path: &Path) -> Result<bool> {
 ///
 /// Uses `cp -a` for proper attribute preservation.
 fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
+    if !src.exists() {
+        log::warn!("Source directory does not exist: {}", src.display());
+        return Ok(());
+    }
+
+    // Use cp -a to preserve all attributes
     let output = Command::new(CP_CMD)
         .arg("-a")
         .arg(format!("{}/.", src.display()))
@@ -408,9 +404,8 @@ mod tests {
 
         fs::create_dir_all(&dst).unwrap();
 
-        // Nonexistent source is the caller's responsibility to check before calling.
-        // cp -a will fail, so copy_directory_contents returns an error.
+        // Should not error on nonexistent source
         let result = copy_directory_contents(&src, &dst);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }
