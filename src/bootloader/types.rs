@@ -153,12 +153,14 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip() {
-        if !commands_available() {
-            eprintln!(
-                "Skipping test_encode_decode_roundtrip: required commands not at initramfs paths"
-            );
-            return;
-        }
+        assert!(
+            commands_available(),
+            "required commands not found at initramfs paths ({}, {}, {}); \
+             ensure gzip, gunzip and base64 are installed",
+            GZIP_CMD,
+            GUNZIP_CMD,
+            BASE64_CMD
+        );
         let code = 1;
         let output = "Pass 1: Checking inodes, blocks, and sizes\nErrors corrected.";
         let encoded = encode_fsck_output(code, output);
