@@ -86,6 +86,8 @@ pub fn create_mock_bootloader() -> MockBootloader {
 #[derive(Default)]
 pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
+    /// fsck results stored as plain (code, output) — no subprocess encoding needed in tests.
+    fsck: std::collections::HashMap<String, (i32, String)>,
 }
 
 #[cfg(test)]
@@ -119,21 +121,17 @@ impl Bootloader for MockBootloader {
     }
 
     fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
-        use crate::bootloader::types::encode_fsck_output;
-        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.env.insert(key, encode_fsck_output(code, output));
+        self.fsck
+            .insert(partition.to_string(), (code, output.to_string()));
         Ok(())
     }
 
     fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
-        use crate::bootloader::types::decode_fsck_output;
-        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        Ok(self.env.get(&key).and_then(|v| decode_fsck_output(v)))
+        Ok(self.fsck.get(partition).cloned())
     }
 
     fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        let key = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.env.remove(&key);
+        self.fsck.remove(partition);
         Ok(())
     }
 }
