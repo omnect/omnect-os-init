@@ -22,6 +22,13 @@ const FSCK_LOG_DIR: &str = "mnt/data/var/log/fsck";
 
 /// Run fsck on a partition and record the result (including output) in `ods_status`.
 ///
+/// Lenient by design: partitions that fsck reports as failed (exit ≥ 4) are
+/// still recorded and the caller proceeds to mount them. A degraded boot with
+/// a corrupted partition is preferable to an unrecoverable brick on an
+/// embedded device without physical access. The full fsck result is persisted
+/// via `OdsStatus` (→ bootloader env + `/data/var/log/fsck/<partition>.log`)
+/// so ODS can act on the degraded state at runtime.
+///
 /// Intercepts `FsckRequiresReboot` to save the output before propagating, ensuring
 /// it is available for persistence even when mounting is aborted early.
 pub fn fsck_and_record(

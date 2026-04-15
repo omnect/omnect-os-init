@@ -20,6 +20,12 @@ const BASE64_CMD: &str = "/bin/base64";
 /// `get_fsck_status` will return `Ok(None)` for both cases, masking the
 /// encoding failure. This is acceptable: the plain log file is the primary
 /// diagnostic artifact; the bootloader env value is a lightweight indicator.
+///
+/// Residual observability gap: if encoding fails *and* fsck produced no output
+/// (e.g. the process was killed before writing anything), the plain log file
+/// will also be empty, so the encoding failure is visible only via the
+/// `log::warn!` emitted here — which itself requires `/dev/kmsg` to be
+/// functional. This is a low-probability scenario and is accepted.
 pub fn encode_fsck_output(code: i32, output: &str) -> String {
     let raw = format!("{code}\n{output}");
 
