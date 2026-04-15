@@ -3,6 +3,7 @@
 //! This binary replaces the bash-based initramfs scripts with a type-safe
 //! Rust implementation.
 
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use omnect_os_init::{
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
-    runtime::{OdsStatus, create_fs_links, create_ods_runtime_files, switch_root},
+    runtime::{ODS_RUNTIME_DIR, OdsStatus, create_fs_links, create_ods_runtime_files, switch_root},
 };
 
 /// Sleep duration for fatal error loop (seconds)
@@ -132,7 +133,12 @@ fn run() -> Result<()> {
     create_fs_links(rootfs)?;
 
     // Create ODS runtime files
-    create_ods_runtime_files(&ods_status, bootloader.as_deref(), rootfs)?;
+    create_ods_runtime_files(
+        &ods_status,
+        bootloader.as_deref(),
+        rootfs,
+        Path::new(ODS_RUNTIME_DIR),
+    )?;
 
     info!("omnect-os-initramfs completed successfully");
 

@@ -15,7 +15,7 @@ use crate::error::{InitramfsError, Result};
 /// Directory for ODS runtime files.
 /// Written to the initramfs /run tmpfs; switch_root moves /run into the new
 /// root via MS_MOVE, so these files appear at the same path after boot.
-const ODS_RUNTIME_DIR: &str = "/run/omnect-device-service";
+pub const ODS_RUNTIME_DIR: &str = "/run/omnect-device-service";
 
 /// Main status file name
 const ODS_STATUS_FILE: &str = "omnect-os-initramfs.json";
@@ -115,11 +115,10 @@ pub fn create_ods_runtime_files(
     status: &OdsStatus,
     bootloader: Option<&dyn Bootloader>,
     rootfs_dir: &Path,
+    ods_dir: &Path,
 ) -> Result<()> {
     let uid = lookup_uid(rootfs_dir, ODS_USER)?;
     let gid = lookup_gid(rootfs_dir, ODS_GROUP)?;
-
-    let ods_dir = Path::new(ODS_RUNTIME_DIR);
 
     fs::create_dir_all(ods_dir).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
@@ -556,5 +555,46 @@ mod tests {
         fs::write(rootfs.path().join("etc/group"), "root:x:0:\n").unwrap();
 
         assert!(lookup_gid(rootfs.path(), ODS_GROUP).is_err());
+    }
+
+    #[test]
+    fn test_create_ods_runtime_files_end_to_end() {
+        let uid = current_uid();
+        let gid = current_gid();
+        let rootfs = make_fake_rootfs(uid, gid);
+        let ods_dir = TempDir::new().unwrap();
+
+        let mut status = OdsStatus::new();
+        status.add_fsck_result("boot", 0, "clean".to_string());
+
+        let bl =
+            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+
+        create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
+
+        // Status JSON written and non-empty
+        let status_file = ods_dir.path().join(ODS_STATUS_FILE);
+        assert!(status_file.exists());
+        let content = fs::read_to_string(&status_file).unwrap();
+        assert!(content.contains("\"boot\""));
+
+        // Update validation trigger created
+        assert!(ods_dir.path().join(UPDATE_VALIDATE_FILE).exists());
+
+        // No bootloader-updated marker
+        assert!(!ods_dir.path().join(BOOTLOADER_UPDATED_FILE).exists());
+    }
+
+    #[test]
+    fn test_create_ods_runtime_files_no_bootloader() {
+        let uid = current_uid();
+        let gid = current_gid();
+        let rootfs = make_fake_rootfs(uid, gid);
+        let ods_dir = TempDir::new().unwrap();
+
+        create_ods_runtime_files(&OdsStatus::new(), None, rootfs.path(), ods_dir.path()).unwrap();
+
+        assert!(ods_dir.path().join(ODS_STATUS_FILE).exists());
+        assert!(!ods_dir.path().join(UPDATE_VALIDATE_FILE).exists());
     }
 }

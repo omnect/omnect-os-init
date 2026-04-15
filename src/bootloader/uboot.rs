@@ -121,4 +121,3 @@ impl Bootloader for UBootBootloader {
         self.run_fw_setenv(&var_name, None)
     }
 }
-
