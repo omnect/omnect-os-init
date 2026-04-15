@@ -45,6 +45,12 @@ const FILE_MODE_RESTRICTED: u32 = 0o600;
 /// Permissions for trigger files readable by ODS and group (rw-r--r--)
 const FILE_MODE_READABLE: u32 = 0o644;
 
+/// Bootloader env value meaning the flag is set / requested
+const BOOTLOADER_FLAG_SET: &str = "1";
+
+/// Bootloader env value meaning update validation previously failed
+const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
+
 /// Status information for omnect-device-service
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
@@ -188,9 +194,9 @@ fn handle_update_validation(
         })?;
 
     if let Some(value) = validate_update {
-        if value == "1" {
+        if value == BOOTLOADER_FLAG_SET {
             let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
-            fs::write(&trigger_path, "1").map_err(|e| {
+            fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
                 InitramfsError::Io(std::io::Error::other(format!(
                     "Failed to write {}: {}",
                     trigger_path.display(),
@@ -200,9 +206,9 @@ fn handle_update_validation(
             set_ownership(&trigger_path, uid, gid)?;
             set_mode(&trigger_path, FILE_MODE_READABLE)?;
             log::info!("Update validation requested - created trigger file");
-        } else if value == "failed" {
+        } else if value == VALIDATE_UPDATE_FAILED_VALUE {
             let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
-            fs::write(&failed_path, "1").map_err(|e| {
+            fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
                 InitramfsError::Io(std::io::Error::other(format!(
                     "Failed to write {}: {}",
                     failed_path.display(),
@@ -224,10 +230,10 @@ fn handle_update_validation(
         })?;
 
     if let Some(value) = bootloader_updated
-        && value == "1"
+        && value == BOOTLOADER_FLAG_SET
     {
         let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);
-        fs::write(&marker_path, "1").map_err(|e| {
+        fs::write(&marker_path, BOOTLOADER_FLAG_SET).map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "Failed to write {}: {}",
                 marker_path.display(),

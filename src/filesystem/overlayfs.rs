@@ -31,6 +31,9 @@ mod paths {
     pub const ETC: &str = "etc";
     pub const HOME: &str = "home";
     pub const VAR_LIB: &str = "var/lib";
+    /// Subdirectory on the data partition that is bind-mounted to /usr/local.
+    /// The data partition layout omits the "usr/" prefix.
+    pub const DATA_LOCAL_DIR: &str = "local";
     pub const USR_LOCAL: &str = "usr/local";
     pub const VAR_LOG: &str = "var/log";
 }
@@ -144,8 +147,11 @@ pub fn setup_data_overlay(config: &OverlayConfig) -> Result<()> {
         &data_mount.join(paths::VAR_LIB),
         &rootfs.join(paths::VAR_LIB),
     )?;
-    // data partition uses "local" instead of "usr/local"
-    bind_mount(&data_mount.join("local"), &rootfs.join(paths::USR_LOCAL))?;
+    // data partition uses a "local" subdir instead of "usr/local"
+    bind_mount(
+        &data_mount.join(paths::DATA_LOCAL_DIR),
+        &rootfs.join(paths::USR_LOCAL),
+    )?;
 
     if config.persistent_var_log {
         bind_mount(

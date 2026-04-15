@@ -40,6 +40,8 @@ mod exit_code {
     pub const CANCELLED: i32 = 32;
     /// Shared library error
     pub const LIBRARY_ERROR: i32 = 128;
+    /// Sentinel for when the process was killed by a signal (no exit code)
+    pub const UNKNOWN: i32 = -1;
 }
 
 /// Result of a filesystem check
@@ -97,11 +99,11 @@ fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
         device: device.to_path_buf(),
-        code: -1,
+        code: exit_code::UNKNOWN,
         output: format!("Failed to execute fsck: {}", e),
     })?;
 
-    let exit_code = output.status.code().unwrap_or(-1);
+    let exit_code = output.status.code().unwrap_or(exit_code::UNKNOWN);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined_output = format!("{}{}", stdout, stderr);

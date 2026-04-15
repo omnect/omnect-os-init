@@ -17,6 +17,9 @@ const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 /// Command to write U-Boot environment variables
 const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 
+/// Sentinel value used when a process exits due to a signal (no numeric exit code available)
+const UNKNOWN_EXIT_CODE: i32 = -1;
+
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
@@ -50,7 +53,7 @@ impl UBootBootloader {
         // Any other non-zero code indicates a real failure (bad /etc/fw_env.config,
         // I/O error, permission denied, etc.) and must be surfaced as an error.
         if !output.status.success() {
-            let code = output.status.code().unwrap_or(-1);
+            let code = output.status.code().unwrap_or(UNKNOWN_EXIT_CODE);
             if code == 1 {
                 return Ok(None);
             }
