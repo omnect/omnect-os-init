@@ -122,5 +122,3 @@ impl Bootloader for UBootBootloader {
     }
 }
 
-#[cfg(test)]
-mod tests {}
