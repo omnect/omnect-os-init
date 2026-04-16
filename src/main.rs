@@ -41,16 +41,21 @@ fn main() {
     // Release vs. debug mode is a build-time property via the `release-image` feature.
     let is_release_image = cfg!(feature = "release-image");
 
-    // Initialize logging
-    match KmsgLogger::new() {
-        Ok(logger) => {
-            if let Err(e) = logger.init() {
-                log_fatal(&format!("Logger initialization failed: {}", e));
-            }
-        }
-        Err(e) => {
-            log_fatal(&format!("Failed to open kmsg: {}", e));
-        }
+    // Initialize logging — fatal if /dev/kmsg cannot be opened or logger already set.
+    // log_fatal() opens /dev/kmsg directly so the message reaches the kernel ring buffer
+    // even before the global logger is registered.
+    let logger_result = KmsgLogger::new()
+        .map_err(|e| InitramfsError::Io(std::io::Error::other(format!("Failed to open kmsg: {e}"))))
+        .and_then(|logger| {
+            logger.init().map_err(|e| {
+                InitramfsError::Io(std::io::Error::other(format!(
+                    "Logger initialization failed: {e}"
+                )))
+            })
+        });
+    if let Err(ref e) = logger_result {
+        log_fatal(&format!("{e}"));
+        handle_fatal_error(logger_result.unwrap_err(), is_release_image);
     }
 
     // Run main initialization
