@@ -88,16 +88,14 @@ impl Log for KmsgLogger {
         let prefix = Self::level_to_kernel_prefix(record.level());
         let message = format!("{}{}{}\n", prefix, LOG_PREFIX, record.args());
 
-        if let Ok(mut kmsg) = self.kmsg.lock() {
-            // Ignore write errors - nothing we can do if kmsg fails
-            let _ = kmsg.write_all(message.as_bytes());
-        }
+        let mut kmsg = self.kmsg.lock().unwrap_or_else(|p| p.into_inner());
+        // Ignore write errors - nothing we can do if kmsg fails
+        let _ = kmsg.write_all(message.as_bytes());
     }
 
     fn flush(&self) {
-        if let Ok(mut kmsg) = self.kmsg.lock() {
-            let _ = kmsg.flush();
-        }
+        let mut kmsg = self.kmsg.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = kmsg.flush();
     }
 }
 
