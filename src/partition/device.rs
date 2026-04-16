@@ -283,6 +283,9 @@ pub fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
     let prefix = format!("{}=", key);
     for token in cmdline.split_whitespace() {
         if let Some(value) = token.strip_prefix(&prefix) {
+            // The omnect kernel cmdline convention never uses single-quoted values.
+            // This strip is purely defensive against the double-quoted root="..." style
+            // that some bootloaders emit.
             return Ok(Some(value.trim_matches('"').to_string()));
         }
     }
