@@ -142,7 +142,13 @@ impl Bootloader for GrubBootloader {
                     reason: e.to_string(),
                 })?;
             // Remove file after reading — matches legacy behaviour
-            let _ = fs::remove_file(&file_path);
+            if let Err(e) = fs::remove_file(&file_path) {
+                log::warn!(
+                    "Failed to remove fsck status file {}: {}",
+                    file_path.display(),
+                    e
+                );
+            }
             Ok(decode_fsck_output(&encoded))
         }
     }
