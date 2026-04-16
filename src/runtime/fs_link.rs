@@ -123,6 +123,18 @@ fn validate_relative_path(path: &str) -> Result<()> {
 }
 
 /// Create a single symbolic link
+///
+/// # Trust boundary
+/// `entry.target` is used verbatim as the symlink target and is intentionally
+/// not validated — symlink targets are allowed to be absolute paths or point
+/// outside the rootfs (e.g. `/dev/null`, `/proc/self/fd/0`). Only `entry.link`
+/// (the location of the symlink itself) is validated to be relative and
+/// confined within `rootfs_dir`.
+///
+/// This is safe as long as the JSON config is loaded exclusively from the
+/// read-only rootfs (`etc/omnect/fs-link.d/*.json`). If a future change ever
+/// loads configs from a writable location, `entry.target` must be reviewed for
+/// the new trust context.
 fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
     validate_relative_path(&entry.link)?;
     let link_path = rootfs_dir.join(&entry.link);
