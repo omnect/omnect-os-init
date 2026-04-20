@@ -13,14 +13,15 @@ use std::process::Command;
 use nix::mount::{MsFlags, mount};
 use nix::unistd::{chdir, chroot};
 
+use crate::config::CmdlineConfig;
 use crate::error::{InitramfsError, Result};
 
 /// Default init binary path, used when `init=` is absent from the kernel cmdline.
 const DEFAULT_INIT: &str = "/sbin/init";
 
 /// Switch root to the new rootfs and exec init
-pub fn switch_root(new_root: &Path) -> Result<()> {
-    let init_path = DEFAULT_INIT;
+pub fn switch_root(new_root: &Path, cmdline: &CmdlineConfig) -> Result<()> {
+    let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
 
     log::info!(
         "Switching root to {} with init {}",
@@ -280,5 +281,34 @@ mod tests {
         let result = resolve_init_path(temp.path(), "/lib/systemd/systemd");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/lib/systemd/systemd");
+    }
+
+    #[test]
+    fn test_cmdline_init_override_used() {
+        // init= on the kernel cmdline must take precedence over DEFAULT_INIT.
+        let temp = TempDir::new().unwrap();
+        let systemd_dir = temp.path().join("lib/systemd");
+        fs::create_dir_all(&systemd_dir).unwrap();
+        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init=/lib/systemd/systemd ro quiet");
+        let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/lib/systemd/systemd");
+    }
+
+    #[test]
+    fn test_cmdline_init_absent_falls_back_to_default() {
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("ro quiet");
+        let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/sbin/init");
     }
 }

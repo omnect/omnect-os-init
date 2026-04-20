@@ -147,7 +147,7 @@ fn run() -> Result<()> {
     info!("omnect-os-initramfs completed successfully");
 
     // Switch root to final rootfs
-    switch_root(rootfs)?;
+    switch_root(rootfs, &config.cmdline)?;
 
     // This should never be reached
     Ok(())
