@@ -35,7 +35,7 @@ impl CmdlineConfig {
         Ok(Self::parse(&raw))
     }
 
-    /// Parse a raw cmdline string. Intended for use in tests.
+    /// Parses a raw cmdline string; also usable directly in tests.
     ///
     /// Handles `key=value` pairs and bare flags (e.g. `quiet`, `ro`). Values
     /// containing spaces are not supported — the kernel splits the cmdline on
