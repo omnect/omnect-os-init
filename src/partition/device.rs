@@ -399,4 +399,76 @@ mod tests {
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/vda1"));
         assert_eq!(device.partition_path(7), PathBuf::from("/dev/vda7"));
     }
+
+    // --- detect_root_device error paths ---
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_missing_rootpart() {
+        // No rootpart= on cmdline → error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("rootpart"),
+            "error should mention 'rootpart', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_missing_fsuuid() {
+        // rootpart= present but bootpart_fsuuid= missing → error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("rootpart=2 ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("bootpart_fsuuid"),
+            "error should mention 'bootpart_fsuuid', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_non_numeric_rootpart() {
+        // rootpart= is not a number → parse error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("rootpart=sda2 bootpart_fsuuid=ABCD-1234 ro");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not a valid partition number") || msg.contains("sda2"),
+            "error should describe a parse failure, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "uboot")]
+    #[test]
+    fn test_detect_root_device_uboot_missing_root() {
+        // No root= on cmdline → error immediately, no device wait.
+        let cfg = crate::config::CmdlineConfig::parse("ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("root="),
+            "error should mention 'root=', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "uboot")]
+    #[test]
+    fn test_detect_root_device_uboot_root_without_dev_prefix() {
+        // root= present but does not start with /dev/ → rejected before device wait.
+        let cfg = crate::config::CmdlineConfig::parse("root=mmcblk0p2 ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("/dev/"),
+            "error should mention '/dev/', got: {msg}"
+        );
+    }
 }
