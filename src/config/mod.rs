@@ -68,8 +68,6 @@ impl CmdlineConfig {
 pub struct OverlayConfig {
     /// Whether to enable persistent `/var/log` (controlled by the `persistent-var-log` feature).
     pub persistent_var_log: bool,
-    /// Additional mount options passed to the data partition mount.
-    pub data_mount_options: Option<String>,
 }
 
 /// Unified runtime configuration, loaded once during early init and passed
@@ -90,7 +88,6 @@ impl Config {
         let cmdline = CmdlineConfig::load()?;
         let overlay = OverlayConfig {
             persistent_var_log: cfg!(feature = "persistent-var-log"),
-            data_mount_options: None,
         };
         Ok(Self { cmdline, overlay })
     }
@@ -144,6 +141,5 @@ mod tests {
     fn test_config_default() {
         let cfg = Config::default();
         assert!(!cfg.overlay.persistent_var_log);
-        assert!(cfg.overlay.data_mount_options.is_none());
     }
 }
