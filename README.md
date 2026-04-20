@@ -10,7 +10,7 @@ acting as `/init` in the initramfs. Runs as PID 1 before `switch_root`.
 Implemented functionality:
 
 - **Bootloader abstraction**: Unified `Bootloader` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
-- **Configuration**: Parses `/proc/cmdline` and `/etc/os-release`
+- **Configuration**: Parses `/proc/cmdline`; build-time constants from Yocto environment via `build.rs`
 - **Partition management**: Root device detection, partition layout (GPT/DOS), `/dev/omnect/*` symlinks
 - **Filesystem operations**: fsck, mount manager (RAII), overlayfs for `/etc` and `/home`, bind mounts
 - **Logging**: Kernel ring buffer (`/dev/kmsg`) with log level prefixes
@@ -36,7 +36,7 @@ cargo build --release --features grub
 cargo build --release --features uboot
 
 # With additional optional features
-cargo build --release --features "grub,persistent-var-log,resize-data"
+cargo build --release --features "grub,persistent-var-log"
 ```
 
 ## Features
@@ -62,11 +62,14 @@ cargo build --release --features "grub,persistent-var-log,resize-data"
 ## Testing
 
 ```bash
-cargo test --features grub   # x86-64 targets
-cargo test --features uboot  # ARM targets
+# All four valid feature combinations (bootloader × partition table)
+cargo test --features grub,gpt   # x86-64 targets, GPT
+cargo test --features grub,dos   # x86-64 targets, DOS/MBR
+cargo test --features uboot,gpt  # ARM targets, GPT
+cargo test --features uboot,dos  # ARM targets, DOS/MBR
 
 # Verbose output
-cargo test --features grub -- --nocapture
+cargo test --features grub,gpt -- --nocapture
 ```
 
 ## Architecture
@@ -83,7 +86,7 @@ src/
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
 │   └── types.rs             # BootloaderType enum
 ├── config/
-│   └── mod.rs               # /proc/cmdline + /etc/os-release parser
+│   └── mod.rs               # /proc/cmdline parser; build-time constants via build.rs
 ├── filesystem/
 │   ├── mod.rs               # Public API
 │   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)

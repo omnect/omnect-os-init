@@ -25,7 +25,13 @@
 - **Check:** `cargo check`
 - **Format:** `cargo fmt -- --check`
 - **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
-- **Test:** `cargo test --features <grub|uboot>`
+- **Test:** Run all four valid feature combinations:
+  ```
+  cargo test --features grub,gpt
+  cargo test --features grub,dos
+  cargo test --features uboot,gpt
+  cargo test --features uboot,dos
+  ```
 - **Audit:** `cargo audit`
 
 ## 4. Feature Flags
@@ -57,6 +63,5 @@
 
 ## 7. Integration Points
 - **Kernel cmdline:** `rootpart=` (GRUB: root partition number), `bootpart_fsuuid=` (GRUB: boot partition UUID), `root=` (U-Boot: full root device path), `init=` (optional init binary override), `quiet` (suppress console output); `rootblk=` is parsed for device symlink naming only — no logic reads it
-- **os-release:** `OMNECT_RELEASE_IMAGE`, `MACHINE_FEATURES`, `DISTRO_FEATURES`
 - **Device symlinks:** Creates `/dev/omnect/{boot,rootfs,data,...}`
 - **ODS:** Prepares runtime files for `omnect-device-service`
