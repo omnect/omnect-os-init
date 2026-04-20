@@ -61,10 +61,6 @@ impl CmdlineConfig {
         self.params.get(key).map(String::as_str)
     }
 
-    /// Returns `true` if the `quiet` flag is present in the command line.
-    pub fn is_quiet(&self) -> bool {
-        self.params.contains_key("quiet")
-    }
 }
 
 /// Configuration for overlay filesystem setup.
@@ -114,7 +110,6 @@ mod tests {
     #[test]
     fn test_cmdline_parse_bare_flags() {
         let cfg = CmdlineConfig::parse("rootpart=2 ro quiet");
-        assert!(cfg.is_quiet());
         assert_eq!(cfg.get("ro"), Some(""));
     }
 
@@ -132,16 +127,9 @@ mod tests {
     }
 
     #[test]
-    fn test_cmdline_is_quiet_absent() {
-        let cfg = CmdlineConfig::parse("rootpart=2 ro");
-        assert!(!cfg.is_quiet());
-    }
-
-    #[test]
     fn test_cmdline_default_is_empty() {
         let cfg = CmdlineConfig::default();
         assert_eq!(cfg.get("rootpart"), None);
-        assert!(!cfg.is_quiet());
     }
 
     #[test]
