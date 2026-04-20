@@ -72,12 +72,23 @@ pub struct OverlayConfig {
 
 /// Unified runtime configuration, loaded once during early init and passed
 /// explicitly to all init sub-systems.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// Parsed kernel command line.
     pub cmdline: CmdlineConfig,
     /// Overlay filesystem configuration.
     pub overlay: OverlayConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cmdline: CmdlineConfig::default(),
+            overlay: OverlayConfig {
+                persistent_var_log: cfg!(feature = "persistent-var-log"),
+            },
+        }
+    }
 }
 
 impl Config {
@@ -140,6 +151,8 @@ mod tests {
     #[test]
     fn test_config_default() {
         let cfg = Config::default();
-        assert!(!cfg.overlay.persistent_var_log);
+        // persistent_var_log reflects the compile-time feature flag,
+        // not a hard-coded false.
+        assert_eq!(cfg.overlay.persistent_var_log, cfg!(feature = "persistent-var-log"));
     }
 }
