@@ -14,7 +14,7 @@ use omnect_os_init::partition::parse_device_path;
 #[cfg(feature = "grub")]
 use omnect_os_init::partition::root_device_from_blkid;
 
-#[cfg(feature = "gpt")]
+#[cfg(all(feature = "grub", feature = "gpt"))]
 use omnect_os_init::config::CmdlineConfig;
 
 // ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ fn build_layout(rd: RootDevice) -> PartitionLayout {
     PartitionLayout::new(rd).unwrap()
 }
 
-#[cfg(feature = "gpt")]
+#[cfg(all(feature = "grub", feature = "gpt"))]
 #[test]
 fn test_full_pipeline_x86_sata_grub_root_a() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
@@ -168,7 +168,7 @@ fn test_full_pipeline_x86_sata_grub_root_a() {
     assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
 }
 
-#[cfg(feature = "gpt")]
+#[cfg(all(feature = "grub", feature = "gpt"))]
 #[test]
 fn test_full_pipeline_x86_nvme_grub_root_b() {
     let cmdline = "rootpart=3 bootpart_fsuuid=ABCD-1234 ro quiet";
@@ -189,7 +189,7 @@ fn test_full_pipeline_x86_nvme_grub_root_b() {
     );
 }
 
-#[cfg(feature = "dos")]
+#[cfg(all(feature = "uboot", feature = "dos"))]
 #[test]
 fn test_full_pipeline_arm_emmc_uboot_root_a() {
     let rd = parse_device_path("/dev/mmcblk0p2").unwrap();
@@ -203,7 +203,7 @@ fn test_full_pipeline_arm_emmc_uboot_root_a() {
     );
 }
 
-#[cfg(feature = "dos")]
+#[cfg(all(feature = "uboot", feature = "dos"))]
 #[test]
 fn test_full_pipeline_arm_sd_uboot_root_b() {
     let rd = parse_device_path("/dev/mmcblk1p3").unwrap();
@@ -213,7 +213,7 @@ fn test_full_pipeline_arm_sd_uboot_root_b() {
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk1p3"));
 }
 
-#[cfg(feature = "gpt")]
+#[cfg(all(feature = "grub", feature = "gpt"))]
 #[test]
 fn test_full_pipeline_x86_virtio_grub() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
