@@ -7,11 +7,12 @@
 //! - Initial copy of factory etc to upper layer
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use nix::mount::MsFlags;
 
+use crate::config::OverlayConfig;
 use crate::error::FilesystemError;
 use crate::filesystem::{MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private};
 
@@ -49,40 +50,6 @@ pub mod mount_points {
     pub const VAR_VOLATILE: &str = "var/volatile";
 }
 
-/// Configuration for overlay setup
-#[derive(Debug, Clone)]
-pub struct OverlayConfig {
-    /// Root filesystem directory (e.g., /rootfs)
-    pub rootfs_dir: PathBuf,
-    /// Whether to enable persistent /var/log
-    pub persistent_var_log: bool,
-    /// Additional mount options for data partition
-    pub data_mount_options: Option<String>,
-}
-
-impl OverlayConfig {
-    /// Create a new overlay configuration
-    pub fn new(rootfs_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            rootfs_dir: rootfs_dir.into(),
-            persistent_var_log: false,
-            data_mount_options: None,
-        }
-    }
-
-    /// Enable persistent /var/log
-    pub fn with_persistent_var_log(mut self, enabled: bool) -> Self {
-        self.persistent_var_log = enabled;
-        self
-    }
-
-    /// Set additional data mount options
-    pub fn with_data_mount_options(mut self, options: Option<String>) -> Self {
-        self.data_mount_options = options;
-        self
-    }
-}
-
 /// Setup the etc partition with overlayfs
 ///
 /// Creates an overlay where:
@@ -90,8 +57,8 @@ impl OverlayConfig {
 /// - Upper layer: mnt/etc/upper (persistent changes)
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
-pub fn setup_etc_overlay(config: &OverlayConfig) -> Result<()> {
-    let rootfs = &config.rootfs_dir;
+pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
+    let rootfs = rootfs_dir;
     let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
     let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
 
@@ -137,8 +104,8 @@ pub fn setup_etc_overlay(config: &OverlayConfig) -> Result<()> {
 /// - Bind mount: data/var/lib -> rootfs/var/lib
 /// - Bind mount: data/local -> rootfs/usr/local
 /// - Optional: data/var/log -> rootfs/var/log (if persistent_var_log enabled)
-pub fn setup_data_overlay(config: &OverlayConfig) -> Result<()> {
-    let rootfs = &config.rootfs_dir;
+pub fn setup_data_overlay(rootfs_dir: &Path, overlay: &OverlayConfig) -> Result<()> {
+    let rootfs = rootfs_dir;
     let data_mount = rootfs.join(mount_points::DATA_PARTITION);
 
     setup_home_overlay(rootfs, &data_mount)?;
@@ -153,7 +120,7 @@ pub fn setup_data_overlay(config: &OverlayConfig) -> Result<()> {
         &rootfs.join(paths::USR_LOCAL),
     )?;
 
-    if config.persistent_var_log {
+    if overlay.persistent_var_log {
         bind_mount(
             &data_mount.join(paths::VAR_LOG),
             &rootfs.join(paths::VAR_LOG),
@@ -309,25 +276,8 @@ pub fn setup_raw_rootfs_mount(rootfs_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_overlay_config_new() {
-        let config = OverlayConfig::new("/rootfs");
-        assert_eq!(config.rootfs_dir, PathBuf::from("/rootfs"));
-        assert!(!config.persistent_var_log);
-        assert!(config.data_mount_options.is_none());
-    }
-
-    #[test]
-    fn test_overlay_config_builder() {
-        let config = OverlayConfig::new("/rootfs")
-            .with_persistent_var_log(true)
-            .with_data_mount_options(Some("discard".to_string()));
-
-        assert!(config.persistent_var_log);
-        assert_eq!(config.data_mount_options, Some("discard".to_string()));
-    }
 
     #[test]
     fn test_ensure_dir_creates_directory() {

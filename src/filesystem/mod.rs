@@ -17,7 +17,7 @@ pub use self::mount::{
     mount_readwrite, mount_tmpfs,
 };
 pub use self::overlayfs::{
-    OverlayConfig, mount_points, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
+    mount_points, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
 };
 
 use crate::error::FilesystemError;

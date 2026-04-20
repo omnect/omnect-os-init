@@ -15,7 +15,7 @@ use omnect_os_init::partition::parse_device_path;
 use omnect_os_init::partition::root_device_from_blkid;
 
 #[cfg(feature = "gpt")]
-use omnect_os_init::partition::device::parse_cmdline_param;
+use omnect_os_init::config::CmdlineConfig;
 
 // ---------------------------------------------------------------------------
 // Fixture strings
@@ -151,8 +151,8 @@ fn build_layout(rd: RootDevice) -> PartitionLayout {
 #[test]
 fn test_full_pipeline_x86_sata_grub_root_a() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
-    let part_num: u32 = parse_cmdline_param(cmdline, "rootpart")
-        .unwrap()
+    let part_num: u32 = CmdlineConfig::parse(cmdline)
+        .get("rootpart")
         .unwrap()
         .parse()
         .unwrap();
@@ -172,8 +172,8 @@ fn test_full_pipeline_x86_sata_grub_root_a() {
 #[test]
 fn test_full_pipeline_x86_nvme_grub_root_b() {
     let cmdline = "rootpart=3 bootpart_fsuuid=ABCD-1234 ro quiet";
-    let part_num: u32 = parse_cmdline_param(cmdline, "rootpart")
-        .unwrap()
+    let part_num: u32 = CmdlineConfig::parse(cmdline)
+        .get("rootpart")
         .unwrap()
         .parse()
         .unwrap();
@@ -217,8 +217,8 @@ fn test_full_pipeline_arm_sd_uboot_root_b() {
 #[test]
 fn test_full_pipeline_x86_virtio_grub() {
     let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
-    let part_num: u32 = parse_cmdline_param(cmdline, "rootpart")
-        .unwrap()
+    let part_num: u32 = CmdlineConfig::parse(cmdline)
+        .get("rootpart")
         .unwrap()
         .parse()
         .unwrap();

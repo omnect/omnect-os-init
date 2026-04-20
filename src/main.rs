@@ -13,10 +13,11 @@ use log::{error, info, warn};
 use omnect_os_init::{
     Result,
     bootloader::create_bootloader,
+    config::Config,
     error::{FilesystemError, InitramfsError},
     filesystem::{
-        OverlayConfig, mount_partitions, persist_fsck_results, setup_data_overlay,
-        setup_etc_overlay, setup_raw_rootfs_mount,
+        mount_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
+        setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
@@ -68,11 +69,11 @@ fn main() {
 fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
-    let rootfs = std::path::Path::new(ROOTFS_DIR);
+    let config = Config::load(ROOTFS_DIR)?;
 
     // Detect root device
     info!("Detecting root device...");
-    let root_device = detect_root_device()?;
+    let root_device = detect_root_device(&config.cmdline)?;
     info!(
         "Root device: {} (partition {})",
         root_device.base.display(),
@@ -91,7 +92,7 @@ fn run() -> Result<()> {
     // Run fsck on partitions and mount them.
     // Boot partition must be mounted before create_bootloader() so that
     // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
+    let mount_result = mount_partitions(&layout, &config.rootfs_dir, &mut ods_status);
 
     // Attempt to create bootloader and persist fsck results before propagating any
     // mount error. This ensures results are stored even on the FsckRequiresReboot
@@ -101,7 +102,7 @@ fn run() -> Result<()> {
         // Persist fsck results: gzip+base64 encoded output (code + full text) to
         // bootloader env, and full output to data partition log.
         // Non-fatal: failures are logged as warnings.
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+        persist_fsck_results(&ods_status, bl.as_mut(), &config.rootfs_dir);
     } else {
         warn!("Could not create bootloader; fsck results will not be persisted to bootloader env");
     }
@@ -125,30 +126,27 @@ fn run() -> Result<()> {
     };
 
     // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(rootfs)?;
+    setup_raw_rootfs_mount(&config.rootfs_dir)?;
 
     // Setup overlays
-    let overlay_config =
-        OverlayConfig::new(rootfs).with_persistent_var_log(cfg!(feature = "persistent-var-log"));
-
-    setup_etc_overlay(&overlay_config)?;
-    setup_data_overlay(&overlay_config)?;
+    setup_etc_overlay(&config.rootfs_dir)?;
+    setup_data_overlay(&config.rootfs_dir, &config.overlay)?;
 
     // Create fs-links
-    create_fs_links(rootfs)?;
+    create_fs_links(&config.rootfs_dir)?;
 
     // Create ODS runtime files
     create_ods_runtime_files(
         &ods_status,
         bootloader.as_deref(),
-        rootfs,
+        &config.rootfs_dir,
         Path::new(ODS_RUNTIME_DIR),
     )?;
 
     info!("omnect-os-initramfs completed successfully");
 
     // Switch root to final rootfs
-    switch_root(rootfs)?;
+    switch_root(&config.rootfs_dir)?;
 
     // This should never be reached
     Ok(())
