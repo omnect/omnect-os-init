@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::error::InitramfsError;
 
@@ -79,10 +78,8 @@ pub struct OverlayConfig {
 
 /// Unified runtime configuration, loaded once during early init and passed
 /// explicitly to all init sub-systems.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// Mount point of the real rootfs inside the initramfs.
-    pub rootfs_dir: PathBuf,
     /// Parsed kernel command line.
     pub cmdline: CmdlineConfig,
     /// Overlay filesystem configuration.
@@ -93,29 +90,13 @@ impl Config {
     /// Load configuration from the running kernel environment.
     ///
     /// Reads `/proc/cmdline` and evaluates compile-time feature flags.
-    /// `rootfs_dir` is the path where the real rootfs is mounted inside the
-    /// initramfs (e.g. `/rootfs`).
-    pub fn load(rootfs_dir: impl Into<PathBuf>) -> crate::Result<Self> {
+    pub fn load() -> crate::Result<Self> {
         let cmdline = CmdlineConfig::load()?;
         let overlay = OverlayConfig {
             persistent_var_log: cfg!(feature = "persistent-var-log"),
             data_mount_options: None,
         };
-        Ok(Self {
-            rootfs_dir: rootfs_dir.into(),
-            cmdline,
-            overlay,
-        })
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            rootfs_dir: PathBuf::from("/rootfs"),
-            cmdline: CmdlineConfig::default(),
-            overlay: OverlayConfig::default(),
-        }
+        Ok(Self { cmdline, overlay })
     }
 }
 
@@ -166,7 +147,6 @@ mod tests {
     #[test]
     fn test_config_default() {
         let cfg = Config::default();
-        assert_eq!(cfg.rootfs_dir, PathBuf::from("/rootfs"));
         assert!(!cfg.overlay.persistent_var_log);
         assert!(cfg.overlay.data_mount_options.is_none());
     }

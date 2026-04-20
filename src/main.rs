@@ -69,7 +69,8 @@ fn main() {
 fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
-    let config = Config::load(ROOTFS_DIR)?;
+    let config = Config::load()?;
+    let rootfs = Path::new(ROOTFS_DIR);
 
     // Detect root device
     info!("Detecting root device...");
@@ -92,7 +93,7 @@ fn run() -> Result<()> {
     // Run fsck on partitions and mount them.
     // Boot partition must be mounted before create_bootloader() so that
     // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    let mount_result = mount_partitions(&layout, &config.rootfs_dir, &mut ods_status);
+    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
 
     // Attempt to create bootloader and persist fsck results before propagating any
     // mount error. This ensures results are stored even on the FsckRequiresReboot
@@ -102,7 +103,7 @@ fn run() -> Result<()> {
         // Persist fsck results: gzip+base64 encoded output (code + full text) to
         // bootloader env, and full output to data partition log.
         // Non-fatal: failures are logged as warnings.
-        persist_fsck_results(&ods_status, bl.as_mut(), &config.rootfs_dir);
+        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
     } else {
         warn!("Could not create bootloader; fsck results will not be persisted to bootloader env");
     }
@@ -126,27 +127,27 @@ fn run() -> Result<()> {
     };
 
     // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(&config.rootfs_dir)?;
+    setup_raw_rootfs_mount(rootfs)?;
 
     // Setup overlays
-    setup_etc_overlay(&config.rootfs_dir)?;
-    setup_data_overlay(&config.rootfs_dir, &config.overlay)?;
+    setup_etc_overlay(rootfs)?;
+    setup_data_overlay(rootfs, &config.overlay)?;
 
     // Create fs-links
-    create_fs_links(&config.rootfs_dir)?;
+    create_fs_links(rootfs)?;
 
     // Create ODS runtime files
     create_ods_runtime_files(
         &ods_status,
         bootloader.as_deref(),
-        &config.rootfs_dir,
+        rootfs,
         Path::new(ODS_RUNTIME_DIR),
     )?;
 
     info!("omnect-os-initramfs completed successfully");
 
     // Switch root to final rootfs
-    switch_root(&config.rootfs_dir)?;
+    switch_root(rootfs)?;
 
     // This should never be reached
     Ok(())
