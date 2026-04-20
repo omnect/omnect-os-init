@@ -19,9 +19,21 @@ use crate::error::{InitramfsError, Result};
 /// Default init binary path, used when `init=` is absent from the kernel cmdline.
 const DEFAULT_INIT: &str = "/sbin/init";
 
+/// Resolve the init binary path from the kernel cmdline.
+///
+/// Returns `DEFAULT_INIT` when `init=` is absent, empty, or a bare flag.
+/// `CmdlineConfig::parse` stores bare flags and empty values both as `Some("")`;
+/// `.filter` converts that to `None` so `unwrap_or` fires correctly.
+fn init_path_from_cmdline(cmdline: &CmdlineConfig) -> &str {
+    cmdline
+        .get("init")
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_INIT)
+}
+
 /// Switch root to the new rootfs and exec init
 pub fn switch_root(new_root: &Path, cmdline: &CmdlineConfig) -> Result<()> {
-    let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
+    let init_path = init_path_from_cmdline(cmdline);
 
     log::info!(
         "Switching root to {} with init {}",
@@ -292,7 +304,7 @@ mod tests {
         write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
 
         let cmdline = CmdlineConfig::parse("init=/lib/systemd/systemd ro quiet");
-        let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
+        let init_path = init_path_from_cmdline(&cmdline);
         let result = resolve_init_path(temp.path(), init_path);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/lib/systemd/systemd");
@@ -306,9 +318,39 @@ mod tests {
         write_executable(&sbin.join("init"), "#!/bin/sh");
 
         let cmdline = CmdlineConfig::parse("ro quiet");
-        let init_path = cmdline.get("init").unwrap_or(DEFAULT_INIT);
+        let init_path = init_path_from_cmdline(&cmdline);
         let result = resolve_init_path(temp.path(), init_path);
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/sbin/init");
+    }
+
+    #[test]
+    fn test_cmdline_init_bare_flag_falls_back_to_default() {
+        // bare `init` token (no =) stores Some("") — must fall back to DEFAULT_INIT
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok(), "bare init token must fall back to DEFAULT_INIT");
+        assert_eq!(result.unwrap(), "/sbin/init");
+    }
+
+    #[test]
+    fn test_cmdline_init_empty_value_falls_back_to_default() {
+        // `init=` (empty value) stores Some("") — must fall back to DEFAULT_INIT
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init= ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok(), "empty init= value must fall back to DEFAULT_INIT");
         assert_eq!(result.unwrap(), "/sbin/init");
     }
 }
