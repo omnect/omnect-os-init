@@ -335,7 +335,10 @@ mod tests {
         let cmdline = CmdlineConfig::parse("init ro quiet");
         let init_path = init_path_from_cmdline(&cmdline);
         let result = resolve_init_path(temp.path(), init_path);
-        assert!(result.is_ok(), "bare init token must fall back to DEFAULT_INIT");
+        assert!(
+            result.is_ok(),
+            "bare init token must fall back to DEFAULT_INIT"
+        );
         assert_eq!(result.unwrap(), "/sbin/init");
     }
 
@@ -350,7 +353,10 @@ mod tests {
         let cmdline = CmdlineConfig::parse("init= ro quiet");
         let init_path = init_path_from_cmdline(&cmdline);
         let result = resolve_init_path(temp.path(), init_path);
-        assert!(result.is_ok(), "empty init= value must fall back to DEFAULT_INIT");
+        assert!(
+            result.is_ok(),
+            "empty init= value must fall back to DEFAULT_INIT"
+        );
         assert_eq!(result.unwrap(), "/sbin/init");
     }
 }
