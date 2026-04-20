@@ -145,6 +145,14 @@ mod tests {
     }
 
     #[test]
+    fn test_cmdline_duplicate_key_last_wins() {
+        // HashMap::insert overwrites; the last occurrence of a key wins.
+        // This test pins that contract so a refactor to first-wins is caught.
+        let cfg = CmdlineConfig::parse("rootpart=2 rootpart=3");
+        assert_eq!(cfg.get("rootpart"), Some("3"));
+    }
+
+    #[test]
     fn test_config_default() {
         let cfg = Config::default();
         assert!(!cfg.overlay.persistent_var_log);
