@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::error::InitramfsError;
+use crate::error::ConfigError;
 
 /// Build-time constants generated from Yocto environment variables by build.rs.
 pub mod build {
@@ -27,11 +27,8 @@ pub struct CmdlineConfig {
 impl CmdlineConfig {
     /// Load from `/proc/cmdline`.
     pub fn load() -> crate::Result<Self> {
-        let raw = fs::read_to_string("/proc/cmdline").map_err(|e| {
-            InitramfsError::Io(std::io::Error::other(format!(
-                "failed to read /proc/cmdline: {e}"
-            )))
-        })?;
+        let raw = fs::read_to_string("/proc/cmdline")
+            .map_err(ConfigError::CmdlineReadFailed)?;
         Ok(Self::parse(&raw))
     }
 

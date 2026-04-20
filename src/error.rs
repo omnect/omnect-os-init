@@ -27,6 +27,9 @@ pub enum InitramfsError {
     #[error("Logging error: {0}")]
     Logging(#[from] LoggingError),
 
+    #[error("Config error: {0}")]
+    Config(#[from] ConfigError),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -135,6 +138,13 @@ pub enum FilesystemError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Errors related to configuration loading
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("failed to read /proc/cmdline: {0}")]
+    CmdlineReadFailed(#[source] std::io::Error),
 }
 
 /// Errors related to logging
