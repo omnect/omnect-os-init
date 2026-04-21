@@ -15,7 +15,7 @@ pub type Result<T> = std::result::Result<T, PartitionError>;
 // Re-export main types
 #[cfg(feature = "grub")]
 pub use device::root_device_from_blkid;
-pub use device::{RootDevice, detect_root_device, parse_cmdline_param};
+pub use device::{RootDevice, detect_root_device};
 #[cfg(feature = "uboot")]
 pub use device::{device_from_path, parse_device_path};
 pub use layout::{PartitionLayout, partition_names};

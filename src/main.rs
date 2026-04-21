@@ -13,10 +13,11 @@ use log::{error, info, warn};
 use omnect_os_init::{
     Result,
     bootloader::create_bootloader,
+    config::Config,
     error::{FilesystemError, InitramfsError},
     filesystem::{
-        OverlayConfig, mount_partitions, persist_fsck_results, setup_data_overlay,
-        setup_etc_overlay, setup_raw_rootfs_mount,
+        mount_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
+        setup_raw_rootfs_mount,
     },
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
@@ -68,11 +69,12 @@ fn main() {
 fn run() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
-    let rootfs = std::path::Path::new(ROOTFS_DIR);
+    let config = Config::load()?;
+    let rootfs = Path::new(ROOTFS_DIR);
 
     // Detect root device
     info!("Detecting root device...");
-    let root_device = detect_root_device()?;
+    let root_device = detect_root_device(&config.cmdline)?;
     info!(
         "Root device: {} (partition {})",
         root_device.base.display(),
@@ -128,11 +130,8 @@ fn run() -> Result<()> {
     setup_raw_rootfs_mount(rootfs)?;
 
     // Setup overlays
-    let overlay_config =
-        OverlayConfig::new(rootfs).with_persistent_var_log(cfg!(feature = "persistent-var-log"));
-
-    setup_etc_overlay(&overlay_config)?;
-    setup_data_overlay(&overlay_config)?;
+    setup_etc_overlay(rootfs)?;
+    setup_data_overlay(rootfs)?;
 
     // Create fs-links
     create_fs_links(rootfs)?;
@@ -148,7 +147,7 @@ fn run() -> Result<()> {
     info!("omnect-os-initramfs completed successfully");
 
     // Switch root to final rootfs
-    switch_root(rootfs)?;
+    switch_root(rootfs, &config.cmdline)?;
 
     // This should never be reached
     Ok(())

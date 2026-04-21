@@ -13,14 +13,29 @@ use std::process::Command;
 use nix::mount::{MsFlags, mount};
 use nix::unistd::{chdir, chroot};
 
+use crate::config::CmdlineConfig;
 use crate::error::{InitramfsError, Result};
 
 /// Default init binary path, used when `init=` is absent from the kernel cmdline.
 const DEFAULT_INIT: &str = "/sbin/init";
 
+/// Resolve the init binary path from the kernel cmdline.
+///
+/// Returns `DEFAULT_INIT` when `init=` is absent, empty, or a bare flag.
+/// The filter cannot live in `CmdlineConfig::get` because bare flags (`ro`,
+/// `quiet`, etc.) are legitimately stored as empty strings and callers rely
+/// on `get("ro") == Some("")` to detect them. The empty-means-absent
+/// convention is specific to `init=`, so the filter belongs here.
+fn init_path_from_cmdline(cmdline: &CmdlineConfig) -> &str {
+    cmdline
+        .get("init")
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_INIT)
+}
+
 /// Switch root to the new rootfs and exec init
-pub fn switch_root(new_root: &Path) -> Result<()> {
-    let init_path = DEFAULT_INIT;
+pub fn switch_root(new_root: &Path, cmdline: &CmdlineConfig) -> Result<()> {
+    let init_path = init_path_from_cmdline(cmdline);
 
     log::info!(
         "Switching root to {} with init {}",
@@ -280,5 +295,70 @@ mod tests {
         let result = resolve_init_path(temp.path(), "/lib/systemd/systemd");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/lib/systemd/systemd");
+    }
+
+    #[test]
+    fn test_cmdline_init_override_used() {
+        // init= on the kernel cmdline must take precedence over DEFAULT_INIT.
+        let temp = TempDir::new().unwrap();
+        let systemd_dir = temp.path().join("lib/systemd");
+        fs::create_dir_all(&systemd_dir).unwrap();
+        write_executable(&systemd_dir.join("systemd"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init=/lib/systemd/systemd ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/lib/systemd/systemd");
+    }
+
+    #[test]
+    fn test_cmdline_init_absent_falls_back_to_default() {
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/sbin/init");
+    }
+
+    #[test]
+    fn test_cmdline_init_bare_flag_falls_back_to_default() {
+        // bare `init` token (no =) stores Some("") — must fall back to DEFAULT_INIT
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(
+            result.is_ok(),
+            "bare init token must fall back to DEFAULT_INIT"
+        );
+        assert_eq!(result.unwrap(), "/sbin/init");
+    }
+
+    #[test]
+    fn test_cmdline_init_empty_value_falls_back_to_default() {
+        // `init=` (empty value) stores Some("") — must fall back to DEFAULT_INIT
+        let temp = TempDir::new().unwrap();
+        let sbin = temp.path().join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        write_executable(&sbin.join("init"), "#!/bin/sh");
+
+        let cmdline = CmdlineConfig::parse("init= ro quiet");
+        let init_path = init_path_from_cmdline(&cmdline);
+        let result = resolve_init_path(temp.path(), init_path);
+        assert!(
+            result.is_ok(),
+            "empty init= value must fall back to DEFAULT_INIT"
+        );
+        assert_eq!(result.unwrap(), "/sbin/init");
     }
 }

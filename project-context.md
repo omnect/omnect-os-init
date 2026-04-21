@@ -14,15 +14,24 @@
 - `src/bootloader/mod.rs`: Trait-based abstraction over GRUB/U-Boot
 - `src/bootloader/grub.rs`: GRUB implementation using `grub-editenv`
 - `src/bootloader/uboot.rs`: U-Boot implementation using `fw_printenv`/`fw_setenv`
-- `src/config/mod.rs`: Parses `/proc/cmdline` and `/etc/os-release`
+- `src/config/mod.rs`: Parses `/proc/cmdline`; build-time constants from Yocto env via `build.rs`
 - `src/logging/kmsg.rs`: Writes to `/dev/kmsg` with kernel log levels
+- `src/partition/device.rs`: Detects root block device from cmdline (GRUB UUID or U-Boot path)
+- `src/filesystem/overlayfs.rs`: Sets up overlayfs for `/etc`, `/home`; bind-mounts `/var/lib`, `/usr/local`
+- `src/runtime/switch_root.rs`: MS_MOVE + chroot transition to real rootfs; execs init
 
 ## 3. Build & Test Commands
 - **Build:** `cargo build` / `cargo build --release`
 - **Check:** `cargo check`
 - **Format:** `cargo fmt -- --check`
 - **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
-- **Test:** `cargo test --features <grub|uboot>`
+- **Test:** Run all four valid feature combinations:
+  ```
+  cargo test --features grub,gpt
+  cargo test --features grub,dos
+  cargo test --features uboot,gpt
+  cargo test --features uboot,dos
+  ```
 - **Audit:** `cargo audit`
 
 ## 4. Feature Flags
@@ -37,7 +46,7 @@
 | `release-image` | Release behaviour: infinite loop on fatal error |
 
 ## 5. Runtime Constraints
-- **No heap allocator dependency** for early init paths
+- **Heap allocation is used freely** (`String`, `PathBuf`, `HashMap`); the OS image provides a standard allocator
 - **Read-only rootfs:** All state goes to `/data` or bootloader env
 - **Logging:** Available only after `/dev` is mounted
 - **Exit behavior:** 
@@ -53,7 +62,6 @@
 - **File organization:** `use`, `const`, `static`, and `type` declarations must appear at the top of the file, before any `fn`, `impl`, `struct`, or `enum` definitions. Exceptions: `use super::*` and imports inside `#[cfg(test)] mod tests` blocks are placed within those blocks.
 
 ## 7. Integration Points
-- **Kernel cmdline:** `rootpart=`, `rootblk=`, `root=`, `quiet`
-- **os-release:** `OMNECT_RELEASE_IMAGE`, `MACHINE_FEATURES`, `DISTRO_FEATURES`
+- **Kernel cmdline:** `rootpart=` (GRUB: root partition number), `bootpart_fsuuid=` (GRUB: boot partition UUID), `root=` (U-Boot: full root device path), `init=` (optional init binary override), `quiet` (suppress console output); `rootblk=` is parsed for device symlink naming only — no logic reads it
 - **Device symlinks:** Creates `/dev/omnect/{boot,rootfs,data,...}`
 - **ODS:** Prepares runtime files for `omnect-device-service`

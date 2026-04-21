@@ -10,11 +10,11 @@
 //! - **U-Boot** (`root=/dev/<device>`): full device path set by U-Boot bootargs
 //!   (e.g. `root=/dev/mmcblk1p2`). Base device and separator are derived from the path.
 
-use std::fs;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::config::CmdlineConfig;
 use crate::partition::{PartitionError, Result};
 
 const DEVICE_WAIT_TIMEOUT_SECS: u64 = 30;
@@ -46,22 +46,13 @@ impl RootDevice {
     }
 }
 
-/// Detects the root device by parsing kernel command line parameters.
-pub fn detect_root_device() -> Result<RootDevice> {
-    detect_root_device_from_cmdline("/proc/cmdline")
-}
-
-/// Internal implementation with configurable cmdline path for testing.
-pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<RootDevice> {
-    let cmdline = fs::read_to_string(cmdline_path).map_err(|e| {
-        PartitionError::DeviceDetection(format!("failed to read {}: {}", cmdline_path, e))
-    })?;
-
+/// Detects the root device from parsed kernel command line parameters.
+pub fn detect_root_device(cmdline: &CmdlineConfig) -> Result<RootDevice> {
     // GRUB: rootpart=N + bootpart_fsuuid=<uuid>
-    // GRUB and initramfs always ship in the same image, so bootpart_fsuuid is
-    // always present on GRUB boots — no fallback paths needed.
+    // GRUB sets bootpart_fsuuid= on the kernel cmdline at boot time via
+    // `probe --fs-uuid`, so it is always present on GRUB boots.
     #[cfg(feature = "grub")]
-    if let Some(part_str) = parse_cmdline_param(&cmdline, "rootpart")? {
+    if let Some(part_str) = cmdline.get("rootpart") {
         let part_num: u32 = part_str.parse().map_err(|_| {
             PartitionError::DeviceDetection(format!(
                 "rootpart= is not a valid partition number: {}",
@@ -69,25 +60,25 @@ pub(crate) fn detect_root_device_from_cmdline(cmdline_path: &str) -> Result<Root
             ))
         })?;
 
-        let fsuuid = parse_cmdline_param(&cmdline, "bootpart_fsuuid")?.ok_or_else(|| {
+        let fsuuid = cmdline.get("bootpart_fsuuid").ok_or_else(|| {
             PartitionError::DeviceDetection(
                 "rootpart= present but bootpart_fsuuid= missing from cmdline".into(),
             )
         })?;
 
-        return device_from_fsuuid(&fsuuid, part_num);
+        return device_from_fsuuid(fsuuid, part_num);
     }
 
     // U-Boot: root=/dev/<device> (full partition path in bootargs)
     #[cfg(feature = "uboot")]
-    if let Some(root) = parse_cmdline_param(&cmdline, "root")? {
+    if let Some(root) = cmdline.get("root") {
         if !root.starts_with("/dev/") {
             return Err(PartitionError::DeviceDetection(format!(
                 "root= must start with /dev/, got: {}",
                 root
             )));
         }
-        return device_from_path(&root);
+        return device_from_path(root);
     }
 
     #[cfg(feature = "grub")]
@@ -274,87 +265,9 @@ fn wait_for_device(device: &std::path::Path) -> Result<()> {
     }
 }
 
-/// Parses a parameter value from kernel command line.
-///
-/// Handles `key=value` format. Values containing spaces are not supported
-/// (the kernel cmdline splits on whitespace; quoted values with spaces
-/// would be split into multiple tokens by `split_whitespace`).
-pub fn parse_cmdline_param(cmdline: &str, key: &str) -> Result<Option<String>> {
-    let prefix = format!("{}=", key);
-    for token in cmdline.split_whitespace() {
-        if let Some(value) = token.strip_prefix(&prefix) {
-            // The omnect kernel cmdline convention never uses single-quoted values.
-            // This strip is purely defensive against the double-quoted root="..." style
-            // that some bootloaders emit.
-            return Ok(Some(value.trim_matches('"').to_string()));
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_cmdline_param_bootpart_fsuuid() {
-        let cmdline = "rootpart=2 bootpart_fsuuid=1234-ABCD ro quiet";
-        assert_eq!(
-            parse_cmdline_param(cmdline, "rootpart").unwrap(),
-            Some("2".to_string())
-        );
-        assert_eq!(
-            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
-            Some("1234-ABCD".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_cmdline_param_rootpart() {
-        let cmdline = "rootpart=2 console=ttyS0,115200 quiet";
-        assert_eq!(
-            parse_cmdline_param(cmdline, "rootpart").unwrap(),
-            Some("2".to_string())
-        );
-        assert_eq!(
-            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn test_parse_cmdline_param_missing() {
-        let cmdline = "ro quiet";
-        assert_eq!(parse_cmdline_param(cmdline, "rootpart").unwrap(), None);
-        assert_eq!(
-            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn test_parse_cmdline_param_complex() {
-        let cmdline =
-            "rootpart=2 coherent_pool=1M console=ttyS0,115200 bootpart_fsuuid=ABCD-1234 ro";
-        assert_eq!(
-            parse_cmdline_param(cmdline, "rootpart").unwrap(),
-            Some("2".to_string())
-        );
-        assert_eq!(
-            parse_cmdline_param(cmdline, "bootpart_fsuuid").unwrap(),
-            Some("ABCD-1234".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_cmdline_param_uboot_root() {
-        let cmdline = "root=/dev/mmcblk1p2 ro quiet";
-        assert_eq!(
-            parse_cmdline_param(cmdline, "root").unwrap(),
-            Some("/dev/mmcblk1p2".to_string())
-        );
-        assert_eq!(parse_cmdline_param(cmdline, "rootpart").unwrap(), None);
-    }
 
     #[test]
     fn test_split_partition_suffix_sata() {
@@ -485,5 +398,77 @@ mod tests {
         };
         assert_eq!(device.partition_path(1), PathBuf::from("/dev/vda1"));
         assert_eq!(device.partition_path(7), PathBuf::from("/dev/vda7"));
+    }
+
+    // --- detect_root_device error paths ---
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_missing_rootpart() {
+        // No rootpart= on cmdline → error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("rootpart"),
+            "error should mention 'rootpart', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_missing_fsuuid() {
+        // rootpart= present but bootpart_fsuuid= missing → error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("rootpart=2 ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("bootpart_fsuuid"),
+            "error should mention 'bootpart_fsuuid', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "grub")]
+    #[test]
+    fn test_detect_root_device_grub_non_numeric_rootpart() {
+        // rootpart= is not a number → parse error before blkid is called.
+        let cfg = crate::config::CmdlineConfig::parse("rootpart=sda2 bootpart_fsuuid=ABCD-1234 ro");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not a valid partition number") || msg.contains("sda2"),
+            "error should describe a parse failure, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "uboot")]
+    #[test]
+    fn test_detect_root_device_uboot_missing_root() {
+        // No root= on cmdline → error immediately, no device wait.
+        let cfg = crate::config::CmdlineConfig::parse("ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("root="),
+            "error should mention 'root=', got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "uboot")]
+    #[test]
+    fn test_detect_root_device_uboot_root_without_dev_prefix() {
+        // root= present but does not start with /dev/ → rejected before device wait.
+        let cfg = crate::config::CmdlineConfig::parse("root=mmcblk0p2 ro quiet");
+        let result = detect_root_device(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("/dev/"),
+            "error should mention '/dev/', got: {msg}"
+        );
     }
 }
