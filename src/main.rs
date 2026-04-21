@@ -131,7 +131,7 @@ fn run() -> Result<()> {
 
     // Setup overlays
     setup_etc_overlay(rootfs)?;
-    setup_data_overlay(rootfs, &config.overlay)?;
+    setup_data_overlay(rootfs)?;
 
     // Create fs-links
     create_fs_links(rootfs)?;

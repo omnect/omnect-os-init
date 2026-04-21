@@ -12,7 +12,6 @@ use std::process::Command;
 
 use nix::mount::MsFlags;
 
-use crate::config::OverlayConfig;
 use crate::error::FilesystemError;
 use crate::filesystem::{MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private};
 
@@ -36,6 +35,7 @@ mod paths {
     /// The data partition layout omits the "usr/" prefix.
     pub const DATA_LOCAL_DIR: &str = "local";
     pub const USR_LOCAL: &str = "usr/local";
+    #[cfg(feature = "persistent-var-log")]
     pub const VAR_LOG: &str = "var/log";
 }
 
@@ -58,15 +58,14 @@ pub mod mount_points {
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
 pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
-    let rootfs = rootfs_dir;
-    let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-    let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
+    let etc_mount = rootfs_dir.join(mount_points::ETC_PARTITION);
+    let factory_mount = rootfs_dir.join(mount_points::FACTORY_PARTITION);
 
     // Overlay directories
     let upper_dir = etc_mount.join(overlay_dirs::UPPER);
     let work_dir = etc_mount.join(overlay_dirs::WORK);
-    let lower_dir = rootfs.join(paths::ETC);
-    let target = rootfs.join(paths::ETC);
+    let lower_dir = rootfs_dir.join(paths::ETC);
+    let target = rootfs_dir.join(paths::ETC);
 
     // Factory etc is only used for first-boot initialization
     let factory_etc = factory_mount.join(paths::ETC);
@@ -103,29 +102,27 @@ pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
 /// - Overlay for /home (rootfs/home lower, data/home/upper upper)
 /// - Bind mount: data/var/lib -> rootfs/var/lib
 /// - Bind mount: data/local -> rootfs/usr/local
-/// - Optional: data/var/log -> rootfs/var/log (if persistent_var_log enabled)
-pub fn setup_data_overlay(rootfs_dir: &Path, overlay: &OverlayConfig) -> Result<()> {
-    let rootfs = rootfs_dir;
-    let data_mount = rootfs.join(mount_points::DATA_PARTITION);
+/// - Conditional: data/var/log -> rootfs/var/log (compile-time `persistent-var-log` feature)
+pub fn setup_data_overlay(rootfs_dir: &Path) -> Result<()> {
+    let data_mount = rootfs_dir.join(mount_points::DATA_PARTITION);
 
-    setup_home_overlay(rootfs, &data_mount)?;
+    setup_home_overlay(rootfs_dir, &data_mount)?;
 
     bind_mount(
         &data_mount.join(paths::VAR_LIB),
-        &rootfs.join(paths::VAR_LIB),
+        &rootfs_dir.join(paths::VAR_LIB),
     )?;
     // data partition uses a "local" subdir instead of "usr/local"
     bind_mount(
         &data_mount.join(paths::DATA_LOCAL_DIR),
-        &rootfs.join(paths::USR_LOCAL),
+        &rootfs_dir.join(paths::USR_LOCAL),
     )?;
 
-    if overlay.persistent_var_log {
-        bind_mount(
-            &data_mount.join(paths::VAR_LOG),
-            &rootfs.join(paths::VAR_LOG),
-        )?;
-    }
+    #[cfg(feature = "persistent-var-log")]
+    bind_mount(
+        &data_mount.join(paths::VAR_LOG),
+        &rootfs_dir.join(paths::VAR_LOG),
+    )?;
 
     Ok(())
 }

@@ -49,8 +49,8 @@ impl RootDevice {
 /// Detects the root device from parsed kernel command line parameters.
 pub fn detect_root_device(cmdline: &CmdlineConfig) -> Result<RootDevice> {
     // GRUB: rootpart=N + bootpart_fsuuid=<uuid>
-    // GRUB and initramfs always ship in the same image, so bootpart_fsuuid is
-    // always present on GRUB boots — no fallback paths needed.
+    // GRUB sets bootpart_fsuuid= on the kernel cmdline at boot time via
+    // `probe --fs-uuid`, so it is always present on GRUB boots.
     #[cfg(feature = "grub")]
     if let Some(part_str) = cmdline.get("rootpart") {
         let part_num: u32 = part_str.parse().map_err(|_| {

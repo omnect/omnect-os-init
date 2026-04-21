@@ -22,8 +22,10 @@ const DEFAULT_INIT: &str = "/sbin/init";
 /// Resolve the init binary path from the kernel cmdline.
 ///
 /// Returns `DEFAULT_INIT` when `init=` is absent, empty, or a bare flag.
-/// `CmdlineConfig::parse` stores bare flags and empty values both as `Some("")`;
-/// `.filter` converts that to `None` so `unwrap_or` fires correctly.
+/// The filter cannot live in `CmdlineConfig::get` because bare flags (`ro`,
+/// `quiet`, etc.) are legitimately stored as empty strings and callers rely
+/// on `get("ro") == Some("")` to detect them. The empty-means-absent
+/// convention is specific to `init=`, so the filter belongs here.
 fn init_path_from_cmdline(cmdline: &CmdlineConfig) -> &str {
     cmdline
         .get("init")

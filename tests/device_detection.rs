@@ -14,7 +14,7 @@ use omnect_os_init::partition::parse_device_path;
 #[cfg(feature = "grub")]
 use omnect_os_init::partition::root_device_from_blkid;
 
-#[cfg(all(feature = "grub", feature = "gpt"))]
+#[cfg(feature = "grub")]
 use omnect_os_init::config::CmdlineConfig;
 
 // ---------------------------------------------------------------------------
@@ -211,6 +211,43 @@ fn test_full_pipeline_arm_sd_uboot_root_b() {
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk1"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk1p3"));
+}
+
+#[cfg(all(feature = "grub", feature = "dos"))]
+#[test]
+fn test_full_pipeline_x86_sata_grub_dos_root_a() {
+    let cmdline = "rootpart=2 bootpart_fsuuid=ABCD-1234 ro quiet";
+    let part_num: u32 = CmdlineConfig::parse(cmdline)
+        .get("rootpart")
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let rd = root_device_from_blkid("/dev/sda1", part_num).unwrap();
+    let layout = build_layout(rd);
+
+    assert_eq!(layout.device.base, PathBuf::from("/dev/sda"));
+    assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
+    // DOS layout: boot=1, rootA=2, rootB=3, extended=4, factory=5, cert=6, etc=7, data=8
+    assert_eq!(
+        layout.partitions.get(partition_names::DATA),
+        Some(&PathBuf::from("/dev/sda8"))
+    );
+}
+
+#[cfg(all(feature = "uboot", feature = "gpt"))]
+#[test]
+fn test_full_pipeline_arm_emmc_uboot_gpt_root_a() {
+    let rd = parse_device_path("/dev/mmcblk0p2").unwrap();
+    let layout = build_layout(rd);
+
+    assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk0"));
+    assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p2"));
+    // GPT layout: boot=1, rootA=2, rootB=3, factory=4, cert=5, etc=6, data=7
+    assert_eq!(
+        layout.partitions.get(partition_names::DATA),
+        Some(&PathBuf::from("/dev/mmcblk0p7"))
+    );
 }
 
 #[cfg(all(feature = "grub", feature = "gpt"))]

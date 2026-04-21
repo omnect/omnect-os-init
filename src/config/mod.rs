@@ -27,8 +27,7 @@ pub struct CmdlineConfig {
 impl CmdlineConfig {
     /// Load from `/proc/cmdline`.
     pub fn load() -> crate::Result<Self> {
-        let raw = fs::read_to_string("/proc/cmdline")
-            .map_err(ConfigError::CmdlineReadFailed)?;
+        let raw = fs::read_to_string("/proc/cmdline").map_err(ConfigError::CmdlineReadFailed)?;
         Ok(Self::parse(&raw))
     }
 
@@ -57,35 +56,14 @@ impl CmdlineConfig {
     pub fn get(&self, key: &str) -> Option<&str> {
         self.params.get(key).map(String::as_str)
     }
-
-}
-
-/// Configuration for overlay filesystem setup.
-#[derive(Debug, Clone, Default)]
-pub struct OverlayConfig {
-    /// Whether to enable persistent `/var/log` (controlled by the `persistent-var-log` feature).
-    pub persistent_var_log: bool,
 }
 
 /// Unified runtime configuration, loaded once during early init and passed
 /// explicitly to all init sub-systems.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Parsed kernel command line.
     pub cmdline: CmdlineConfig,
-    /// Overlay filesystem configuration.
-    pub overlay: OverlayConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            cmdline: CmdlineConfig::default(),
-            overlay: OverlayConfig {
-                persistent_var_log: cfg!(feature = "persistent-var-log"),
-            },
-        }
-    }
 }
 
 impl Config {
@@ -94,10 +72,7 @@ impl Config {
     /// Reads `/proc/cmdline` and evaluates compile-time feature flags.
     pub fn load() -> crate::Result<Self> {
         let cmdline = CmdlineConfig::load()?;
-        let overlay = OverlayConfig {
-            persistent_var_log: cfg!(feature = "persistent-var-log"),
-        };
-        Ok(Self { cmdline, overlay })
+        Ok(Self { cmdline })
     }
 }
 
@@ -143,13 +118,5 @@ mod tests {
         // This test pins that contract so a refactor to first-wins is caught.
         let cfg = CmdlineConfig::parse("rootpart=2 rootpart=3");
         assert_eq!(cfg.get("rootpart"), Some("3"));
-    }
-
-    #[test]
-    fn test_config_default() {
-        let cfg = Config::default();
-        // persistent_var_log reflects the compile-time feature flag,
-        // not a hard-coded false.
-        assert_eq!(cfg.overlay.persistent_var_log, cfg!(feature = "persistent-var-log"));
     }
 }
