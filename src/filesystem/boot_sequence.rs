@@ -39,7 +39,7 @@ pub fn fsck_and_record(
 ) -> std::result::Result<(), FilesystemError> {
     match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
-            ods_status.add_fsck_result(name, r.exit_code, r.output);
+            ods_status.add_fsck_result(name, r.exit_code.bits(), r.output);
             Ok(())
         }
         Err(FilesystemError::FsckRequiresReboot {

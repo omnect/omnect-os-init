@@ -2,6 +2,7 @@
 //!
 //! Runs fsck on partitions before mounting and handles exit codes appropriately.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,52 +23,151 @@ const FSCK_AUTO_REPAIR_FLAG: &str = "-y";
 /// Without -t, the wrapper falls back to blkid probing which is absent in initramfs.
 const FSCK_TYPE_FLAG: &str = "-t";
 
-/// fsck exit codes
-mod exit_code {
-    /// No errors
-    pub const OK: i32 = 0;
-    /// Filesystem errors corrected
-    pub const CORRECTED: i32 = 1;
-    /// System should be rebooted
-    pub const REBOOT_REQUIRED: i32 = 2;
-    /// Filesystem errors left uncorrected
-    pub const ERRORS_UNCORRECTED: i32 = 4;
-    /// Operational error
-    pub const OPERATIONAL_ERROR: i32 = 8;
-    /// Usage or syntax error
-    pub const USAGE_ERROR: i32 = 16;
-    /// Cancelled by user
-    pub const CANCELLED: i32 = 32;
-    /// Shared library error
-    pub const LIBRARY_ERROR: i32 = 128;
-    /// Sentinel for when the process was killed by a signal (no exit code)
-    pub const UNKNOWN: i32 = -1;
+/// Type-safe wrapper for fsck(8) exit codes.
+///
+/// The value is a bitmask; individual bits can be tested with the predicate
+/// methods below. `UNKNOWN` (-1) is a sentinel for processes killed by signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FsckExitCode(i32);
+
+impl FsckExitCode {
+    /// No errors detected.
+    pub const OK: Self = Self(0);
+    /// Filesystem errors corrected (safe to mount with `-y`).
+    pub const CORRECTED: Self = Self(1);
+    /// System should be rebooted before mounting.
+    pub const REBOOT_REQUIRED: Self = Self(2);
+    /// Filesystem errors left uncorrected.
+    pub const ERRORS_UNCORRECTED: Self = Self(4);
+    /// Operational error in fsck itself.
+    pub const OPERATIONAL_ERROR: Self = Self(8);
+    /// Usage or syntax error.
+    pub const USAGE_ERROR: Self = Self(16);
+    /// Cancelled by user request.
+    pub const CANCELLED: Self = Self(32);
+    /// Shared library error.
+    pub const LIBRARY_ERROR: Self = Self(128);
+    /// Sentinel: process was killed by a signal (no exit status from the OS).
+    pub const UNKNOWN: Self = Self(-1);
+
+    /// The raw integer value (for wire-format serialization into FilesystemError fields).
+    pub fn bits(self) -> i32 {
+        self.0
+    }
+
+    pub fn is_clean(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn is_corrected(self) -> bool {
+        self.0 & 1 != 0
+    }
+
+    pub fn is_reboot_required(self) -> bool {
+        self.0 & 2 != 0
+    }
+
+    pub fn has_uncorrected_errors(self) -> bool {
+        self.0 & 4 != 0
+    }
+
+    pub fn has_operational_error(self) -> bool {
+        self.0 & 8 != 0
+    }
+
+    pub fn is_usage_error(self) -> bool {
+        self.0 & 16 != 0
+    }
+
+    pub fn is_cancelled(self) -> bool {
+        self.0 & 32 != 0
+    }
+
+    pub fn is_library_error(self) -> bool {
+        self.0 & 128 != 0
+    }
+
+    /// Returns `true` if the filesystem is safe to mount.
+    ///
+    /// True only when the exit code is 0 (clean) or 1 (errors corrected by -y)
+    /// and reboot is not required. Code 3 (CORRECTED | REBOOT_REQUIRED) returns
+    /// false — reboot takes precedence.
+    pub fn is_mount_safe(self) -> bool {
+        self.is_clean() || (self.is_corrected() && !self.is_reboot_required())
+    }
 }
 
-/// Result of a filesystem check
+impl From<i32> for FsckExitCode {
+    fn from(code: i32) -> Self {
+        Self(code)
+    }
+}
+
+impl From<Option<i32>> for FsckExitCode {
+    /// Construct from process exit status. `None` means killed by signal → `UNKNOWN`.
+    fn from(code: Option<i32>) -> Self {
+        Self(code.unwrap_or(-1))
+    }
+}
+
+impl fmt::Display for FsckExitCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if *self == Self::UNKNOWN {
+            return write!(f, "unknown (process killed by signal or spawn failed)");
+        }
+        if self.is_clean() {
+            return write!(f, "No errors");
+        }
+        let mut parts: Vec<&str> = Vec::new();
+        if self.is_corrected() {
+            parts.push("errors corrected");
+        }
+        if self.is_reboot_required() {
+            parts.push("reboot required");
+        }
+        if self.has_uncorrected_errors() {
+            parts.push("uncorrected errors");
+        }
+        if self.has_operational_error() {
+            parts.push("operational error");
+        }
+        if self.is_usage_error() {
+            parts.push("usage error");
+        }
+        if self.is_cancelled() {
+            parts.push("cancelled");
+        }
+        if self.is_library_error() {
+            parts.push("library error");
+        }
+        if parts.is_empty() {
+            write!(f, "unknown error (code {})", self.0)
+        } else {
+            write!(f, "{}", parts.join(", "))
+        }
+    }
+}
+
+/// Result of a filesystem check.
 #[derive(Debug, Clone)]
 pub struct FsckResult {
-    /// Device that was checked
+    /// Device that was checked.
     pub device: PathBuf,
-    /// Exit code from fsck
-    pub exit_code: i32,
-    /// Output from fsck (stdout + stderr)
+    /// Parsed exit code. Use predicate methods (`is_mount_safe`, `is_reboot_required`, …).
+    pub exit_code: FsckExitCode,
+    /// Combined stdout + stderr output from fsck.
     pub output: String,
-    /// Whether the check was successful (code 0: clean, or code 1: errors corrected by -y)
-    pub success: bool,
-    /// Whether a reboot is required (code 2 only: fsck explicitly requests reboot)
-    pub reboot_required: bool,
 }
 
 impl FsckResult {
-    /// Check if there were uncorrected errors
+    /// Returns `true` if uncorrected filesystem errors remain.
     pub fn has_uncorrected_errors(&self) -> bool {
-        self.exit_code & exit_code::ERRORS_UNCORRECTED != 0
+        self.exit_code.has_uncorrected_errors()
     }
 
-    /// Check if there was an operational error
+    /// Returns `true` if fsck encountered an operational (tool-level) error.
     pub fn has_operational_error(&self) -> bool {
-        self.exit_code & exit_code::OPERATIONAL_ERROR != 0
+        self.exit_code.has_operational_error()
     }
 }
 
@@ -99,69 +199,58 @@ fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
         device: device.to_path_buf(),
-        code: exit_code::UNKNOWN,
+        code: FsckExitCode::UNKNOWN.bits(),
         output: format!("Failed to execute fsck: {}", e),
     })?;
 
-    let exit_code = output.status.code().unwrap_or(exit_code::UNKNOWN);
+    let exit_code = FsckExitCode::from(output.status.code());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined_output = format!("{}{}", stdout, stderr);
 
-    let reboot_required = exit_code & exit_code::REBOOT_REQUIRED != 0;
-    let result = FsckResult {
-        device: device.to_path_buf(),
-        exit_code,
-        output: combined_output.clone(),
-        // Use exact match (not bitwise) so exit code 3 (CORRECTED | REBOOT_REQUIRED)
-        // never sets success=true. When REBOOT_REQUIRED is set, reboot takes precedence.
-        success: (exit_code == exit_code::OK || exit_code == exit_code::CORRECTED)
-            && !reboot_required,
-        reboot_required,
-    };
-
-    // Log the result
-    if exit_code == exit_code::OK {
+    if exit_code.is_clean() {
         log::debug!("fsck: {} is clean", device.display());
-    } else if exit_code == exit_code::CORRECTED {
+    } else if exit_code == FsckExitCode::CORRECTED {
         log::info!(
             "fsck corrected errors on {} (code 1) — filesystem is clean, continuing",
             device.display()
         );
-    } else if result.reboot_required {
+    } else if exit_code.is_reboot_required() {
         log::warn!(
-            "fsck on {} requires reboot (code {})",
+            "fsck on {} requires reboot ({})",
             device.display(),
             exit_code
         );
     } else {
         log::error!(
-            "fsck failed on {} with code {}: {}",
+            "fsck failed on {} with {}: {}",
             device.display(),
             exit_code,
             combined_output.lines().next().unwrap_or("(no output)")
         );
     }
 
-    // Exit code 2: fsck requests a reboot before mounting
-    if result.reboot_required {
+    if exit_code.is_reboot_required() {
         return Err(FilesystemError::FsckRequiresReboot {
             device: device.to_path_buf(),
-            code: exit_code,
+            code: exit_code.bits(),
             output: combined_output,
         });
     }
 
-    // Exit codes ≥4: uncorrectable errors
-    if !result.success {
+    if !exit_code.is_mount_safe() {
         return Err(FilesystemError::FsckFailed {
             device: device.to_path_buf(),
-            code: exit_code,
+            code: exit_code.bits(),
             output: combined_output,
         });
     }
 
-    Ok(result)
+    Ok(FsckResult {
+        device: device.to_path_buf(),
+        exit_code,
+        output: combined_output,
+    })
 }
 
 /// Run fsck on a device, tolerating non-critical errors.
@@ -171,71 +260,25 @@ fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
 pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResult> {
     match check_filesystem(device, fstype) {
         Ok(result) => Ok(result),
-        Err(FilesystemError::FsckRequiresReboot {
-            device,
-            code,
-            output,
-        }) => Err(FilesystemError::FsckRequiresReboot {
-            device,
-            code,
-            output,
-        }),
+        Err(e @ FilesystemError::FsckRequiresReboot { .. }) => Err(e),
         Err(FilesystemError::FsckFailed {
             device,
             code,
             output,
         }) => {
+            let exit_code = FsckExitCode::from(code);
             log::warn!(
-                "fsck on {} had errors (code {}), continuing anyway",
+                "fsck on {} had errors ({}), continuing anyway",
                 device.display(),
-                code
+                exit_code
             );
             Ok(FsckResult {
                 device,
-                exit_code: code,
+                exit_code,
                 output,
-                success: false,
-                reboot_required: false,
             })
         }
         Err(e) => Err(e),
-    }
-}
-
-/// Parse fsck exit code into human-readable description
-pub fn describe_fsck_exit_code(code: i32) -> String {
-    let mut descriptions = Vec::new();
-
-    if code == exit_code::OK {
-        return "No errors".to_string();
-    }
-
-    if code & exit_code::CORRECTED != 0 {
-        descriptions.push("errors corrected");
-    }
-    if code & exit_code::REBOOT_REQUIRED != 0 {
-        descriptions.push("reboot required");
-    }
-    if code & exit_code::ERRORS_UNCORRECTED != 0 {
-        descriptions.push("uncorrected errors");
-    }
-    if code & exit_code::OPERATIONAL_ERROR != 0 {
-        descriptions.push("operational error");
-    }
-    if code & exit_code::USAGE_ERROR != 0 {
-        descriptions.push("usage error");
-    }
-    if code & exit_code::CANCELLED != 0 {
-        descriptions.push("cancelled");
-    }
-    if code & exit_code::LIBRARY_ERROR != 0 {
-        descriptions.push("library error");
-    }
-
-    if descriptions.is_empty() {
-        format!("unknown error (code {})", code)
-    } else {
-        descriptions.join(", ")
     }
 }
 
@@ -243,52 +286,104 @@ pub fn describe_fsck_exit_code(code: i32) -> String {
 mod tests {
     use super::*;
 
+    // Tests for FsckExitCode newtype
     #[test]
-    fn test_describe_fsck_exit_code_ok() {
-        assert_eq!(describe_fsck_exit_code(0), "No errors");
+    fn test_fsck_exit_code_clean() {
+        let code = FsckExitCode::from(Some(0i32));
+        assert!(code.is_clean());
+        assert!(!code.is_reboot_required());
+        assert!(code.is_mount_safe());
+        assert_eq!(format!("{code}"), "No errors");
     }
 
     #[test]
-    fn test_describe_fsck_exit_code_corrected() {
-        assert_eq!(describe_fsck_exit_code(1), "errors corrected");
+    fn test_fsck_exit_code_corrected() {
+        let code = FsckExitCode::from(Some(1i32));
+        assert!(code.is_corrected());
+        assert!(!code.is_reboot_required());
+        assert!(code.is_mount_safe());
+        assert_eq!(format!("{code}"), "errors corrected");
     }
 
     #[test]
-    fn test_describe_fsck_exit_code_reboot() {
-        assert_eq!(describe_fsck_exit_code(2), "reboot required");
+    fn test_fsck_exit_code_reboot_required() {
+        let code = FsckExitCode::from(Some(2i32));
+        assert!(code.is_reboot_required());
+        assert!(!code.is_mount_safe());
+        assert_eq!(format!("{code}"), "reboot required");
     }
 
     #[test]
-    fn test_describe_fsck_exit_code_combined() {
-        // Code 3 = CORRECTED | REBOOT_REQUIRED
+    fn test_fsck_exit_code_combined() {
+        let code = FsckExitCode::from(Some(3i32));
+        assert!(code.is_corrected());
+        assert!(code.is_reboot_required());
+        assert!(!code.is_mount_safe());
+        assert_eq!(format!("{code}"), "errors corrected, reboot required");
+    }
+
+    #[test]
+    fn test_fsck_exit_code_unknown_sentinel() {
+        let code = FsckExitCode::from(None::<i32>);
+        assert_eq!(code, FsckExitCode::UNKNOWN);
+        assert_eq!(code.bits(), -1);
+    }
+
+    #[test]
+    fn test_fsck_exit_code_display_unknown() {
         assert_eq!(
-            describe_fsck_exit_code(3),
+            format!("{}", FsckExitCode::UNKNOWN),
+            "unknown (process killed by signal or spawn failed)"
+        );
+    }
+
+    #[test]
+    fn test_fsck_exit_code_display_ok() {
+        assert_eq!(format!("{}", FsckExitCode::OK), "No errors");
+    }
+
+    #[test]
+    fn test_fsck_exit_code_display_corrected() {
+        assert_eq!(format!("{}", FsckExitCode::CORRECTED), "errors corrected");
+    }
+
+    #[test]
+    fn test_fsck_exit_code_display_reboot() {
+        assert_eq!(
+            format!("{}", FsckExitCode::REBOOT_REQUIRED),
+            "reboot required"
+        );
+    }
+
+    #[test]
+    fn test_fsck_exit_code_display_combined() {
+        assert_eq!(
+            format!("{}", FsckExitCode::from(3i32)),
             "errors corrected, reboot required"
         );
     }
 
     #[test]
-    fn test_describe_fsck_exit_code_errors() {
-        assert_eq!(describe_fsck_exit_code(4), "uncorrected errors");
+    fn test_fsck_exit_code_display_errors() {
+        assert_eq!(
+            format!("{}", FsckExitCode::ERRORS_UNCORRECTED),
+            "uncorrected errors"
+        );
     }
 
     #[test]
     fn test_fsck_result_has_uncorrected_errors() {
         let result = FsckResult {
             device: PathBuf::from("/dev/sda1"),
-            exit_code: 4,
+            exit_code: FsckExitCode::ERRORS_UNCORRECTED,
             output: String::new(),
-            success: false,
-            reboot_required: false,
         };
         assert!(result.has_uncorrected_errors());
 
         let clean = FsckResult {
             device: PathBuf::from("/dev/sda1"),
-            exit_code: 0,
+            exit_code: FsckExitCode::OK,
             output: String::new(),
-            success: true,
-            reboot_required: false,
         };
         assert!(!clean.has_uncorrected_errors());
     }
@@ -297,10 +392,8 @@ mod tests {
     fn test_fsck_result_has_operational_error() {
         let result = FsckResult {
             device: PathBuf::from("/dev/sda1"),
-            exit_code: 8,
+            exit_code: FsckExitCode::OPERATIONAL_ERROR,
             output: String::new(),
-            success: false,
-            reboot_required: false,
         };
         assert!(result.has_operational_error());
     }
