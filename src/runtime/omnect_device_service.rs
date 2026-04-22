@@ -3,6 +3,7 @@
 //! Creates runtime files that omnect-device-service reads at startup.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +52,35 @@ const BOOTLOADER_FLAG_SET: &str = "1";
 /// Bootloader env value meaning update validation previously failed
 const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
 
+/// Outcome codes for a factory reset operation.
+///
+/// Serialized as a plain integer so the JSON wire format that
+/// `omnect-device-service` reads remains unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryResetStatusCode {
+    Success = 0,
+    Invalid = 1,
+    Error = 2,
+    ConfigError = 3,
+}
+
+impl serde::Serialize for FactoryResetStatusCode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_u32(*self as u32)
+    }
+}
+
+impl fmt::Display for FactoryResetStatusCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => write!(f, "success"),
+            Self::Invalid => write!(f, "invalid"),
+            Self::Error => write!(f, "error"),
+            Self::ConfigError => write!(f, "config_error"),
+        }
+    }
+}
+
 /// Status information for omnect-device-service
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
@@ -75,8 +105,8 @@ pub struct FsckStatus {
 /// Factory reset execution status
 #[derive(Debug, Clone, Serialize)]
 pub struct FactoryResetStatus {
-    /// Status code: 0=success, 1=invalid, 2=error, 3=config_error
-    pub status: u32,
+    /// Outcome of the factory reset operation.
+    pub status: FactoryResetStatusCode,
     /// Error message if failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -437,7 +467,7 @@ mod tests {
     #[test]
     fn test_factory_reset_status_serialization() {
         let status = FactoryResetStatus {
-            status: 0,
+            status: FactoryResetStatusCode::Success,
             error: None,
             context: Some("normal".to_string()),
             paths: vec!["/etc/hostname".to_string()],
@@ -446,6 +476,38 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"status\":0"));
         assert!(json.contains("\"paths\""));
+    }
+
+    #[test]
+    fn test_factory_reset_status_code_serializes_as_integer() {
+        use serde_json::Value;
+        let cases: &[(FactoryResetStatusCode, u64)] = &[
+            (FactoryResetStatusCode::Success, 0),
+            (FactoryResetStatusCode::Invalid, 1),
+            (FactoryResetStatusCode::Error, 2),
+            (FactoryResetStatusCode::ConfigError, 3),
+        ];
+        for (variant, expected) in cases {
+            let s = FactoryResetStatus {
+                status: *variant,
+                error: None,
+                context: None,
+                paths: vec![],
+            };
+            let json: Value = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(json["status"], *expected, "variant {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn test_factory_reset_status_code_display() {
+        assert_eq!(FactoryResetStatusCode::Success.to_string(), "success");
+        assert_eq!(FactoryResetStatusCode::Invalid.to_string(), "invalid");
+        assert_eq!(FactoryResetStatusCode::Error.to_string(), "error");
+        assert_eq!(
+            FactoryResetStatusCode::ConfigError.to_string(),
+            "config_error"
+        );
     }
 
     #[test]
