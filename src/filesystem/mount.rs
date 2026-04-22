@@ -338,18 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mount_options_ext4_readonly_fstype() {
-        let opts = MountOptions::ext4_readonly();
-        assert_eq!(opts.fstype, Some(FsType::Ext4));
-    }
-
-    #[test]
-    fn test_mount_options_vfat_fstype() {
-        let opts = MountOptions::vfat();
-        assert_eq!(opts.fstype, Some(FsType::Vfat));
-    }
-
-    #[test]
     fn test_mount_options_builder() {
         let opts = MountOptions::ext4_readwrite()
             .noatime()

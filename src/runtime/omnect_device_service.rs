@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::bootloader::{Bootloader, vars};
 use crate::error::{InitramfsError, Result};
+use crate::partition::PartitionName;
 
 /// Directory for ODS runtime files.
 /// Written to the initramfs /run tmpfs; switch_root moves /run into the new
@@ -117,7 +118,7 @@ impl fmt::Display for ValidateUpdateState {
 pub struct OdsStatus {
     /// Fsck results for each partition
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub fsck: HashMap<String, FsckStatus>,
+    pub fsck: HashMap<PartitionName, FsckStatus>,
 
     /// Factory reset status (if performed)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,9 +157,8 @@ impl OdsStatus {
     }
 
     /// Add fsck result for a partition
-    pub fn add_fsck_result(&mut self, partition: &str, code: i32, output: String) {
-        self.fsck
-            .insert(partition.to_string(), FsckStatus { code, output });
+    pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
+        self.fsck.insert(partition, FsckStatus { code, output });
     }
 
     /// Set factory reset status
@@ -428,6 +428,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::partition::PartitionName;
     use tempfile::TempDir;
 
     fn current_uid() -> u32 {
@@ -469,18 +470,18 @@ mod tests {
     #[test]
     fn test_ods_status_add_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
-        status.add_fsck_result("data", 1, "errors corrected".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
 
         assert_eq!(status.fsck.len(), 2);
-        assert_eq!(status.fsck.get("boot").unwrap().code, 0);
-        assert_eq!(status.fsck.get("data").unwrap().code, 1);
+        assert_eq!(status.fsck.get(&PartitionName::Boot).unwrap().code, 0);
+        assert_eq!(status.fsck.get(&PartitionName::Data).unwrap().code, 1);
     }
 
     #[test]
     fn test_ods_status_serialization() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"boot\""));
@@ -699,7 +700,7 @@ mod tests {
         let ods_dir = TempDir::new().unwrap();
 
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
         let bl =
             crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");

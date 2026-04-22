@@ -62,6 +62,12 @@ impl AsRef<str> for PartitionName {
     }
 }
 
+impl serde::Serialize for PartitionName {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
 /// Partition layout for a block device
 #[derive(Debug, Clone)]
 pub struct PartitionLayout {

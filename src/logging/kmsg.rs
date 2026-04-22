@@ -55,6 +55,7 @@ impl KmsgLogger {
         log::set_boxed_logger(Box::new(self))
     }
 
+    // Kernel syslog level prefixes per Documentation/admin-guide/serial-console.rst
     fn level_to_kernel_prefix(level: Level) -> &'static str {
         match level {
             Level::Error => "<3>",

@@ -10,6 +10,7 @@ use crate::bootloader::{
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
+use crate::partition::PartitionName;
 
 /// Command to read U-Boot environment variables
 const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
@@ -17,7 +18,9 @@ const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 /// Command to write U-Boot environment variables
 const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 
-/// Sentinel value used when a process exits due to a signal (no numeric exit code available)
+/// Sentinel for "process killed by signal" — no numeric exit code available.
+/// Kept local to avoid coupling the bootloader module to the filesystem module;
+/// semantically equivalent to FsckExitCode::UNKNOWN in filesystem/fsck.rs.
 const UNKNOWN_EXIT_CODE: i32 = -1;
 
 /// Exit status of a `fw_printenv` invocation.
@@ -33,8 +36,8 @@ enum FwPrintenvExitStatus {
     Error(i32),
 }
 
-impl FwPrintenvExitStatus {
-    fn from_code(code: i32) -> Self {
+impl From<i32> for FwPrintenvExitStatus {
+    fn from(code: i32) -> Self {
         match code {
             0 => Self::Found,
             1 => Self::NotFound,
@@ -77,7 +80,7 @@ impl UBootBootloader {
         // I/O error, permission denied, etc.) and must be surfaced as an error.
         if !output.status.success() {
             let code = output.status.code().unwrap_or(UNKNOWN_EXIT_CODE);
-            match FwPrintenvExitStatus::from_code(code) {
+            match FwPrintenvExitStatus::from(code) {
                 FwPrintenvExitStatus::NotFound => return Ok(None),
                 FwPrintenvExitStatus::Error(c) => {
                     return Err(BootloaderError::CommandExitCode {
@@ -133,19 +136,24 @@ impl Bootloader for UBootBootloader {
         self.run_fw_setenv(key, value)
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: i32,
+        output: &str,
+    ) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.run_fw_setenv(&var_name, Some(&encode_fsck_output(code, output)))
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
         Ok(self
             .run_fw_printenv(&var_name)?
             .and_then(|v| decode_fsck_output(&v)))
     }
 
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
         self.run_fw_setenv(&var_name, None)
     }

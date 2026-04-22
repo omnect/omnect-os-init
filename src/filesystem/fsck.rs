@@ -48,6 +48,10 @@ impl FsckExitCode {
     /// Shared library error.
     pub const LIBRARY_ERROR: Self = Self(128);
     /// Sentinel: process was killed by a signal (no exit status from the OS).
+    ///
+    /// Note: all bitwise predicates (`is_reboot_required`, `has_uncorrected_errors`, etc.)
+    /// return `true` on this value because −1 is all 1-bits in two's complement.
+    /// The only reliable checks are `== FsckExitCode::UNKNOWN` and the `Display` output.
     pub const UNKNOWN: Self = Self(-1);
 
     /// The raw integer value (for wire-format serialization into FilesystemError fields).

@@ -10,6 +10,7 @@ mod types;
 mod uboot;
 
 use crate::error::BootloaderError;
+use crate::partition::PartitionName;
 
 #[cfg(feature = "grub")]
 pub use self::grub::GrubBootloader;
@@ -48,16 +49,17 @@ pub trait Bootloader: Send + Sync {
     ///
     /// Stores exit code and full fsck output as gzip+base64 encoded string so the
     /// diagnostic text survives the reboot required after fsck corrects errors.
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()>;
+    fn save_fsck_status(&mut self, partition: PartitionName, code: i32, output: &str)
+    -> Result<()>;
 
     /// Get fsck status from bootloader environment.
     ///
     /// Returns the decoded `(exit_code, output)` pair if a value is present,
     /// or `None` if no status was stored for this partition.
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>>;
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>>;
 
     /// Clear fsck status from bootloader environment
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()>;
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()>;
 }
 
 /// Creates the appropriate bootloader implementation based on the build-time feature flag.
@@ -87,7 +89,7 @@ pub fn create_mock_bootloader() -> MockBootloader {
 pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
     /// fsck results stored as plain (code, output) — no subprocess encoding needed in tests.
-    fsck: std::collections::HashMap<String, (i32, String)>,
+    fsck: std::collections::HashMap<PartitionName, (i32, String)>,
 }
 
 #[cfg(test)]
@@ -120,18 +122,22 @@ impl Bootloader for MockBootloader {
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
-        self.fsck
-            .insert(partition.to_string(), (code, output.to_string()));
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: i32,
+        output: &str,
+    ) -> Result<()> {
+        self.fsck.insert(partition, (code, output.to_string()));
         Ok(())
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
-        Ok(self.fsck.get(partition).cloned())
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>> {
+        Ok(self.fsck.get(&partition).cloned())
     }
 
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        self.fsck.remove(partition);
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        self.fsck.remove(&partition);
         Ok(())
     }
 }
@@ -172,18 +178,19 @@ mod tests {
 
     #[test]
     fn test_mock_bootloader_fsck_status() {
+        use crate::partition::PartitionName;
         let mut bl = MockBootloader::new();
 
-        bl.save_fsck_status("boot", 1, "errors corrected on pass 1")
+        bl.save_fsck_status(PartitionName::Boot, 1, "errors corrected on pass 1")
             .unwrap();
 
-        let retrieved = bl.get_fsck_status("boot").unwrap();
+        let retrieved = bl.get_fsck_status(PartitionName::Boot).unwrap();
         assert_eq!(
             retrieved,
             Some((1, "errors corrected on pass 1".to_string()))
         );
 
-        bl.clear_fsck_status("boot").unwrap();
-        assert_eq!(bl.get_fsck_status("boot").unwrap(), None);
+        bl.clear_fsck_status(PartitionName::Boot).unwrap();
+        assert_eq!(bl.get_fsck_status(PartitionName::Boot).unwrap(), None);
     }
 }

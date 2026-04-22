@@ -12,6 +12,8 @@ use crate::bootloader::{
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
+use crate::filesystem::FsckExitCode;
+use crate::partition::PartitionName;
 
 /// Command name for GRUB environment manipulation
 const GRUB_EDITENV_CMD: &str = "/bin/grub-editenv";
@@ -24,9 +26,6 @@ const GRUBENV_PATH: &str = "/rootfs/boot/EFI/BOOT/grubenv";
 
 /// grubenv key used for boot partition fsck status
 const BOOT_FSCK_VAR: &str = "omnect_fsck_boot";
-
-/// fsck exit code 2: fsck requests a reboot (filesystem still in inconsistent state)
-const FSCK_REBOOT_REQUESTED: i32 = 2;
 
 /// GRUB bootloader implementation
 ///
@@ -100,71 +99,83 @@ impl Bootloader for GrubBootloader {
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: i32,
+        output: &str,
+    ) -> Result<()> {
         let encoded = encode_fsck_output(code, output);
 
-        if partition == "boot" {
-            // When code==2, fsck requests a reboot because the boot partition itself
-            // is in an inconsistent state. Attempting to write to it at this point
-            // is unreliable — match legacy bash behaviour and skip.
-            if code == FSCK_REBOOT_REQUESTED {
-                log::warn!(
-                    "Skipping fsck status save for boot partition (code 2 — reboot requested)"
-                );
-                return Ok(());
+        match partition {
+            PartitionName::Boot => {
+                // When the boot partition's own fsck requests a reboot, writing to
+                // grubenv is unreliable — the filesystem is in an inconsistent state.
+                // Match legacy behaviour and skip; a clean check runs on next boot.
+                if FsckExitCode::from(code).is_reboot_required() {
+                    log::warn!(
+                        "Skipping grubenv write for boot partition (fsck exit code {code} — reboot required)"
+                    );
+                    return Ok(());
+                }
+                self.set_env(BOOT_FSCK_VAR, Some(&encoded))
             }
-            self.set_env(BOOT_FSCK_VAR, Some(&encoded))
-        } else {
-            // For non-boot partitions: write to a file on the boot partition instead
-            // of grubenv. grubenv is a fixed 1024-byte block — storing multiple large
-            // encoded blobs there would overflow it. Matches legacy bash behaviour.
-            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
-            fs::write(&file_path, &encoded).map_err(|e| BootloaderError::CommandFailed {
-                command: format!("write {}", file_path.display()),
-                reason: e.to_string(),
-            })
+            _ => {
+                // Non-boot partitions: write diagnostic to a file on the boot partition
+                // instead of grubenv. grubenv is a fixed 1024-byte block — storing multiple
+                // large encoded blobs there would overflow it. Boot is healthy at this point
+                // (its own fsck ran first), so this write is safe regardless of this
+                // partition's exit code. Matches legacy bash behaviour.
+                let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
+                fs::write(&file_path, &encoded).map_err(|e| BootloaderError::CommandFailed {
+                    command: format!("write {}", file_path.display()),
+                    reason: e.to_string(),
+                })
+            }
         }
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
-        if partition == "boot" {
-            Ok(self
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>> {
+        match partition {
+            PartitionName::Boot => Ok(self
                 .get_env(BOOT_FSCK_VAR)?
-                .and_then(|v| decode_fsck_output(&v)))
-        } else {
-            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
-            if !file_path.is_file() {
-                return Ok(None);
+                .and_then(|v| decode_fsck_output(&v))),
+            _ => {
+                let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
+                if !file_path.is_file() {
+                    return Ok(None);
+                }
+                let encoded =
+                    fs::read_to_string(&file_path).map_err(|e| BootloaderError::CommandFailed {
+                        command: format!("read {}", file_path.display()),
+                        reason: e.to_string(),
+                    })?;
+                // Remove file after reading — matches legacy behaviour
+                if let Err(e) = fs::remove_file(&file_path) {
+                    log::warn!(
+                        "Failed to remove fsck status file {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                }
+                Ok(decode_fsck_output(&encoded))
             }
-            let encoded =
-                fs::read_to_string(&file_path).map_err(|e| BootloaderError::CommandFailed {
-                    command: format!("read {}", file_path.display()),
-                    reason: e.to_string(),
-                })?;
-            // Remove file after reading — matches legacy behaviour
-            if let Err(e) = fs::remove_file(&file_path) {
-                log::warn!(
-                    "Failed to remove fsck status file {}: {}",
-                    file_path.display(),
-                    e
-                );
-            }
-            Ok(decode_fsck_output(&encoded))
         }
     }
 
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        if partition == "boot" {
-            self.set_env(BOOT_FSCK_VAR, None)
-        } else {
-            let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
-            if file_path.exists() {
-                fs::remove_file(&file_path).map_err(|e| BootloaderError::CommandFailed {
-                    command: format!("remove {}", file_path.display()),
-                    reason: e.to_string(),
-                })?;
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        match partition {
+            PartitionName::Boot => self.set_env(BOOT_FSCK_VAR, None),
+            _ => {
+                let file_path = Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"));
+                if file_path.exists() {
+                    fs::remove_file(&file_path).map_err(|e| BootloaderError::CommandFailed {
+                        command: format!("remove {}", file_path.display()),
+                        reason: e.to_string(),
+                    })?;
+                }
+                Ok(())
             }
-            Ok(())
         }
     }
 }
