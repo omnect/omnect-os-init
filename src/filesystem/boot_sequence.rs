@@ -14,7 +14,7 @@ use crate::filesystem::{
     MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount, mount_points,
     mount_readwrite, mount_tmpfs,
 };
-use crate::partition::{PartitionLayout, partition_names};
+use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
 
 /// Path within the mounted data partition where fsck logs are written.
@@ -67,7 +67,7 @@ pub fn mount_partitions(
     // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout
         .partitions
-        .get(partition_names::ROOT_CURRENT)
+        .get(&PartitionName::RootCurrent)
         .ok_or_else(|| {
             InitramfsError::Partition(PartitionError::DeviceDetection(
                 "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
@@ -98,7 +98,7 @@ pub fn mount_partitions(
     // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
-    if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
+    if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
             // Boot already mounted at this stage is a logic error: mount_partitions
@@ -110,14 +110,19 @@ pub fn mount_partitions(
                 reason: "boot partition already mounted at start of mount_partitions".to_string(),
             }));
         }
-        fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
+        fsck_and_record(boot_dev, PartitionName::Boot.as_str(), ods_status, "vfat")?;
         mount_readwrite(boot_dev, &boot_mount, "vfat")?;
     }
 
     // Mount factory partition read-only
-    if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
+    if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
-        fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
+        fsck_and_record(
+            factory_dev,
+            PartitionName::Factory.as_str(),
+            ods_status,
+            "ext4",
+        )?;
         mount(MountPoint::new(
             factory_dev,
             &factory_mount,
@@ -126,9 +131,9 @@ pub fn mount_partitions(
     }
 
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
-    if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
+    if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
+        fsck_and_record(cert_dev, PartitionName::Cert.as_str(), ods_status, "ext4")?;
         mount(MountPoint::new(
             cert_dev,
             &cert_mount,
@@ -137,9 +142,9 @@ pub fn mount_partitions(
     }
 
     // Mount etc partition (for overlay upper)
-    if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
+    if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
+        fsck_and_record(etc_dev, PartitionName::Etc.as_str(), ods_status, "ext4")?;
         mount(MountPoint::new(
             etc_dev,
             &etc_mount,
@@ -148,9 +153,9 @@ pub fn mount_partitions(
     }
 
     // Mount data partition
-    if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
+    if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
+        fsck_and_record(data_dev, PartitionName::Data.as_str(), ods_status, "ext4")?;
         mount(MountPoint::new(
             data_dev,
             &data_mount,
