@@ -81,6 +81,37 @@ impl fmt::Display for FactoryResetStatusCode {
     }
 }
 
+/// Parsed value of the `omnect_validate_update` bootloader env variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidateUpdateState {
+    /// Value `"1"` — update validation was requested before this boot.
+    Requested,
+    /// Value `"failed"` — the previous update validation failed.
+    Failed,
+    /// Any other value — no action required.
+    Other,
+}
+
+impl From<&str> for ValidateUpdateState {
+    fn from(s: &str) -> Self {
+        match s {
+            BOOTLOADER_FLAG_SET => Self::Requested,
+            VALIDATE_UPDATE_FAILED_VALUE => Self::Failed,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl fmt::Display for ValidateUpdateState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Requested => write!(f, "requested"),
+            Self::Failed => write!(f, "failed"),
+            Self::Other => write!(f, "other"),
+        }
+    }
+}
+
 /// Status information for omnect-device-service
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
@@ -224,30 +255,36 @@ fn handle_update_validation(
         })?;
 
     if let Some(value) = validate_update {
-        if value == BOOTLOADER_FLAG_SET {
-            let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
-            fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Failed to write {}: {}",
-                    trigger_path.display(),
-                    e
-                )))
-            })?;
-            set_ownership(&trigger_path, uid, gid)?;
-            set_mode(&trigger_path, FILE_MODE_READABLE)?;
-            log::info!("Update validation requested - created trigger file");
-        } else if value == VALIDATE_UPDATE_FAILED_VALUE {
-            let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
-            fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Failed to write {}: {}",
-                    failed_path.display(),
-                    e
-                )))
-            })?;
-            set_ownership(&failed_path, uid, gid)?;
-            set_mode(&failed_path, FILE_MODE_READABLE)?;
-            log::warn!("Update validation failed marker created");
+        let state = ValidateUpdateState::from(value.as_str());
+        log::debug!("omnect_validate_update: {state}");
+        match state {
+            ValidateUpdateState::Requested => {
+                let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
+                fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Failed to write {}: {}",
+                        trigger_path.display(),
+                        e
+                    )))
+                })?;
+                set_ownership(&trigger_path, uid, gid)?;
+                set_mode(&trigger_path, FILE_MODE_READABLE)?;
+                log::info!("Update validation requested - created trigger file");
+            }
+            ValidateUpdateState::Failed => {
+                let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
+                fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Failed to write {}: {}",
+                        failed_path.display(),
+                        e
+                    )))
+                })?;
+                set_ownership(&failed_path, uid, gid)?;
+                set_mode(&failed_path, FILE_MODE_READABLE)?;
+                log::warn!("Update validation failed marker created");
+            }
+            ValidateUpdateState::Other => {}
         }
     }
 
@@ -508,6 +545,35 @@ mod tests {
             FactoryResetStatusCode::ConfigError.to_string(),
             "config_error"
         );
+    }
+
+    #[test]
+    fn test_validate_update_state_from_str() {
+        assert_eq!(
+            ValidateUpdateState::from("1"),
+            ValidateUpdateState::Requested
+        );
+        assert_eq!(
+            ValidateUpdateState::from("failed"),
+            ValidateUpdateState::Failed
+        );
+        assert_eq!(
+            ValidateUpdateState::from("true"),
+            ValidateUpdateState::Other
+        );
+        assert_eq!(ValidateUpdateState::from("0"), ValidateUpdateState::Other);
+        assert_eq!(ValidateUpdateState::from(""), ValidateUpdateState::Other);
+        assert_eq!(
+            ValidateUpdateState::from("unexpected"),
+            ValidateUpdateState::Other
+        );
+    }
+
+    #[test]
+    fn test_validate_update_state_display() {
+        assert_eq!(ValidateUpdateState::Requested.to_string(), "requested");
+        assert_eq!(ValidateUpdateState::Failed.to_string(), "failed");
+        assert_eq!(ValidateUpdateState::Other.to_string(), "other");
     }
 
     #[test]
