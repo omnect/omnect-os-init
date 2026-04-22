@@ -11,8 +11,8 @@ use nix::mount::MsFlags;
 use crate::bootloader::Bootloader;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
-    MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount, mount_points,
-    mount_readwrite, mount_tmpfs,
+    FsType, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount,
+    mount_points, mount_readwrite, mount_tmpfs,
 };
 use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
@@ -35,7 +35,7 @@ pub fn fsck_and_record(
     dev: &Path,
     name: &str,
     ods_status: &mut OdsStatus,
-    fstype: &str,
+    fstype: FsType,
 ) -> std::result::Result<(), FilesystemError> {
     match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
@@ -110,8 +110,13 @@ pub fn mount_partitions(
                 reason: "boot partition already mounted at start of mount_partitions".to_string(),
             }));
         }
-        fsck_and_record(boot_dev, PartitionName::Boot.as_str(), ods_status, "vfat")?;
-        mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+        fsck_and_record(
+            boot_dev,
+            PartitionName::Boot.as_str(),
+            ods_status,
+            FsType::Vfat,
+        )?;
+        mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
     }
 
     // Mount factory partition read-only
@@ -121,7 +126,7 @@ pub fn mount_partitions(
             factory_dev,
             PartitionName::Factory.as_str(),
             ods_status,
-            "ext4",
+            FsType::Ext4,
         )?;
         mount(MountPoint::new(
             factory_dev,
@@ -133,7 +138,12 @@ pub fn mount_partitions(
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, PartitionName::Cert.as_str(), ods_status, "ext4")?;
+        fsck_and_record(
+            cert_dev,
+            PartitionName::Cert.as_str(),
+            ods_status,
+            FsType::Ext4,
+        )?;
         mount(MountPoint::new(
             cert_dev,
             &cert_mount,
@@ -144,7 +154,12 @@ pub fn mount_partitions(
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        fsck_and_record(etc_dev, PartitionName::Etc.as_str(), ods_status, "ext4")?;
+        fsck_and_record(
+            etc_dev,
+            PartitionName::Etc.as_str(),
+            ods_status,
+            FsType::Ext4,
+        )?;
         mount(MountPoint::new(
             etc_dev,
             &etc_mount,
@@ -155,7 +170,12 @@ pub fn mount_partitions(
     // Mount data partition
     if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        fsck_and_record(data_dev, PartitionName::Data.as_str(), ods_status, "ext4")?;
+        fsck_and_record(
+            data_dev,
+            PartitionName::Data.as_str(),
+            ods_status,
+            FsType::Ext4,
+        )?;
         mount(MountPoint::new(
             data_dev,
             &data_mount,

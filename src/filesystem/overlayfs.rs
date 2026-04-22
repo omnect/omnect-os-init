@@ -13,10 +13,9 @@ use std::process::Command;
 use nix::mount::MsFlags;
 
 use crate::error::FilesystemError;
-use crate::filesystem::{MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private};
-
-/// Overlay filesystem type
-const OVERLAY_FSTYPE: &str = "overlay";
+use crate::filesystem::{
+    FsType, MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private,
+};
 /// cp command for copying directory contents (preserves attributes via -a)
 const CP_CMD: &str = "/bin/cp";
 
@@ -171,16 +170,19 @@ fn mount_overlay(lower: &Path, upper: &Path, work: &Path, target: &Path) -> Resu
     );
 
     let mount_opts = MountOptions {
-        fstype: Some(OVERLAY_FSTYPE.to_string()),
+        fstype: Some(FsType::Overlay),
         flags: MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME,
         data: Some(options.clone()),
     };
 
-    mount(MountPoint::new(OVERLAY_FSTYPE, target, mount_opts)).map_err(|e| {
-        FilesystemError::OverlayFailed {
-            target: target.to_path_buf(),
-            reason: format!("{e}: options={options}"),
-        }
+    mount(MountPoint::new(
+        FsType::Overlay.as_str(),
+        target,
+        mount_opts,
+    ))
+    .map_err(|e| FilesystemError::OverlayFailed {
+        target: target.to_path_buf(),
+        reason: format!("{e}: options={options}"),
     })
 }
 

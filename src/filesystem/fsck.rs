@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::FilesystemError;
-use crate::filesystem::Result;
+use crate::filesystem::{FsType, Result};
 use crate::logging::{KmsgRatelimitGuard, disable_kmsg_ratelimit};
 
 /// fsck command — util-linux wrapper that dispatches to fsck.ext4 / fsck.fat
@@ -175,13 +175,13 @@ impl FsckResult {
 ///
 /// # Arguments
 /// * `device` - Path to the block device to check
-/// * `fstype` - Filesystem type (e.g. "ext4", "vfat")
+/// * `fstype` - Filesystem type
 ///
 /// # Returns
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
 /// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
-fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
+fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
     // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
@@ -193,7 +193,7 @@ fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
 
     // Explicitly specify the filesystem type so the wrapper dispatches
     // directly to fsck.ext4 / fsck.fat without needing blkid probing.
-    cmd.args([FSCK_TYPE_FLAG, fstype]);
+    cmd.args([FSCK_TYPE_FLAG, fstype.as_str()]);
 
     cmd.arg(device);
 
@@ -257,7 +257,7 @@ fn check_filesystem(device: &Path, fstype: &str) -> Result<FsckResult> {
 ///
 /// Returns `Ok` even if fsck reports correctable errors, unless a reboot is required.
 /// Useful for partitions where errors should be logged but boot should continue.
-pub fn check_filesystem_lenient(device: &Path, fstype: &str) -> Result<FsckResult> {
+pub fn check_filesystem_lenient(device: &Path, fstype: FsType) -> Result<FsckResult> {
     match check_filesystem(device, fstype) {
         Ok(result) => Ok(result),
         Err(e @ FilesystemError::FsckRequiresReboot { .. }) => Err(e),

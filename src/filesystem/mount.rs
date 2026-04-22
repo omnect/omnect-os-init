@@ -3,6 +3,7 @@
 //! Provides free functions for performing mount operations, along with
 //! `MountOptions` and `MountPoint` builder types for composing mount flags.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use nix::mount::{MsFlags, mount as nix_mount};
@@ -25,18 +26,44 @@ mod flags {
     pub const NOEXEC: MsFlags = MsFlags::MS_NOEXEC;
 }
 
-/// Common filesystem types
-mod fstype {
-    pub const EXT4: &str = "ext4";
-    pub const VFAT: &str = "vfat";
-    pub const TMPFS: &str = "tmpfs";
+/// Filesystem type for mount and fsck operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsType {
+    Ext4,
+    Vfat,
+    Tmpfs,
+    Overlay,
+}
+
+impl FsType {
+    /// Canonical filesystem type string passed to mount(2) and fsck -t.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            FsType::Ext4 => "ext4",
+            FsType::Vfat => "vfat",
+            FsType::Tmpfs => "tmpfs",
+            FsType::Overlay => "overlay",
+        }
+    }
+}
+
+impl fmt::Display for FsType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for FsType {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 
 /// Options for mounting a filesystem
 #[derive(Debug, Clone)]
 pub struct MountOptions {
-    /// Filesystem type (e.g., "ext4", "vfat", "overlay")
-    pub fstype: Option<String>,
+    /// Filesystem type
+    pub fstype: Option<FsType>,
     /// Mount flags
     pub flags: MsFlags,
     /// Additional mount data/options string
@@ -57,7 +84,7 @@ impl MountOptions {
     /// Create options for a read-only ext4 mount
     pub fn ext4_readonly() -> Self {
         Self {
-            fstype: Some(fstype::EXT4.to_string()),
+            fstype: Some(FsType::Ext4),
             flags: flags::RDONLY,
             data: None,
         }
@@ -66,7 +93,7 @@ impl MountOptions {
     /// Create options for a read-write ext4 mount
     pub fn ext4_readwrite() -> Self {
         Self {
-            fstype: Some(fstype::EXT4.to_string()),
+            fstype: Some(FsType::Ext4),
             flags: MsFlags::empty(),
             data: None,
         }
@@ -75,7 +102,7 @@ impl MountOptions {
     /// Create options for a FAT32 boot partition
     pub fn vfat() -> Self {
         Self {
-            fstype: Some(fstype::VFAT.to_string()),
+            fstype: Some(FsType::Vfat),
             flags: MsFlags::empty(),
             data: None,
         }
@@ -93,7 +120,7 @@ impl MountOptions {
     /// Create options for a tmpfs mount
     pub fn tmpfs() -> Self {
         Self {
-            fstype: Some(fstype::TMPFS.to_string()),
+            fstype: Some(FsType::Tmpfs),
             flags: MsFlags::empty(),
             data: None,
         }
@@ -176,7 +203,7 @@ pub fn mount(mp: MountPoint) -> Result<()> {
         Some(&mp.source)
     };
 
-    let fstype: Option<&str> = mp.options.fstype.as_deref();
+    let fstype: Option<&str> = mp.options.fstype.map(|t| t.as_str());
     let data: Option<&str> = mp.options.data.as_deref();
 
     nix_mount(source, &mp.target, fstype, mp.options.flags, data).map_err(|e| {
@@ -191,7 +218,7 @@ pub fn mount(mp: MountPoint) -> Result<()> {
         "Mounted {} on {} ({})",
         mp.source.display(),
         mp.target.display(),
-        mp.options.fstype.as_deref().unwrap_or("<none>")
+        fstype.unwrap_or("<none>")
     );
 
     Ok(())
@@ -201,13 +228,13 @@ pub fn mount(mp: MountPoint) -> Result<()> {
 pub fn mount_readwrite(
     source: impl Into<PathBuf>,
     target: impl Into<PathBuf>,
-    fstype: &str,
+    fstype: FsType,
 ) -> Result<()> {
     mount(MountPoint::new(
         source,
         target,
         MountOptions {
-            fstype: Some(fstype.to_string()),
+            fstype: Some(fstype),
             flags: MsFlags::empty(),
             data: None,
         },
@@ -217,10 +244,10 @@ pub fn mount_readwrite(
 /// Mount a tmpfs filesystem.
 pub fn mount_tmpfs(target: impl Into<PathBuf>, flags: MsFlags, data: Option<&str>) -> Result<()> {
     mount(MountPoint::new(
-        "tmpfs",
+        FsType::Tmpfs.as_str(),
         target,
         MountOptions {
-            fstype: Some(fstype::TMPFS.to_string()),
+            fstype: Some(FsType::Tmpfs),
             flags,
             data: data.map(|s| s.to_string()),
         },
@@ -280,6 +307,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_fstype_as_str() {
+        assert_eq!(FsType::Ext4.as_str(), "ext4");
+        assert_eq!(FsType::Vfat.as_str(), "vfat");
+        assert_eq!(FsType::Tmpfs.as_str(), "tmpfs");
+        assert_eq!(FsType::Overlay.as_str(), "overlay");
+    }
+
+    #[test]
+    fn test_fstype_display() {
+        assert_eq!(FsType::Ext4.to_string(), "ext4");
+        assert_eq!(FsType::Vfat.to_string(), "vfat");
+        assert_eq!(FsType::Tmpfs.to_string(), "tmpfs");
+        assert_eq!(FsType::Overlay.to_string(), "overlay");
+    }
+
+    #[test]
     fn test_mount_options_default() {
         let opts = MountOptions::default();
         assert!(opts.fstype.is_none());
@@ -290,8 +333,20 @@ mod tests {
     #[test]
     fn test_mount_options_ext4_readonly() {
         let opts = MountOptions::ext4_readonly();
-        assert_eq!(opts.fstype, Some("ext4".to_string()));
+        assert_eq!(opts.fstype, Some(FsType::Ext4));
         assert!(opts.flags.contains(MsFlags::MS_RDONLY));
+    }
+
+    #[test]
+    fn test_mount_options_ext4_readonly_fstype() {
+        let opts = MountOptions::ext4_readonly();
+        assert_eq!(opts.fstype, Some(FsType::Ext4));
+    }
+
+    #[test]
+    fn test_mount_options_vfat_fstype() {
+        let opts = MountOptions::vfat();
+        assert_eq!(opts.fstype, Some(FsType::Vfat));
     }
 
     #[test]
@@ -301,7 +356,7 @@ mod tests {
             .nosuid()
             .with_data("discard");
 
-        assert_eq!(opts.fstype, Some("ext4".to_string()));
+        assert_eq!(opts.fstype, Some(FsType::Ext4));
         assert!(opts.flags.contains(MsFlags::MS_NOATIME));
         assert!(opts.flags.contains(MsFlags::MS_NOSUID));
         assert!(!opts.flags.contains(MsFlags::MS_RDONLY));
@@ -313,6 +368,6 @@ mod tests {
         let mp = MountPoint::new("/dev/sda1", "/mnt/boot", MountOptions::vfat());
         assert_eq!(mp.source, PathBuf::from("/dev/sda1"));
         assert_eq!(mp.target, PathBuf::from("/mnt/boot"));
-        assert_eq!(mp.options.fstype, Some("vfat".to_string()));
+        assert_eq!(mp.options.fstype, Some(FsType::Vfat));
     }
 }
