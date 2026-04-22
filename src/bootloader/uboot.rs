@@ -20,6 +20,29 @@ const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 /// Sentinel value used when a process exits due to a signal (no numeric exit code available)
 const UNKNOWN_EXIT_CODE: i32 = -1;
 
+/// Exit status of a `fw_printenv` invocation.
+///
+/// Exit code 1 is a normal condition meaning the variable is not set in
+/// the U-Boot environment — it must not be treated as an error.
+enum FwPrintenvExitStatus {
+    /// Variable found and printed (exit code 0).
+    Found,
+    /// Variable not set in the environment — not an error (exit code 1).
+    NotFound,
+    /// Unexpected failure; carries the raw exit code for the error message.
+    Error(i32),
+}
+
+impl FwPrintenvExitStatus {
+    fn from_code(code: i32) -> Self {
+        match code {
+            0 => Self::Found,
+            1 => Self::NotFound,
+            n => Self::Error(n),
+        }
+    }
+}
+
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
@@ -54,14 +77,17 @@ impl UBootBootloader {
         // I/O error, permission denied, etc.) and must be surfaced as an error.
         if !output.status.success() {
             let code = output.status.code().unwrap_or(UNKNOWN_EXIT_CODE);
-            if code == 1 {
-                return Ok(None);
+            match FwPrintenvExitStatus::from_code(code) {
+                FwPrintenvExitStatus::NotFound => return Ok(None),
+                FwPrintenvExitStatus::Error(c) => {
+                    return Err(BootloaderError::CommandExitCode {
+                        command: FW_PRINTENV_CMD.to_string(),
+                        code: Some(c),
+                        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    });
+                }
+                FwPrintenvExitStatus::Found => unreachable!("success() was false but code was 0"),
             }
-            return Err(BootloaderError::CommandExitCode {
-                command: FW_PRINTENV_CMD.to_string(),
-                code: Some(code),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
         }
 
         let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
