@@ -38,14 +38,26 @@ const FACTORY_RESET_STATUS_FILE: &str = "/tmp/factory-reset.json";
 const ODS_USER: &str = "omnect_device_service";
 const ODS_GROUP: &str = "omnect_device_service";
 
-/// Permissions for the ODS runtime directory (rwxrwxr-x)
-const DIR_MODE: u32 = 0o775;
+/// File and directory permission modes for ODS runtime files.
+#[derive(Debug, Clone, Copy)]
+enum FilePermission {
+    /// `rwxrwxr-x` (0o775) — ODS runtime directory
+    DirStandard,
+    /// `rw-------` (0o600) — sensitive files readable only by ODS
+    FileRestricted,
+    /// `rw-r--r--` (0o644) — trigger files readable by ODS and group
+    FileReadable,
+}
 
-/// Permissions for sensitive files readable only by ODS (rw-------)
-const FILE_MODE_RESTRICTED: u32 = 0o600;
-
-/// Permissions for trigger files readable by ODS and group (rw-r--r--)
-const FILE_MODE_READABLE: u32 = 0o644;
+impl FilePermission {
+    fn bits(self) -> u32 {
+        match self {
+            Self::DirStandard => 0o775,
+            Self::FileRestricted => 0o600,
+            Self::FileReadable => 0o644,
+        }
+    }
+}
 
 /// Bootloader env value meaning the flag is set / requested
 const BOOTLOADER_FLAG_SET: &str = "1";
@@ -194,11 +206,11 @@ pub fn create_ods_runtime_files(
         )))
     })?;
     set_ownership(ods_dir, uid, gid)?;
-    set_mode(ods_dir, DIR_MODE)?;
+    set_mode(ods_dir, FilePermission::DirStandard)?;
 
     write_status_file(ods_dir, status)?;
     set_ownership(&ods_dir.join(ODS_STATUS_FILE), uid, gid)?;
-    set_mode(&ods_dir.join(ODS_STATUS_FILE), FILE_MODE_RESTRICTED)?;
+    set_mode(&ods_dir.join(ODS_STATUS_FILE), FilePermission::FileRestricted)?;
 
     // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
@@ -208,7 +220,7 @@ pub fn create_ods_runtime_files(
     // Copy factory reset status if exists
     if let Some(dst) = copy_factory_reset_status(ods_dir)? {
         set_ownership(&dst, uid, gid)?;
-        set_mode(&dst, FILE_MODE_RESTRICTED)?;
+        set_mode(&dst, FilePermission::FileRestricted)?;
     }
 
     log::info!("Created ODS runtime files in {}", ods_dir.display());
@@ -268,7 +280,7 @@ fn handle_update_validation(
                     )))
                 })?;
                 set_ownership(&trigger_path, uid, gid)?;
-                set_mode(&trigger_path, FILE_MODE_READABLE)?;
+                set_mode(&trigger_path, FilePermission::FileReadable)?;
                 log::info!("Update validation requested - created trigger file");
             }
             ValidateUpdateState::Failed => {
@@ -281,7 +293,7 @@ fn handle_update_validation(
                     )))
                 })?;
                 set_ownership(&failed_path, uid, gid)?;
-                set_mode(&failed_path, FILE_MODE_READABLE)?;
+                set_mode(&failed_path, FilePermission::FileReadable)?;
                 log::warn!("Update validation failed marker created");
             }
             ValidateUpdateState::Other => {
@@ -310,7 +322,7 @@ fn handle_update_validation(
             )))
         })?;
         set_ownership(&marker_path, uid, gid)?;
-        set_mode(&marker_path, FILE_MODE_RESTRICTED)?;
+        set_mode(&marker_path, FilePermission::FileRestricted)?;
         log::info!("Bootloader update marker created");
     }
 
@@ -422,9 +434,9 @@ fn set_ownership(path: &Path, uid: Uid, gid: Gid) -> Result<()> {
     })
 }
 
-fn set_mode(path: &Path, mode: u32) -> Result<()> {
+fn set_mode(path: &Path, mode: FilePermission) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode.bits())).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to chmod {}: {}",
             path.display(),
