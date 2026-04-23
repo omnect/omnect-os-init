@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use nix::unistd::{Gid, Uid, chown};
 use serde::Serialize;
 
-use crate::bootloader::{Bootloader, vars};
+use crate::bootloader::{Bootloader, BootloaderEnvKey};
 use crate::error::{InitramfsError, Result};
 use crate::partition::PartitionName;
 
@@ -247,7 +247,7 @@ fn handle_update_validation(
     gid: u32,
 ) -> Result<()> {
     let validate_update = bootloader
-        .get_env(vars::OMNECT_VALIDATE_UPDATE)
+        .get_env(BootloaderEnvKey::ValidateUpdate)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_validate_update from bootloader: {e}"
@@ -291,7 +291,7 @@ fn handle_update_validation(
     }
 
     let bootloader_updated = bootloader
-        .get_env(vars::OMNECT_BOOTLOADER_UPDATED)
+        .get_env(BootloaderEnvKey::BootloaderUpdated)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_bootloader_updated from bootloader: {e}"
@@ -583,7 +583,7 @@ mod tests {
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
         let bl =
-            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+            crate::bootloader::create_mock_bootloader().with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -597,7 +597,7 @@ mod tests {
         // Only "1" is a valid truthy value; "true" must not create the trigger file.
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "true");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "true");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -608,7 +608,7 @@ mod tests {
     fn test_handle_update_validation_failed() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "failed");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "failed");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -620,7 +620,7 @@ mod tests {
     fn test_handle_update_validation_unexpected_value_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "unexpected");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "unexpected");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -632,7 +632,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "1");
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -643,7 +643,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated_false_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "0");
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "0");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -705,7 +705,7 @@ mod tests {
         status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
         let bl =
-            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+            crate::bootloader::create_mock_bootloader().with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
 

@@ -6,7 +6,7 @@
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, FsckRecord, FSCK_VAR_PREFIX, Result,
+    Bootloader, BootloaderEnvKey, FsckRecord, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
@@ -98,12 +98,12 @@ impl UBootBootloader {
 }
 
 impl Bootloader for UBootBootloader {
-    fn get_env(&self, key: &str) -> Result<Option<String>> {
-        self.run_fw_printenv(key)
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+        self.run_fw_printenv(key.as_str().as_ref())
     }
 
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
-        self.run_fw_setenv(key, value)
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+        self.run_fw_setenv(key.as_str().as_ref(), value)
     }
 
     fn save_fsck_status(
@@ -112,19 +112,19 @@ impl Bootloader for UBootBootloader {
         code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.run_fw_setenv(&var_name, Some(&encode_fsck_output(code.bits(), output)))
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
+        self.run_fw_setenv(var_name.as_ref(), Some(&encode_fsck_output(code.bits(), output)))
     }
 
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
         Ok(self
-            .run_fw_printenv(&var_name)?
+            .run_fw_printenv(var_name.as_ref())?
             .and_then(|v| decode_fsck_output(&v)))
     }
 
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.run_fw_setenv(&var_name, None)
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
+        self.run_fw_setenv(var_name.as_ref(), None)
     }
 }

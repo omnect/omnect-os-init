@@ -259,10 +259,10 @@ mod tests {
     }
 
     impl Bootloader for TrackingBootloader {
-        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: crate::bootloader::BootloaderEnvKey) -> crate::bootloader::Result<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(&mut self, _key: crate::bootloader::BootloaderEnvKey, _value: Option<&str>) -> crate::bootloader::Result<()> {
             Ok(())
         }
         fn save_fsck_status(
@@ -292,10 +292,10 @@ mod tests {
     struct FailingBootloader;
 
     impl Bootloader for FailingBootloader {
-        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: crate::bootloader::BootloaderEnvKey) -> crate::bootloader::Result<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(&mut self, _key: crate::bootloader::BootloaderEnvKey, _value: Option<&str>) -> crate::bootloader::Result<()> {
             Ok(())
         }
         fn save_fsck_status(

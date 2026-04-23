@@ -9,6 +9,8 @@ mod types;
 #[cfg(feature = "uboot")]
 mod uboot;
 
+use std::borrow::Cow;
+
 use crate::error::BootloaderError;
 use crate::filesystem::FsckExitCode;
 use crate::partition::PartitionName;
@@ -29,14 +31,30 @@ pub struct FsckRecord {
     pub output: String,
 }
 
-/// Bootloader environment variable names
-pub mod vars {
-    pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
-    pub const OMNECT_BOOTLOADER_UPDATED: &str = "omnect_bootloader_updated";
+/// Typed key for bootloader environment variables.
+///
+/// Use this instead of raw `&str` keys to prevent typos and make all
+/// known env-var names visible in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootloaderEnvKey {
+    /// `omnect_validate_update` — OTA update validation state.
+    ValidateUpdate,
+    /// `omnect_bootloader_updated` — whether the bootloader itself was updated.
+    BootloaderUpdated,
+    /// `omnect_fsck_<partition>` — fsck result for the given partition.
+    FsckStatus(PartitionName),
 }
 
-/// Prefix for fsck status variables in bootloader environment
-pub const FSCK_VAR_PREFIX: &str = "omnect_fsck_";
+impl BootloaderEnvKey {
+    /// Returns the env-var name as it is stored in the bootloader environment.
+    pub fn as_str(&self) -> Cow<'static, str> {
+        match self {
+            Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
+            Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
+            Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
+        }
+    }
+}
 
 /// Trait for bootloader environment access
 ///
@@ -48,12 +66,12 @@ pub trait Bootloader: Send + Sync {
     ///
     /// Returns `Ok(None)` if the variable doesn't exist.
     /// Returns `Err` if there was an error accessing the bootloader environment.
-    fn get_env(&self, key: &str) -> Result<Option<String>>;
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>>;
 
     /// Set or delete a bootloader environment variable
     ///
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()>;
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()>;
 
     /// Save fsck result to bootloader environment.
     ///
@@ -108,25 +126,25 @@ impl MockBootloader {
         Self::default()
     }
 
-    pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.env.insert(key.to_string(), value.to_string());
+    pub fn with_env(mut self, key: BootloaderEnvKey, value: &str) -> Self {
+        self.env.insert(key.as_str().to_string(), value.to_string());
         self
     }
 }
 
 #[cfg(test)]
 impl Bootloader for MockBootloader {
-    fn get_env(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.env.get(key).cloned())
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+        Ok(self.env.get(key.as_str().as_ref()).cloned())
     }
 
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
         match value {
             Some(v) => {
-                self.env.insert(key.to_string(), v.to_string());
+                self.env.insert(key.as_str().to_string(), v.to_string());
             }
             None => {
-                self.env.remove(key);
+                self.env.remove(key.as_str().as_ref());
             }
         }
         Ok(())
@@ -160,30 +178,35 @@ mod tests {
     fn test_mock_bootloader_get_set() {
         let mut bl = MockBootloader::new();
 
-        // Test set and get
-        bl.set_env("test-key", Some("test-value")).unwrap();
+        bl.set_env(BootloaderEnvKey::ValidateUpdate, Some("1")).unwrap();
         assert_eq!(
-            bl.get_env("test-key").unwrap(),
-            Some("test-value".to_string())
+            bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(),
+            Some("1".to_string())
         );
 
-        // Test delete
-        bl.set_env("test-key", None).unwrap();
-        assert_eq!(bl.get_env("test-key").unwrap(), None);
+        bl.set_env(BootloaderEnvKey::ValidateUpdate, None).unwrap();
+        assert_eq!(bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(), None);
     }
 
     #[test]
     fn test_mock_bootloader_with_env() {
         let bl = MockBootloader::new()
-            .with_env("factory-reset", r#"{"mode":1}"#)
-            .with_env("flash-mode", "1");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1")
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "0");
 
         assert_eq!(
-            bl.get_env("factory-reset").unwrap(),
-            Some(r#"{"mode":1}"#.to_string())
+            bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(),
+            Some("1".to_string())
         );
-        assert_eq!(bl.get_env("flash-mode").unwrap(), Some("1".to_string()));
-        assert_eq!(bl.get_env("nonexistent").unwrap(), None);
+        assert_eq!(
+            bl.get_env(BootloaderEnvKey::BootloaderUpdated).unwrap(),
+            Some("0".to_string())
+        );
+        assert_eq!(
+            bl.get_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

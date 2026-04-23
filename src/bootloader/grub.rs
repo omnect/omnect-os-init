@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, FsckRecord, Result,
+    Bootloader, BootloaderEnvKey, FsckRecord, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
@@ -23,9 +23,6 @@ const BOOT_DIR_PATH: &str = "/rootfs/boot";
 
 /// Absolute path to the grubenv file
 const GRUBENV_PATH: &str = "/rootfs/boot/EFI/BOOT/grubenv";
-
-/// grubenv key used for boot partition fsck status
-const BOOT_FSCK_VAR: &str = "omnect_fsck_boot";
 
 /// Constructs the fsck status file path for a non-boot partition on the boot volume.
 fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
@@ -119,12 +116,13 @@ impl GrubBootloader {
 }
 
 impl Bootloader for GrubBootloader {
-    fn get_env(&self, key: &str) -> Result<Option<String>> {
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+        let key_str = key.as_str();
         let output = self.run_grub_editenv(&["list"])?;
 
         for line in output.lines() {
             if let Some((k, v)) = line.split_once('=')
-                && k == key
+                && k == key_str.as_ref()
             {
                 return Ok(Some(v.to_string()));
             }
@@ -133,14 +131,15 @@ impl Bootloader for GrubBootloader {
         Ok(None)
     }
 
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+        let key_str = key.as_str();
         match value {
             Some(v) => {
-                let assignment = format!("{}={}", key, v);
+                let assignment = format!("{}={}", key_str, v);
                 self.run_grub_editenv(&["set", &assignment])?;
             }
             None => {
-                self.run_grub_editenv(&["unset", key])?;
+                self.run_grub_editenv(&["unset", key_str.as_ref()])?;
             }
         }
         Ok(())
@@ -165,7 +164,7 @@ impl Bootloader for GrubBootloader {
                     );
                     return Ok(());
                 }
-                self.set_env(BOOT_FSCK_VAR, Some(&encoded))
+                self.set_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot), Some(&encoded))
             }
             PartitionName::RootA
             | PartitionName::RootB
@@ -189,7 +188,7 @@ impl Bootloader for GrubBootloader {
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
         match partition {
             PartitionName::Boot => Ok(self
-                .get_env(BOOT_FSCK_VAR)?
+                .get_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot))?
                 .and_then(|v| decode_fsck_output(&v))),
             PartitionName::RootA
             | PartitionName::RootB
@@ -205,7 +204,7 @@ impl Bootloader for GrubBootloader {
 
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
         match partition {
-            PartitionName::Boot => self.set_env(BOOT_FSCK_VAR, None),
+            PartitionName::Boot => self.set_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot), None),
             PartitionName::RootA
             | PartitionName::RootB
             | PartitionName::RootCurrent
