@@ -212,7 +212,7 @@ fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
 
     let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
         device: device.to_path_buf(),
-        code: FsckExitCode::UNKNOWN.bits(),
+        code: FsckExitCode::UNKNOWN,
         output: format!("Failed to execute fsck: {}", e),
     })?;
 
@@ -246,7 +246,7 @@ fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
     if exit_code.is_reboot_required() {
         return Err(FilesystemError::FsckRequiresReboot {
             device: device.to_path_buf(),
-            code: exit_code.bits(),
+            code: exit_code,
             output: combined_output,
         });
     }
@@ -254,7 +254,7 @@ fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
     if !exit_code.is_mount_safe() {
         return Err(FilesystemError::FsckFailed {
             device: device.to_path_buf(),
-            code: exit_code.bits(),
+            code: exit_code,
             output: combined_output,
         });
     }
@@ -279,15 +279,14 @@ pub fn check_filesystem_lenient(device: &Path, fstype: FsType) -> Result<FsckRes
             code,
             output,
         }) => {
-            let exit_code = FsckExitCode::from(code);
             log::warn!(
                 "fsck on {} had errors ({}), continuing anyway",
                 device.display(),
-                exit_code
+                code
             );
             Ok(FsckResult {
                 device,
-                exit_code,
+                exit_code: code,
                 output,
             })
         }

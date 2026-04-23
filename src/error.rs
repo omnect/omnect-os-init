@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::filesystem::FsckExitCode;
+
 /// Result type alias for the initramfs
 pub type Result<T> = std::result::Result<T, InitramfsError>;
 
@@ -115,14 +117,14 @@ pub enum FilesystemError {
     #[error("Filesystem check failed for {} with code {code}: {output}", device.display())]
     FsckFailed {
         device: PathBuf,
-        code: i32,
+        code: FsckExitCode,
         output: String,
     },
 
     #[error("Filesystem check for {} requires reboot (fsck exit code {code})", device.display())]
     FsckRequiresReboot {
         device: PathBuf,
-        code: i32,
+        code: FsckExitCode,
         output: String,
     },
 

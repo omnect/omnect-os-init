@@ -47,7 +47,7 @@ pub fn fsck_and_record(
             code,
             ref output,
         }) => {
-            ods_status.add_fsck_result(name, code, output.clone());
+            ods_status.add_fsck_result(name, code.bits(), output.clone());
             Err(FilesystemError::FsckRequiresReboot {
                 device,
                 code,
