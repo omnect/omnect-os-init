@@ -243,8 +243,8 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 fn handle_update_validation(
     ods_dir: &Path,
     bootloader: &dyn Bootloader,
-    uid: u32,
-    gid: u32,
+    uid: Uid,
+    gid: Gid,
 ) -> Result<()> {
     let validate_update = bootloader
         .get_env(BootloaderEnvKey::ValidateUpdate)
@@ -340,8 +340,8 @@ fn copy_factory_reset_status(ods_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(dst))
 }
 
-/// Look up the numeric UID for a user in the rootfs /etc/passwd.
-fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
+/// Look up the UID for a user in the rootfs /etc/passwd.
+fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<Uid> {
     let passwd = rootfs_dir.join("etc/passwd");
     let content = fs::read_to_string(&passwd).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
@@ -358,12 +358,15 @@ fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
         }
         let _password = fields.next();
         if let Some(uid_str) = fields.next() {
-            return uid_str.parse::<u32>().map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Invalid UID for {}: {}",
-                    username, e
-                )))
-            });
+            return uid_str
+                .parse::<u32>()
+                .map(Uid::from_raw)
+                .map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Invalid UID for {}: {}",
+                        username, e
+                    )))
+                });
         }
     }
     Err(InitramfsError::Io(std::io::Error::other(format!(
@@ -374,7 +377,7 @@ fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
 }
 
 /// Look up the numeric GID for a group in the rootfs /etc/group.
-fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
+fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<Gid> {
     let group = rootfs_dir.join("etc/group");
     let content = fs::read_to_string(&group).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
@@ -391,12 +394,15 @@ fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
         }
         let _password = fields.next();
         if let Some(gid_str) = fields.next() {
-            return gid_str.parse::<u32>().map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Invalid GID for {}: {}",
-                    groupname, e
-                )))
-            });
+            return gid_str
+                .parse::<u32>()
+                .map(Gid::from_raw)
+                .map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Invalid GID for {}: {}",
+                        groupname, e
+                    )))
+                });
         }
     }
     Err(InitramfsError::Io(std::io::Error::other(format!(
@@ -406,8 +412,8 @@ fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
     ))))
 }
 
-fn set_ownership(path: &Path, uid: u32, gid: u32) -> Result<()> {
-    chown(path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid))).map_err(|e| {
+fn set_ownership(path: &Path, uid: Uid, gid: Gid) -> Result<()> {
+    chown(path, Some(uid), Some(gid)).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to chown {}: {}",
             path.display(),
@@ -433,30 +439,32 @@ mod tests {
     use crate::partition::PartitionName;
     use tempfile::TempDir;
 
-    fn current_uid() -> u32 {
-        nix::unistd::getuid().as_raw()
+    fn current_uid() -> Uid {
+        nix::unistd::getuid()
     }
 
-    fn current_gid() -> u32 {
-        nix::unistd::getgid().as_raw()
+    fn current_gid() -> Gid {
+        nix::unistd::getgid()
     }
 
     /// Create a minimal rootfs with /etc/passwd and /etc/group for ODS user,
     /// using the current process's uid/gid so chown succeeds without root.
-    fn make_fake_rootfs(uid: u32, gid: u32) -> TempDir {
+    fn make_fake_rootfs(uid: Uid, gid: Gid) -> TempDir {
         let rootfs = TempDir::new().unwrap();
         let etc = rootfs.path().join("etc");
         fs::create_dir_all(&etc).unwrap();
         fs::write(
             etc.join("passwd"),
             format!(
-                "root:x:0:0:root:/root:/bin/sh\nomnect_device_service:x:{uid}:{gid}::/:/bin/sh\n"
+                "root:x:0:0:root:/root:/bin/sh\nomnect_device_service:x:{}:{}::/:/bin/sh\n",
+                uid.as_raw(),
+                gid.as_raw()
             ),
         )
         .unwrap();
         fs::write(
             etc.join("group"),
-            format!("root:x:0:\nomnect_device_service:x:{gid}:\n"),
+            format!("root:x:0:\nomnect_device_service:x:{}:\n", gid.as_raw()),
         )
         .unwrap();
         rootfs
