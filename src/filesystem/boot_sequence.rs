@@ -202,7 +202,7 @@ pub fn persist_fsck_results(
             continue;
         }
 
-        if let Err(e) = bootloader.save_fsck_status(*partition, fsck.code, &fsck.output) {
+        if let Err(e) = bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output) {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,
@@ -249,7 +249,7 @@ mod tests {
         s
     }
     struct TrackingBootloader {
-        saved: Vec<(PartitionName, i32, String)>,
+        saved: Vec<(PartitionName, FsckExitCode, String)>,
     }
 
     impl TrackingBootloader {
@@ -268,7 +268,7 @@ mod tests {
         fn save_fsck_status(
             &mut self,
             partition: PartitionName,
-            code: i32,
+            code: FsckExitCode,
             output: &str,
         ) -> crate::bootloader::Result<()> {
             self.saved.push((partition, code, output.to_string()));
@@ -277,7 +277,7 @@ mod tests {
         fn get_fsck_status(
             &self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+        ) -> crate::bootloader::Result<Option<crate::bootloader::FsckRecord>> {
             Ok(None)
         }
         fn clear_fsck_status(
@@ -301,7 +301,7 @@ mod tests {
         fn save_fsck_status(
             &mut self,
             _partition: PartitionName,
-            _code: i32,
+            _code: FsckExitCode,
             _output: &str,
         ) -> crate::bootloader::Result<()> {
             Err(BootloaderError::CommandFailed {
@@ -312,7 +312,7 @@ mod tests {
         fn get_fsck_status(
             &self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+        ) -> crate::bootloader::Result<Option<crate::bootloader::FsckRecord>> {
             Ok(None)
         }
         fn clear_fsck_status(
@@ -348,7 +348,7 @@ mod tests {
 
         assert_eq!(bl.saved.len(), 1);
         assert_eq!(bl.saved[0].0, PartitionName::Boot);
-        assert_eq!(bl.saved[0].1, 1);
+        assert_eq!(bl.saved[0].1, FsckExitCode::CORRECTED);
         assert_eq!(bl.saved[0].2, "errors corrected");
     }
 

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, Result,
+    Bootloader, FsckRecord, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
@@ -42,7 +42,7 @@ fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootload
 
 fn get_fsck_from_file(
     partition: PartitionName,
-) -> crate::bootloader::Result<Option<(i32, String)>> {
+) -> crate::bootloader::Result<Option<FsckRecord>> {
     let file_path = fsck_file_path(partition);
     if !file_path.is_file() {
         return Ok(None);
@@ -149,17 +149,17 @@ impl Bootloader for GrubBootloader {
     fn save_fsck_status(
         &mut self,
         partition: PartitionName,
-        code: i32,
+        code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
-        let encoded = encode_fsck_output(code, output);
+        let encoded = encode_fsck_output(code.bits(), output);
 
         match partition {
             PartitionName::Boot => {
                 // When the boot partition's own fsck requests a reboot, writing to
                 // grubenv is unreliable — the filesystem is in an inconsistent state.
                 // Match legacy behaviour and skip; a clean check runs on next boot.
-                if FsckExitCode::from(code).is_reboot_required() {
+                if code.is_reboot_required() {
                     log::warn!(
                         "Skipping grubenv write for boot partition (fsck exit code {code} — reboot required)"
                     );
@@ -186,7 +186,7 @@ impl Bootloader for GrubBootloader {
         }
     }
 
-    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>> {
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
         match partition {
             PartitionName::Boot => Ok(self
                 .get_env(BOOT_FSCK_VAR)?

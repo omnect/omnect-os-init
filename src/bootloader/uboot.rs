@@ -6,10 +6,11 @@
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, FSCK_VAR_PREFIX, Result,
+    Bootloader, FsckRecord, FSCK_VAR_PREFIX, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
+use crate::filesystem::FsckExitCode;
 use crate::partition::PartitionName;
 
 /// Command to read U-Boot environment variables
@@ -108,14 +109,14 @@ impl Bootloader for UBootBootloader {
     fn save_fsck_status(
         &mut self,
         partition: PartitionName,
-        code: i32,
+        code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.run_fw_setenv(&var_name, Some(&encode_fsck_output(code, output)))
+        self.run_fw_setenv(&var_name, Some(&encode_fsck_output(code.bits(), output)))
     }
 
-    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<(i32, String)>> {
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
         let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
         Ok(self
             .run_fw_printenv(&var_name)?
