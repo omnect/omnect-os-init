@@ -235,7 +235,7 @@ pub fn persist_fsck_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::Bootloader;
+    use crate::bootloader::{Bootloader, BootloaderEnvKey, FsckRecord, Result as BootloaderResult};
     use crate::error::BootloaderError;
     use crate::partition::PartitionName;
     use crate::runtime::OdsStatus;
@@ -259,10 +259,10 @@ mod tests {
     }
 
     impl Bootloader for TrackingBootloader {
-        fn get_env(&self, _key: crate::bootloader::BootloaderEnvKey) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: crate::bootloader::BootloaderEnvKey, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(&mut self, _key: BootloaderEnvKey, _value: Option<&str>) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
@@ -270,20 +270,20 @@ mod tests {
             partition: PartitionName,
             code: FsckExitCode,
             output: &str,
-        ) -> crate::bootloader::Result<()> {
+        ) -> BootloaderResult<()> {
             self.saved.push((partition, code, output.to_string()));
             Ok(())
         }
         fn get_fsck_status(
             &self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<Option<crate::bootloader::FsckRecord>> {
+        ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
         fn clear_fsck_status(
             &mut self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<()> {
+        ) -> BootloaderResult<()> {
             Ok(())
         }
     }
@@ -292,10 +292,10 @@ mod tests {
     struct FailingBootloader;
 
     impl Bootloader for FailingBootloader {
-        fn get_env(&self, _key: crate::bootloader::BootloaderEnvKey) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: crate::bootloader::BootloaderEnvKey, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(&mut self, _key: BootloaderEnvKey, _value: Option<&str>) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
@@ -303,7 +303,7 @@ mod tests {
             _partition: PartitionName,
             _code: FsckExitCode,
             _output: &str,
-        ) -> crate::bootloader::Result<()> {
+        ) -> BootloaderResult<()> {
             Err(BootloaderError::CommandFailed {
                 command: "mock".into(),
                 reason: "injected failure".into(),
@@ -312,13 +312,13 @@ mod tests {
         fn get_fsck_status(
             &self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<Option<crate::bootloader::FsckRecord>> {
+        ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
         fn clear_fsck_status(
             &mut self,
             _partition: PartitionName,
-        ) -> crate::bootloader::Result<()> {
+        ) -> BootloaderResult<()> {
             Ok(())
         }
     }

@@ -297,7 +297,7 @@ fn handle_update_validation(
                 log::warn!("Update validation failed marker created");
             }
             ValidateUpdateState::Other => {
-                log::debug!("omnect_validate_update: unexpected value {value:?}");
+                log::warn!("omnect_validate_update: unexpected value {value:?}");
             }
         }
     }
