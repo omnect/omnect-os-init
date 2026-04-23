@@ -77,8 +77,12 @@ pub trait Bootloader: Send + Sync {
     ///
     /// Stores exit code and full fsck output as gzip+base64 encoded string so the
     /// diagnostic text survives the reboot required after fsck corrects errors.
-    fn save_fsck_status(&mut self, partition: PartitionName, code: FsckExitCode, output: &str)
-    -> Result<()>;
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: FsckExitCode,
+        output: &str,
+    ) -> Result<()>;
 
     /// Get fsck status from bootloader environment.
     ///
@@ -156,7 +160,13 @@ impl Bootloader for MockBootloader {
         code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
-        self.fsck.insert(partition, FsckRecord { exit_code: code, output: output.to_string() });
+        self.fsck.insert(
+            partition,
+            FsckRecord {
+                exit_code: code,
+                output: output.to_string(),
+            },
+        );
         Ok(())
     }
 
@@ -178,7 +188,8 @@ mod tests {
     fn test_mock_bootloader_get_set() {
         let mut bl = MockBootloader::new();
 
-        bl.set_env(BootloaderEnvKey::ValidateUpdate, Some("1")).unwrap();
+        bl.set_env(BootloaderEnvKey::ValidateUpdate, Some("1"))
+            .unwrap();
         assert_eq!(
             bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(),
             Some("1".to_string())
@@ -214,8 +225,12 @@ mod tests {
         use crate::partition::PartitionName;
         let mut bl = MockBootloader::new();
 
-        bl.save_fsck_status(PartitionName::Boot, FsckExitCode::CORRECTED, "errors corrected on pass 1")
-            .unwrap();
+        bl.save_fsck_status(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected on pass 1",
+        )
+        .unwrap();
 
         let retrieved = bl.get_fsck_status(PartitionName::Boot).unwrap();
         assert_eq!(

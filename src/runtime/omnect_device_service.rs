@@ -210,7 +210,10 @@ pub fn create_ods_runtime_files(
 
     write_status_file(ods_dir, status)?;
     set_ownership(&ods_dir.join(ODS_STATUS_FILE), uid, gid)?;
-    set_mode(&ods_dir.join(ODS_STATUS_FILE), FilePermission::FileRestricted)?;
+    set_mode(
+        &ods_dir.join(ODS_STATUS_FILE),
+        FilePermission::FileRestricted,
+    )?;
 
     // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
@@ -370,15 +373,12 @@ fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<Uid> {
         }
         let _password = fields.next();
         if let Some(uid_str) = fields.next() {
-            return uid_str
-                .parse::<u32>()
-                .map(Uid::from_raw)
-                .map_err(|e| {
-                    InitramfsError::Io(std::io::Error::other(format!(
-                        "Invalid UID for {}: {}",
-                        username, e
-                    )))
-                });
+            return uid_str.parse::<u32>().map(Uid::from_raw).map_err(|e| {
+                InitramfsError::Io(std::io::Error::other(format!(
+                    "Invalid UID for {}: {}",
+                    username, e
+                )))
+            });
         }
     }
     Err(InitramfsError::Io(std::io::Error::other(format!(
@@ -406,15 +406,12 @@ fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<Gid> {
         }
         let _password = fields.next();
         if let Some(gid_str) = fields.next() {
-            return gid_str
-                .parse::<u32>()
-                .map(Gid::from_raw)
-                .map_err(|e| {
-                    InitramfsError::Io(std::io::Error::other(format!(
-                        "Invalid GID for {}: {}",
-                        groupname, e
-                    )))
-                });
+            return gid_str.parse::<u32>().map(Gid::from_raw).map_err(|e| {
+                InitramfsError::Io(std::io::Error::other(format!(
+                    "Invalid GID for {}: {}",
+                    groupname, e
+                )))
+            });
         }
     }
     Err(InitramfsError::Io(std::io::Error::other(format!(
@@ -602,8 +599,8 @@ mod tests {
     #[test]
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
-        let bl =
-            crate::bootloader::create_mock_bootloader().with_env(BootloaderEnvKey::ValidateUpdate, "1");
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -724,8 +721,8 @@ mod tests {
         let mut status = OdsStatus::new();
         status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
-        let bl =
-            crate::bootloader::create_mock_bootloader().with_env(BootloaderEnvKey::ValidateUpdate, "1");
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
 

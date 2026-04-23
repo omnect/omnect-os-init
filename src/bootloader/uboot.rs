@@ -113,7 +113,10 @@ impl Bootloader for UBootBootloader {
         output: &str,
     ) -> Result<()> {
         let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
-        self.run_fw_setenv(var_name.as_ref(), Some(&encode_fsck_output(code.bits(), output)))
+        self.run_fw_setenv(
+            var_name.as_ref(),
+            Some(&encode_fsck_output(code.bits(), output)),
+        )
     }
 
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {

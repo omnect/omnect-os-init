@@ -202,7 +202,9 @@ pub fn persist_fsck_results(
             continue;
         }
 
-        if let Err(e) = bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output) {
+        if let Err(e) =
+            bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output)
+        {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,
@@ -262,7 +264,11 @@ mod tests {
         fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: BootloaderEnvKey, _value: Option<&str>) -> BootloaderResult<()> {
+        fn set_env(
+            &mut self,
+            _key: BootloaderEnvKey,
+            _value: Option<&str>,
+        ) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
@@ -280,10 +286,7 @@ mod tests {
         ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
-        fn clear_fsck_status(
-            &mut self,
-            _partition: PartitionName,
-        ) -> BootloaderResult<()> {
+        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootloaderResult<()> {
             Ok(())
         }
     }
@@ -295,7 +298,11 @@ mod tests {
         fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: BootloaderEnvKey, _value: Option<&str>) -> BootloaderResult<()> {
+        fn set_env(
+            &mut self,
+            _key: BootloaderEnvKey,
+            _value: Option<&str>,
+        ) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
@@ -315,10 +322,7 @@ mod tests {
         ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
-        fn clear_fsck_status(
-            &mut self,
-            _partition: PartitionName,
-        ) -> BootloaderResult<()> {
+        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootloaderResult<()> {
             Ok(())
         }
     }

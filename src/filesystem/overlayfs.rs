@@ -180,14 +180,11 @@ fn mount_overlay(lower: &Path, upper: &Path, work: &Path, target: &Path) -> Resu
         data: Some(options.clone()),
     };
 
-    mount(MountPoint::new(
-        OVERLAY_MOUNT_SOURCE,
-        target,
-        mount_opts,
-    ))
-    .map_err(|e| FilesystemError::OverlayFailed {
-        target: target.to_path_buf(),
-        reason: format!("{e}: options={options}"),
+    mount(MountPoint::new(OVERLAY_MOUNT_SOURCE, target, mount_opts)).map_err(|e| {
+        FilesystemError::OverlayFailed {
+            target: target.to_path_buf(),
+            reason: format!("{e}: options={options}"),
+        }
     })
 }
 

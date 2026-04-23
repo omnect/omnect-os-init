@@ -177,7 +177,10 @@ mod tests {
         let encoded = encode_fsck_output(code, output);
         assert!(!encoded.is_empty(), "encoding should succeed");
         let record = decode_fsck_output(&encoded).unwrap();
-        assert_eq!(record.exit_code, crate::filesystem::FsckExitCode::from(code));
+        assert_eq!(
+            record.exit_code,
+            crate::filesystem::FsckExitCode::from(code)
+        );
         assert_eq!(record.output, output);
     }
 

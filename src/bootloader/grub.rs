@@ -37,18 +37,15 @@ fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootload
     })
 }
 
-fn get_fsck_from_file(
-    partition: PartitionName,
-) -> crate::bootloader::Result<Option<FsckRecord>> {
+fn get_fsck_from_file(partition: PartitionName) -> crate::bootloader::Result<Option<FsckRecord>> {
     let file_path = fsck_file_path(partition);
     if !file_path.is_file() {
         return Ok(None);
     }
-    let encoded =
-        fs::read_to_string(&file_path).map_err(|e| BootloaderError::CommandFailed {
-            command: format!("read {}", file_path.display()),
-            reason: e.to_string(),
-        })?;
+    let encoded = fs::read_to_string(&file_path).map_err(|e| BootloaderError::CommandFailed {
+        command: format!("read {}", file_path.display()),
+        reason: e.to_string(),
+    })?;
     // Remove file after reading — matches legacy behaviour
     if let Err(e) = fs::remove_file(&file_path) {
         log::warn!(
@@ -164,7 +161,10 @@ impl Bootloader for GrubBootloader {
                     );
                     return Ok(());
                 }
-                self.set_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot), Some(&encoded))
+                self.set_env(
+                    BootloaderEnvKey::FsckStatus(PartitionName::Boot),
+                    Some(&encoded),
+                )
             }
             PartitionName::RootA
             | PartitionName::RootB
@@ -204,7 +204,9 @@ impl Bootloader for GrubBootloader {
 
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
         match partition {
-            PartitionName::Boot => self.set_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot), None),
+            PartitionName::Boot => {
+                self.set_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot), None)
+            }
             PartitionName::RootA
             | PartitionName::RootB
             | PartitionName::RootCurrent
