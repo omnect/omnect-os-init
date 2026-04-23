@@ -18,34 +18,6 @@ const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 /// Command to write U-Boot environment variables
 const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 
-/// Sentinel for "process killed by signal" — no numeric exit code available.
-/// Kept local to avoid coupling the bootloader module to the filesystem module;
-/// semantically equivalent to FsckExitCode::UNKNOWN in filesystem/fsck.rs.
-const UNKNOWN_EXIT_CODE: i32 = -1;
-
-/// Exit status of a `fw_printenv` invocation.
-///
-/// Exit code 1 is a normal condition meaning the variable is not set in
-/// the U-Boot environment — it must not be treated as an error.
-enum FwPrintenvExitStatus {
-    /// Variable found and printed (exit code 0).
-    Found,
-    /// Variable not set in the environment — not an error (exit code 1).
-    NotFound,
-    /// Unexpected failure; carries the raw exit code for the error message.
-    Error(i32),
-}
-
-impl From<i32> for FwPrintenvExitStatus {
-    fn from(code: i32) -> Self {
-        match code {
-            0 => Self::Found,
-            1 => Self::NotFound,
-            n => Self::Error(n),
-        }
-    }
-}
-
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
@@ -75,21 +47,18 @@ impl UBootBootloader {
                 reason: e.to_string(),
             })?;
 
-        // Exit code 1 means the variable was not found — that is a normal condition.
-        // Any other non-zero code indicates a real failure (bad /etc/fw_env.config,
-        // I/O error, permission denied, etc.) and must be surfaced as an error.
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(UNKNOWN_EXIT_CODE);
-            match FwPrintenvExitStatus::from(code) {
-                FwPrintenvExitStatus::NotFound => return Ok(None),
-                FwPrintenvExitStatus::Error(c) => {
-                    return Err(BootloaderError::CommandExitCode {
-                        command: FW_PRINTENV_CMD.to_string(),
-                        code: Some(c),
-                        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                    });
-                }
-                FwPrintenvExitStatus::Found => unreachable!("success() was false but code was 0"),
+        // Match on exit code directly so every case is explicit.
+        // Exit code 1 means "variable not set" — a normal condition in U-Boot env.
+        // None means the process was killed by a signal.
+        match output.status.code() {
+            Some(0) => {}
+            Some(1) => return Ok(None),
+            code => {
+                return Err(BootloaderError::CommandExitCode {
+                    command: FW_PRINTENV_CMD.to_string(),
+                    code,
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                });
             }
         }
 
