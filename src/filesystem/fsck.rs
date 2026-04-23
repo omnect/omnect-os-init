@@ -47,11 +47,11 @@ impl FsckExitCode {
     pub const CANCELLED: Self = Self(32);
     /// Shared library error.
     pub const LIBRARY_ERROR: Self = Self(128);
-    /// Sentinel: process was killed by a signal (no exit status from the OS).
+    /// Sentinel: process spawn failed or was killed by a signal (no OS exit status).
     ///
-    /// Note: all bitwise predicates (`is_reboot_required`, `has_uncorrected_errors`, etc.)
-    /// return `true` on this value because −1 is all 1-bits in two's complement.
-    /// The only reliable checks are `== FsckExitCode::UNKNOWN` and the `Display` output.
+    /// Only set explicitly when fsck cannot be executed at all (e.g. spawn error).
+    /// Signal-killed processes map to `OPERATIONAL_ERROR` at construction via
+    /// `From<Option<i32>>` to avoid the two's-complement all-bits-set footgun.
     pub const UNKNOWN: Self = Self(-1);
 
     /// The raw integer value (for wire-format serialization into FilesystemError fields).
@@ -63,7 +63,12 @@ impl FsckExitCode {
         self.0 == 0
     }
 
-    pub fn is_corrected(self) -> bool {
+    /// Returns `true` if the corrected-errors bit (bit 0) is set.
+    ///
+    /// Note: this is a bitmask test, not equality with `CORRECTED`. A code of 5
+    /// (CORRECTED | ERRORS_UNCORRECTED) returns `true` here even though the
+    /// filesystem is not safe to mount. Use `is_mount_safe` for mount decisions.
+    pub fn has_corrected_bit(self) -> bool {
         self.0 & 1 != 0
     }
 
@@ -93,11 +98,13 @@ impl FsckExitCode {
 
     /// Returns `true` if the filesystem is safe to mount.
     ///
-    /// True only when the exit code is 0 (clean) or 1 (errors corrected by -y)
-    /// and reboot is not required. Code 3 (CORRECTED | REBOOT_REQUIRED) returns
-    /// false — reboot takes precedence.
+    /// Strict equality: only codes 0 (clean) and 1 (errors corrected by -y) are
+    /// safe. Combined codes such as 3 (CORRECTED | REBOOT_REQUIRED) or 5
+    /// (CORRECTED | ERRORS_UNCORRECTED) are rejected even though the corrected-bit
+    /// is set. The reboot check is implicit — any code with bit 1 set has value ≥ 2
+    /// and cannot equal OK or CORRECTED.
     pub fn is_mount_safe(self) -> bool {
-        self.is_clean() || (self.is_corrected() && !self.is_reboot_required())
+        self == Self::OK || self == Self::CORRECTED
     }
 }
 
@@ -108,9 +115,11 @@ impl From<i32> for FsckExitCode {
 }
 
 impl From<Option<i32>> for FsckExitCode {
-    /// Construct from process exit status. `None` means killed by signal → `UNKNOWN`.
+    /// Construct from process exit status.
+    /// `None` means killed by signal — mapped to `OPERATIONAL_ERROR` to avoid
+    /// the two's-complement all-bits-set footgun of the `UNKNOWN` sentinel.
     fn from(code: Option<i32>) -> Self {
-        Self(code.unwrap_or(-1))
+        code.map(Self).unwrap_or(Self::OPERATIONAL_ERROR)
     }
 }
 
@@ -123,7 +132,7 @@ impl fmt::Display for FsckExitCode {
             return write!(f, "No errors");
         }
         let mut parts: Vec<&str> = Vec::new();
-        if self.is_corrected() {
+        if self.has_corrected_bit() {
             parts.push("errors corrected");
         }
         if self.is_reboot_required() {
@@ -303,7 +312,7 @@ mod tests {
     #[test]
     fn test_fsck_exit_code_corrected() {
         let code = FsckExitCode::from(Some(1i32));
-        assert!(code.is_corrected());
+        assert!(code.has_corrected_bit());
         assert!(!code.is_reboot_required());
         assert!(code.is_mount_safe());
         assert_eq!(format!("{code}"), "errors corrected");
@@ -320,7 +329,7 @@ mod tests {
     #[test]
     fn test_fsck_exit_code_combined() {
         let code = FsckExitCode::from(Some(3i32));
-        assert!(code.is_corrected());
+        assert!(code.has_corrected_bit());
         assert!(code.is_reboot_required());
         assert!(!code.is_mount_safe());
         assert_eq!(format!("{code}"), "errors corrected, reboot required");
@@ -329,8 +338,40 @@ mod tests {
     #[test]
     fn test_fsck_exit_code_unknown_sentinel() {
         let code = FsckExitCode::from(None::<i32>);
-        assert_eq!(code, FsckExitCode::UNKNOWN);
-        assert_eq!(code.bits(), -1);
+        // None (signal-killed) normalizes to OPERATIONAL_ERROR, not UNKNOWN.
+        assert_eq!(code, FsckExitCode::OPERATIONAL_ERROR);
+        assert!(!code.is_mount_safe());
+    }
+
+    #[test]
+    fn test_fsck_exit_code_unknown_const_predicates() {
+        // UNKNOWN = Self(-1): all bits set in two's complement — document this explicitly
+        // so any future change to the sentinel value is intentional.
+        assert!(FsckExitCode::UNKNOWN.has_corrected_bit());
+        assert!(FsckExitCode::UNKNOWN.is_reboot_required());
+        assert!(FsckExitCode::UNKNOWN.has_uncorrected_errors());
+        assert!(FsckExitCode::UNKNOWN.has_operational_error());
+        // is_mount_safe uses strict equality — UNKNOWN is never OK or CORRECTED.
+        assert!(!FsckExitCode::UNKNOWN.is_mount_safe());
+    }
+
+    #[test]
+    fn test_fsck_exit_code_5_corrected_with_uncorrected_errors() {
+        // Code 5 = CORRECTED | ERRORS_UNCORRECTED: corrected-bit is set but
+        // uncorrected errors remain — must NOT be considered mount-safe.
+        let code = FsckExitCode::from(5i32);
+        assert!(code.has_corrected_bit());
+        assert!(code.has_uncorrected_errors());
+        assert!(!code.is_mount_safe());
+    }
+
+    #[test]
+    fn test_fsck_exit_code_9_corrected_with_operational_error() {
+        // Code 9 = CORRECTED | OPERATIONAL_ERROR: must NOT be considered mount-safe.
+        let code = FsckExitCode::from(9i32);
+        assert!(code.has_corrected_bit());
+        assert!(code.has_operational_error());
+        assert!(!code.is_mount_safe());
     }
 
     #[test]
