@@ -19,6 +19,11 @@ use crate::filesystem::{
 /// cp command for copying directory contents (preserves attributes via -a)
 const CP_CMD: &str = "/bin/cp";
 
+/// The kernel ignores the mount source for overlayfs, but the mount syscall
+/// requires a non-empty string. Using the literal "overlay" is conventional
+/// and matches what the `mount` command would produce.
+const OVERLAY_MOUNT_SOURCE: &str = "overlay";
+
 /// Directory names for overlay layers
 mod overlay_dirs {
     pub const UPPER: &str = "upper";
@@ -176,7 +181,7 @@ fn mount_overlay(lower: &Path, upper: &Path, work: &Path, target: &Path) -> Resu
     };
 
     mount(MountPoint::new(
-        FsType::Overlay.as_str(),
+        OVERLAY_MOUNT_SOURCE,
         target,
         mount_opts,
     ))

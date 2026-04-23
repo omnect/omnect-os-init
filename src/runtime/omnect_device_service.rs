@@ -284,7 +284,9 @@ fn handle_update_validation(
                 set_mode(&failed_path, FILE_MODE_READABLE)?;
                 log::warn!("Update validation failed marker created");
             }
-            ValidateUpdateState::Other => {}
+            ValidateUpdateState::Other => {
+                log::debug!("omnect_validate_update: unexpected value {value:?}");
+            }
         }
     }
 
