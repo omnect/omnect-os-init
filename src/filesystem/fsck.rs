@@ -26,7 +26,9 @@ const FSCK_TYPE_FLAG: &str = "-t";
 /// Type-safe wrapper for fsck(8) exit codes.
 ///
 /// The value is a bitmask; individual bits can be tested with the predicate
-/// methods below. `UNKNOWN` (-1) is a sentinel for processes killed by signal.
+/// methods below. `UNKNOWN` (-1) is set only when fsck cannot be executed at
+/// all (spawn failure); signal-killed processes map to `OPERATIONAL_ERROR`
+/// via `From<Option<i32>>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FsckExitCode(i32);
 
@@ -47,9 +49,8 @@ impl FsckExitCode {
     pub const CANCELLED: Self = Self(32);
     /// Shared library error.
     pub const LIBRARY_ERROR: Self = Self(128);
-    /// Sentinel: process spawn failed or was killed by a signal (no OS exit status).
+    /// Sentinel: set only when fsck cannot be executed at all (spawn failure).
     ///
-    /// Only set explicitly when fsck cannot be executed at all (e.g. spawn error).
     /// Signal-killed processes map to `OPERATIONAL_ERROR` at construction via
     /// `From<Option<i32>>` to avoid the two's-complement all-bits-set footgun.
     pub const UNKNOWN: Self = Self(-1);
@@ -126,7 +127,7 @@ impl From<Option<i32>> for FsckExitCode {
 impl fmt::Display for FsckExitCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if *self == Self::UNKNOWN {
-            return write!(f, "unknown (process killed by signal or spawn failed)");
+            return write!(f, "unknown (fsck could not be spawned)");
         }
         if self.is_clean() {
             return write!(f, "No errors");
@@ -377,7 +378,7 @@ mod tests {
     fn test_fsck_exit_code_display_unknown() {
         assert_eq!(
             format!("{}", FsckExitCode::UNKNOWN),
-            "unknown (process killed by signal or spawn failed)"
+            "unknown (fsck could not be spawned)"
         );
     }
 
