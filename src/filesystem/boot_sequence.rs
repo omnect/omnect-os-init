@@ -11,10 +11,10 @@ use nix::mount::MsFlags;
 use crate::bootloader::Bootloader;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
-    MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted, mount, mount_points,
-    mount_readwrite, mount_tmpfs,
+    FsType, FsckExitCode, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
+    mount, mount_points, mount_readwrite, mount_tmpfs,
 };
-use crate::partition::{PartitionLayout, partition_names};
+use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
 
 /// Path within the mounted data partition where fsck logs are written.
@@ -33,13 +33,13 @@ const FSCK_LOG_DIR: &str = "mnt/data/var/log/fsck";
 /// it is available for persistence even when mounting is aborted early.
 pub fn fsck_and_record(
     dev: &Path,
-    name: &str,
+    name: PartitionName,
     ods_status: &mut OdsStatus,
-    fstype: &str,
+    fstype: FsType,
 ) -> std::result::Result<(), FilesystemError> {
     match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
-            ods_status.add_fsck_result(name, r.exit_code, r.output);
+            ods_status.add_fsck_result(name, r.exit_code.bits(), r.output);
             Ok(())
         }
         Err(FilesystemError::FsckRequiresReboot {
@@ -47,7 +47,7 @@ pub fn fsck_and_record(
             code,
             ref output,
         }) => {
-            ods_status.add_fsck_result(name, code, output.clone());
+            ods_status.add_fsck_result(name, code.bits(), output.clone());
             Err(FilesystemError::FsckRequiresReboot {
                 device,
                 code,
@@ -67,7 +67,7 @@ pub fn mount_partitions(
     // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout
         .partitions
-        .get(partition_names::ROOT_CURRENT)
+        .get(&PartitionName::RootCurrent)
         .ok_or_else(|| {
             InitramfsError::Partition(PartitionError::DeviceDetection(
                 "rootCurrent not found in partition map; cannot mount rootfs".to_string(),
@@ -98,7 +98,7 @@ pub fn mount_partitions(
     // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
-    if let Some(boot_dev) = layout.partitions.get(partition_names::BOOT) {
+    if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
             // Boot already mounted at this stage is a logic error: mount_partitions
@@ -110,14 +110,19 @@ pub fn mount_partitions(
                 reason: "boot partition already mounted at start of mount_partitions".to_string(),
             }));
         }
-        fsck_and_record(boot_dev, partition_names::BOOT, ods_status, "vfat")?;
-        mount_readwrite(boot_dev, &boot_mount, "vfat")?;
+        fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
+        mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
     }
 
     // Mount factory partition read-only
-    if let Some(factory_dev) = layout.partitions.get(partition_names::FACTORY) {
+    if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
-        fsck_and_record(factory_dev, partition_names::FACTORY, ods_status, "ext4")?;
+        fsck_and_record(
+            factory_dev,
+            PartitionName::Factory,
+            ods_status,
+            FsType::Ext4,
+        )?;
         mount(MountPoint::new(
             factory_dev,
             &factory_mount,
@@ -126,9 +131,9 @@ pub fn mount_partitions(
     }
 
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
-    if let Some(cert_dev) = layout.partitions.get(partition_names::CERT) {
+    if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, partition_names::CERT, ods_status, "ext4")?;
+        fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
         mount(MountPoint::new(
             cert_dev,
             &cert_mount,
@@ -137,9 +142,9 @@ pub fn mount_partitions(
     }
 
     // Mount etc partition (for overlay upper)
-    if let Some(etc_dev) = layout.partitions.get(partition_names::ETC) {
+    if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        fsck_and_record(etc_dev, partition_names::ETC, ods_status, "ext4")?;
+        fsck_and_record(etc_dev, PartitionName::Etc, ods_status, FsType::Ext4)?;
         mount(MountPoint::new(
             etc_dev,
             &etc_mount,
@@ -148,9 +153,9 @@ pub fn mount_partitions(
     }
 
     // Mount data partition
-    if let Some(data_dev) = layout.partitions.get(partition_names::DATA) {
+    if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        fsck_and_record(data_dev, partition_names::DATA, ods_status, "ext4")?;
+        fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
         mount(MountPoint::new(
             data_dev,
             &data_mount,
@@ -193,11 +198,13 @@ pub fn persist_fsck_results(
         is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
-        if fsck.code == 0 {
+        if FsckExitCode::from(fsck.code).is_clean() {
             continue;
         }
 
-        if let Err(e) = bootloader.save_fsck_status(partition, fsck.code, &fsck.output) {
+        if let Err(e) =
+            bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output)
+        {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,
@@ -230,20 +237,21 @@ pub fn persist_fsck_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::Bootloader;
+    use crate::bootloader::{Bootloader, BootloaderEnvKey, FsckRecord, Result as BootloaderResult};
     use crate::error::BootloaderError;
+    use crate::partition::PartitionName;
     use crate::runtime::OdsStatus;
     use tempfile::TempDir;
 
     // ---- helpers -------------------------------------------------------
 
-    fn make_ods_with(partition: &str, code: i32, output: &str) -> OdsStatus {
+    fn make_ods_with(partition: PartitionName, code: i32, output: &str) -> OdsStatus {
         let mut s = OdsStatus::new();
         s.add_fsck_result(partition, code, output.to_string());
         s
     }
     struct TrackingBootloader {
-        saved: Vec<(String, i32, String)>,
+        saved: Vec<(PartitionName, FsckExitCode, String)>,
     }
 
     impl TrackingBootloader {
@@ -253,29 +261,32 @@ mod tests {
     }
 
     impl Bootloader for TrackingBootloader {
-        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(
+            &mut self,
+            _key: BootloaderEnvKey,
+            _value: Option<&str>,
+        ) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
             &mut self,
-            partition: &str,
-            code: i32,
+            partition: PartitionName,
+            code: FsckExitCode,
             output: &str,
-        ) -> crate::bootloader::Result<()> {
-            self.saved
-                .push((partition.to_string(), code, output.to_string()));
+        ) -> BootloaderResult<()> {
+            self.saved.push((partition, code, output.to_string()));
             Ok(())
         }
         fn get_fsck_status(
             &self,
-            _partition: &str,
-        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+            _partition: PartitionName,
+        ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
-        fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
+        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootloaderResult<()> {
             Ok(())
         }
     }
@@ -284,18 +295,22 @@ mod tests {
     struct FailingBootloader;
 
     impl Bootloader for FailingBootloader {
-        fn get_env(&self, _key: &str) -> crate::bootloader::Result<Option<String>> {
+        fn get_env(&self, _key: BootloaderEnvKey) -> BootloaderResult<Option<String>> {
             Ok(None)
         }
-        fn set_env(&mut self, _key: &str, _value: Option<&str>) -> crate::bootloader::Result<()> {
+        fn set_env(
+            &mut self,
+            _key: BootloaderEnvKey,
+            _value: Option<&str>,
+        ) -> BootloaderResult<()> {
             Ok(())
         }
         fn save_fsck_status(
             &mut self,
-            _partition: &str,
-            _code: i32,
+            _partition: PartitionName,
+            _code: FsckExitCode,
             _output: &str,
-        ) -> crate::bootloader::Result<()> {
+        ) -> BootloaderResult<()> {
             Err(BootloaderError::CommandFailed {
                 command: "mock".into(),
                 reason: "injected failure".into(),
@@ -303,11 +318,11 @@ mod tests {
         }
         fn get_fsck_status(
             &self,
-            _partition: &str,
-        ) -> crate::bootloader::Result<Option<(i32, String)>> {
+            _partition: PartitionName,
+        ) -> BootloaderResult<Option<FsckRecord>> {
             Ok(None)
         }
-        fn clear_fsck_status(&mut self, _partition: &str) -> crate::bootloader::Result<()> {
+        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootloaderResult<()> {
             Ok(())
         }
     }
@@ -317,7 +332,7 @@ mod tests {
     #[test]
     fn test_persist_zero_code_not_saved() {
         // Exit code 0 (clean) must not trigger any bootloader write.
-        let ods = make_ods_with("boot", 0, "clean");
+        let ods = make_ods_with(PartitionName::Boot, 0, "clean");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -329,22 +344,22 @@ mod tests {
     #[test]
     fn test_persist_nonzero_calls_save_fsck_status() {
         // Non-zero exit code must call save_fsck_status with correct args.
-        let ods = make_ods_with("boot", 1, "errors corrected");
+        let ods = make_ods_with(PartitionName::Boot, 1, "errors corrected");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
         persist_fsck_results(&ods, &mut bl, temp.path());
 
         assert_eq!(bl.saved.len(), 1);
-        assert_eq!(bl.saved[0].0, "boot");
-        assert_eq!(bl.saved[0].1, 1);
+        assert_eq!(bl.saved[0].0, PartitionName::Boot);
+        assert_eq!(bl.saved[0].1, FsckExitCode::CORRECTED);
         assert_eq!(bl.saved[0].2, "errors corrected");
     }
 
     #[test]
     fn test_persist_empty_output_still_calls_bootloader_but_no_log_dir() {
         // Empty output: bootloader is still called (code != 0), but no log dir is created.
-        let ods = make_ods_with("data", 4, "");
+        let ods = make_ods_with(PartitionName::Data, 4, "");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -359,10 +374,10 @@ mod tests {
     fn test_persist_multiple_partitions_only_nonzero_saved() {
         // Mix of zero and non-zero codes — only non-zero ones reach save_fsck_status.
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result("boot", 0, "clean".to_string());
-        ods.add_fsck_result("data", 1, "errors corrected".to_string());
-        ods.add_fsck_result("etc", 0, "clean".to_string());
-        ods.add_fsck_result("cert", 4, "uncorrected errors".to_string());
+        ods.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        ods.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
+        ods.add_fsck_result(PartitionName::Etc, 0, "clean".to_string());
+        ods.add_fsck_result(PartitionName::Cert, 4, "uncorrected errors".to_string());
 
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
@@ -370,18 +385,18 @@ mod tests {
         persist_fsck_results(&ods, &mut bl, temp.path());
 
         assert_eq!(bl.saved.len(), 2);
-        let saved_partitions: std::collections::HashSet<&str> =
-            bl.saved.iter().map(|(p, _, _)| p.as_str()).collect();
-        assert!(saved_partitions.contains("data"));
-        assert!(saved_partitions.contains("cert"));
-        assert!(!saved_partitions.contains("boot"));
-        assert!(!saved_partitions.contains("etc"));
+        let saved_partitions: std::collections::HashSet<PartitionName> =
+            bl.saved.iter().map(|(p, _, _)| *p).collect();
+        assert!(saved_partitions.contains(&PartitionName::Data));
+        assert!(saved_partitions.contains(&PartitionName::Cert));
+        assert!(!saved_partitions.contains(&PartitionName::Boot));
+        assert!(!saved_partitions.contains(&PartitionName::Etc));
     }
 
     #[test]
     fn test_persist_bootloader_save_failure_does_not_abort() {
         // A failing bootloader must not panic or propagate — it is non-fatal.
-        let ods = make_ods_with("boot", 2, "reboot required");
+        let ods = make_ods_with(PartitionName::Boot, 2, "reboot required");
         let temp = TempDir::new().unwrap();
         let mut bl = FailingBootloader;
 
@@ -392,7 +407,7 @@ mod tests {
     #[test]
     fn test_persist_data_not_mounted_no_log_dir_created() {
         // When data partition is not mounted (normal in tests), no log dir is created.
-        let ods = make_ods_with("boot", 1, "some output");
+        let ods = make_ods_with(PartitionName::Boot, 1, "some output");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 

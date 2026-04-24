@@ -9,15 +9,6 @@ use std::sync::Mutex;
 
 use log::{Level, Log, Metadata, Record, SetLoggerError};
 
-/// Kernel log level prefixes (see kernel Documentation/admin-guide/serial-console.rst)
-mod kernel_level {
-    pub const CRIT: &str = "<2>";
-    pub const ERR: &str = "<3>";
-    pub const WARNING: &str = "<4>";
-    pub const INFO: &str = "<6>";
-    pub const DEBUG: &str = "<7>";
-}
-
 /// Log message prefix for all omnect-os-init messages
 const LOG_PREFIX: &str = "omnect-os-initramfs: ";
 
@@ -64,13 +55,14 @@ impl KmsgLogger {
         log::set_boxed_logger(Box::new(self))
     }
 
+    // Kernel syslog level prefixes per Documentation/admin-guide/serial-console.rst
     fn level_to_kernel_prefix(level: Level) -> &'static str {
         match level {
-            Level::Error => kernel_level::ERR,
-            Level::Warn => kernel_level::WARNING,
-            Level::Info => kernel_level::INFO,
-            Level::Debug => kernel_level::DEBUG,
-            Level::Trace => kernel_level::DEBUG,
+            Level::Error => "<3>",
+            Level::Warn => "<4>",
+            Level::Info => "<6>",
+            Level::Debug => "<7>",
+            Level::Trace => "<7>",
         }
     }
 }
@@ -105,13 +97,7 @@ impl Log for KmsgLogger {
 /// log before potentially halting the system.
 pub fn log_fatal(message: &str) {
     if let Ok(mut file) = OpenOptions::new().write(true).open(KMSG_PATH) {
-        let _ = writeln!(
-            file,
-            "{}{}FATAL: {}",
-            kernel_level::CRIT,
-            LOG_PREFIX,
-            message
-        );
+        let _ = writeln!(file, "<2>{}FATAL: {}", LOG_PREFIX, message);
     }
 }
 
@@ -120,7 +106,7 @@ pub fn log_fatal(message: &str) {
 /// Useful for early initialization before the logger is set up.
 pub fn log_direct(message: &str) {
     if let Ok(mut file) = OpenOptions::new().write(true).open(KMSG_PATH) {
-        let _ = writeln!(file, "{}{}{}", kernel_level::INFO, LOG_PREFIX, message);
+        let _ = writeln!(file, "<6>{}{}", LOG_PREFIX, message);
     }
 }
 

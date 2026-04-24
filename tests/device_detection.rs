@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use omnect_os_init::partition::layout::PartitionLayout;
-use omnect_os_init::partition::{RootDevice, partition_names};
+use omnect_os_init::partition::{PartitionName, RootDevice};
 
 #[cfg(feature = "uboot")]
 use omnect_os_init::partition::parse_device_path;
@@ -162,7 +162,7 @@ fn test_full_pipeline_x86_sata_grub_root_a() {
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/sda"));
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/sda7"))
     );
     assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
@@ -184,7 +184,7 @@ fn test_full_pipeline_x86_nvme_grub_root_b() {
     assert_eq!(layout.device.base, PathBuf::from("/dev/nvme0n1"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/nvme0n1p3"));
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/nvme0n1p7"))
     );
 }
@@ -198,7 +198,7 @@ fn test_full_pipeline_arm_emmc_uboot_root_a() {
     assert_eq!(layout.device.base, PathBuf::from("/dev/mmcblk0"));
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p2"));
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/mmcblk0p8"))
     );
 }
@@ -230,7 +230,7 @@ fn test_full_pipeline_x86_sata_grub_dos_root_a() {
     assert_eq!(layout.root_current(), PathBuf::from("/dev/sda2"));
     // DOS layout: boot=1, rootA=2, rootB=3, extended=4, factory=5, cert=6, etc=7, data=8
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/sda8"))
     );
 }
@@ -245,7 +245,7 @@ fn test_full_pipeline_arm_emmc_uboot_gpt_root_a() {
     assert_eq!(layout.root_current(), PathBuf::from("/dev/mmcblk0p2"));
     // GPT layout: boot=1, rootA=2, rootB=3, factory=4, cert=5, etc=6, data=7
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/mmcblk0p7"))
     );
 }
@@ -265,7 +265,7 @@ fn test_full_pipeline_x86_virtio_grub() {
 
     assert_eq!(layout.device.base, PathBuf::from("/dev/vda"));
     assert_eq!(
-        layout.partitions.get(partition_names::DATA),
+        layout.partitions.get(&PartitionName::Data),
         Some(&PathBuf::from("/dev/vda7"))
     );
 }

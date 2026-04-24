@@ -9,7 +9,11 @@ mod types;
 #[cfg(feature = "uboot")]
 mod uboot;
 
+use std::borrow::Cow;
+
 use crate::error::BootloaderError;
+use crate::filesystem::FsckExitCode;
+use crate::partition::PartitionName;
 
 #[cfg(feature = "grub")]
 pub use self::grub::GrubBootloader;
@@ -18,14 +22,39 @@ pub use self::uboot::UBootBootloader;
 
 pub type Result<T> = std::result::Result<T, BootloaderError>;
 
-/// Bootloader environment variable names
-pub mod vars {
-    pub const OMNECT_VALIDATE_UPDATE: &str = "omnect_validate_update";
-    pub const OMNECT_BOOTLOADER_UPDATED: &str = "omnect_bootloader_updated";
+/// Decoded fsck result stored in the bootloader environment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FsckRecord {
+    /// Typed exit code from fsck.
+    pub exit_code: FsckExitCode,
+    /// Combined stdout + stderr output from fsck.
+    pub output: String,
 }
 
-/// Prefix for fsck status variables in bootloader environment
-pub const FSCK_VAR_PREFIX: &str = "omnect_fsck_";
+/// Typed key for bootloader environment variables.
+///
+/// Use this instead of raw `&str` keys to prevent typos and make all
+/// known env-var names visible in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootloaderEnvKey {
+    /// `omnect_validate_update` — OTA update validation state.
+    ValidateUpdate,
+    /// `omnect_bootloader_updated` — whether the bootloader itself was updated.
+    BootloaderUpdated,
+    /// `omnect_fsck_<partition>` — fsck result for the given partition.
+    FsckStatus(PartitionName),
+}
+
+impl BootloaderEnvKey {
+    /// Returns the env-var name as it is stored in the bootloader environment.
+    pub fn as_str(&self) -> Cow<'static, str> {
+        match self {
+            Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
+            Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
+            Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
+        }
+    }
+}
 
 /// Trait for bootloader environment access
 ///
@@ -37,27 +66,32 @@ pub trait Bootloader: Send + Sync {
     ///
     /// Returns `Ok(None)` if the variable doesn't exist.
     /// Returns `Err` if there was an error accessing the bootloader environment.
-    fn get_env(&self, key: &str) -> Result<Option<String>>;
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>>;
 
     /// Set or delete a bootloader environment variable
     ///
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()>;
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()>;
 
     /// Save fsck result to bootloader environment.
     ///
     /// Stores exit code and full fsck output as gzip+base64 encoded string so the
     /// diagnostic text survives the reboot required after fsck corrects errors.
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()>;
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: FsckExitCode,
+        output: &str,
+    ) -> Result<()>;
 
     /// Get fsck status from bootloader environment.
     ///
-    /// Returns the decoded `(exit_code, output)` pair if a value is present,
+    /// Returns the decoded `FsckRecord` if a value is present,
     /// or `None` if no status was stored for this partition.
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>>;
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>>;
 
     /// Clear fsck status from bootloader environment
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()>;
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()>;
 }
 
 /// Creates the appropriate bootloader implementation based on the build-time feature flag.
@@ -86,8 +120,8 @@ pub fn create_mock_bootloader() -> MockBootloader {
 #[derive(Default)]
 pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
-    /// fsck results stored as plain (code, output) — no subprocess encoding needed in tests.
-    fsck: std::collections::HashMap<String, (i32, String)>,
+    /// fsck results stored as typed records — no subprocess encoding needed in tests.
+    fsck: std::collections::HashMap<PartitionName, FsckRecord>,
 }
 
 #[cfg(test)]
@@ -96,42 +130,52 @@ impl MockBootloader {
         Self::default()
     }
 
-    pub fn with_env(mut self, key: &str, value: &str) -> Self {
-        self.env.insert(key.to_string(), value.to_string());
+    pub fn with_env(mut self, key: BootloaderEnvKey, value: &str) -> Self {
+        self.env.insert(key.as_str().to_string(), value.to_string());
         self
     }
 }
 
 #[cfg(test)]
 impl Bootloader for MockBootloader {
-    fn get_env(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.env.get(key).cloned())
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+        Ok(self.env.get(key.as_str().as_ref()).cloned())
     }
 
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
         match value {
             Some(v) => {
-                self.env.insert(key.to_string(), v.to_string());
+                self.env.insert(key.as_str().to_string(), v.to_string());
             }
             None => {
-                self.env.remove(key);
+                self.env.remove(key.as_str().as_ref());
             }
         }
         Ok(())
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
-        self.fsck
-            .insert(partition.to_string(), (code, output.to_string()));
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: FsckExitCode,
+        output: &str,
+    ) -> Result<()> {
+        self.fsck.insert(
+            partition,
+            FsckRecord {
+                exit_code: code,
+                output: output.to_string(),
+            },
+        );
         Ok(())
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
-        Ok(self.fsck.get(partition).cloned())
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        Ok(self.fsck.get(&partition).cloned())
     }
 
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        self.fsck.remove(partition);
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        self.fsck.remove(&partition);
         Ok(())
     }
 }
@@ -144,46 +188,60 @@ mod tests {
     fn test_mock_bootloader_get_set() {
         let mut bl = MockBootloader::new();
 
-        // Test set and get
-        bl.set_env("test-key", Some("test-value")).unwrap();
+        bl.set_env(BootloaderEnvKey::ValidateUpdate, Some("1"))
+            .unwrap();
         assert_eq!(
-            bl.get_env("test-key").unwrap(),
-            Some("test-value".to_string())
+            bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(),
+            Some("1".to_string())
         );
 
-        // Test delete
-        bl.set_env("test-key", None).unwrap();
-        assert_eq!(bl.get_env("test-key").unwrap(), None);
+        bl.set_env(BootloaderEnvKey::ValidateUpdate, None).unwrap();
+        assert_eq!(bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(), None);
     }
 
     #[test]
     fn test_mock_bootloader_with_env() {
         let bl = MockBootloader::new()
-            .with_env("factory-reset", r#"{"mode":1}"#)
-            .with_env("flash-mode", "1");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1")
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "0");
 
         assert_eq!(
-            bl.get_env("factory-reset").unwrap(),
-            Some(r#"{"mode":1}"#.to_string())
+            bl.get_env(BootloaderEnvKey::ValidateUpdate).unwrap(),
+            Some("1".to_string())
         );
-        assert_eq!(bl.get_env("flash-mode").unwrap(), Some("1".to_string()));
-        assert_eq!(bl.get_env("nonexistent").unwrap(), None);
+        assert_eq!(
+            bl.get_env(BootloaderEnvKey::BootloaderUpdated).unwrap(),
+            Some("0".to_string())
+        );
+        assert_eq!(
+            bl.get_env(BootloaderEnvKey::FsckStatus(PartitionName::Boot))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
     fn test_mock_bootloader_fsck_status() {
+        use crate::partition::PartitionName;
         let mut bl = MockBootloader::new();
 
-        bl.save_fsck_status("boot", 1, "errors corrected on pass 1")
-            .unwrap();
+        bl.save_fsck_status(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected on pass 1",
+        )
+        .unwrap();
 
-        let retrieved = bl.get_fsck_status("boot").unwrap();
+        let retrieved = bl.get_fsck_status(PartitionName::Boot).unwrap();
         assert_eq!(
             retrieved,
-            Some((1, "errors corrected on pass 1".to_string()))
+            Some(FsckRecord {
+                exit_code: FsckExitCode::CORRECTED,
+                output: "errors corrected on pass 1".to_string()
+            })
         );
 
-        bl.clear_fsck_status("boot").unwrap();
-        assert_eq!(bl.get_fsck_status("boot").unwrap(), None);
+        bl.clear_fsck_status(PartitionName::Boot).unwrap();
+        assert_eq!(bl.get_fsck_status(PartitionName::Boot).unwrap(), None);
     }
 }

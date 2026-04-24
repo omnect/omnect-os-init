@@ -3,6 +3,8 @@
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
+use crate::filesystem::FsckExitCode;
+
 const GZIP_CMD: &str = "/bin/gzip";
 const GUNZIP_CMD: &str = "/bin/gunzip";
 /// busybox base64 applet lives under /bin, not /usr/bin
@@ -100,8 +102,8 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
 
 /// Decode a fsck result previously encoded with [`encode_fsck_output`].
 ///
-/// Returns `(exit_code, output)` on success, or `None` if decoding fails.
-pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
+/// Returns a `FsckRecord` on success, or `None` if decoding fails.
+pub fn decode_fsck_output(encoded: &str) -> Option<super::FsckRecord> {
     // Decode base64 → compressed bytes.
     let b64_out = Command::new(BASE64_CMD)
         .args(["-d"])
@@ -141,7 +143,10 @@ pub fn decode_fsck_output(encoded: &str) -> Option<(i32, String)> {
     let raw = String::from_utf8_lossy(&gz_out.stdout);
     let (code_str, output) = raw.split_once('\n')?;
     let code = code_str.trim().parse::<i32>().ok()?;
-    Some((code, output.to_string()))
+    Some(super::FsckRecord {
+        exit_code: FsckExitCode::from(code),
+        output: output.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -171,9 +176,12 @@ mod tests {
         let output = "Pass 1: Checking inodes, blocks, and sizes\nErrors corrected.";
         let encoded = encode_fsck_output(code, output);
         assert!(!encoded.is_empty(), "encoding should succeed");
-        let (dec_code, dec_output) = decode_fsck_output(&encoded).unwrap();
-        assert_eq!(dec_code, code);
-        assert_eq!(dec_output, output);
+        let record = decode_fsck_output(&encoded).unwrap();
+        assert_eq!(
+            record.exit_code,
+            crate::filesystem::FsckExitCode::from(code)
+        );
+        assert_eq!(record.output, output);
     }
 
     #[test]

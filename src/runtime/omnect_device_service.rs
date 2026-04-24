@@ -3,14 +3,16 @@
 //! Creates runtime files that omnect-device-service reads at startup.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use nix::unistd::{Gid, Uid, chown};
 use serde::Serialize;
 
-use crate::bootloader::{Bootloader, vars};
+use crate::bootloader::{Bootloader, BootloaderEnvKey};
 use crate::error::{InitramfsError, Result};
+use crate::partition::PartitionName;
 
 /// Directory for ODS runtime files.
 /// Written to the initramfs /run tmpfs; switch_root moves /run into the new
@@ -36,14 +38,26 @@ const FACTORY_RESET_STATUS_FILE: &str = "/tmp/factory-reset.json";
 const ODS_USER: &str = "omnect_device_service";
 const ODS_GROUP: &str = "omnect_device_service";
 
-/// Permissions for the ODS runtime directory (rwxrwxr-x)
-const DIR_MODE: u32 = 0o775;
+/// File and directory permission modes for ODS runtime files.
+#[derive(Debug, Clone, Copy)]
+enum FilePermission {
+    /// `rwxrwxr-x` (0o775) — readable and executable by all, writable by owner and group
+    DirStandard,
+    /// `rw-------` (0o600) — readable and writable only by owner (ODS)
+    FileRestricted,
+    /// `rw-r--r--` (0o644) — readable by all, writable only by owner (ODS)
+    FileReadable,
+}
 
-/// Permissions for sensitive files readable only by ODS (rw-------)
-const FILE_MODE_RESTRICTED: u32 = 0o600;
-
-/// Permissions for trigger files readable by ODS and group (rw-r--r--)
-const FILE_MODE_READABLE: u32 = 0o644;
+impl FilePermission {
+    fn bits(self) -> u32 {
+        match self {
+            Self::DirStandard => 0o775,
+            Self::FileRestricted => 0o600,
+            Self::FileReadable => 0o644,
+        }
+    }
+}
 
 /// Bootloader env value meaning the flag is set / requested
 const BOOTLOADER_FLAG_SET: &str = "1";
@@ -51,12 +65,72 @@ const BOOTLOADER_FLAG_SET: &str = "1";
 /// Bootloader env value meaning update validation previously failed
 const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
 
+/// Outcome codes for a factory reset operation.
+///
+/// Serialized as a plain integer so the JSON wire format that
+/// `omnect-device-service` reads remains unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryResetStatusCode {
+    Success = 0,
+    Invalid = 1,
+    Error = 2,
+    ConfigError = 3,
+}
+
+impl serde::Serialize for FactoryResetStatusCode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_u32(*self as u32)
+    }
+}
+
+impl fmt::Display for FactoryResetStatusCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => write!(f, "success"),
+            Self::Invalid => write!(f, "invalid"),
+            Self::Error => write!(f, "error"),
+            Self::ConfigError => write!(f, "config_error"),
+        }
+    }
+}
+
+/// Parsed value of the `omnect_validate_update` bootloader env variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidateUpdateState {
+    /// Value `"1"` — update validation was requested before this boot.
+    Requested,
+    /// Value `"failed"` — the previous update validation failed.
+    Failed,
+    /// Any other value — no action required.
+    Other,
+}
+
+impl From<&str> for ValidateUpdateState {
+    fn from(s: &str) -> Self {
+        match s {
+            BOOTLOADER_FLAG_SET => Self::Requested,
+            VALIDATE_UPDATE_FAILED_VALUE => Self::Failed,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl fmt::Display for ValidateUpdateState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Requested => write!(f, "requested"),
+            Self::Failed => write!(f, "failed"),
+            Self::Other => write!(f, "other"),
+        }
+    }
+}
+
 /// Status information for omnect-device-service
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
     /// Fsck results for each partition
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub fsck: HashMap<String, FsckStatus>,
+    pub fsck: HashMap<PartitionName, FsckStatus>,
 
     /// Factory reset status (if performed)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,8 +149,8 @@ pub struct FsckStatus {
 /// Factory reset execution status
 #[derive(Debug, Clone, Serialize)]
 pub struct FactoryResetStatus {
-    /// Status code: 0=success, 1=invalid, 2=error, 3=config_error
-    pub status: u32,
+    /// Outcome of the factory reset operation.
+    pub status: FactoryResetStatusCode,
     /// Error message if failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -95,9 +169,8 @@ impl OdsStatus {
     }
 
     /// Add fsck result for a partition
-    pub fn add_fsck_result(&mut self, partition: &str, code: i32, output: String) {
-        self.fsck
-            .insert(partition.to_string(), FsckStatus { code, output });
+    pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
+        self.fsck.insert(partition, FsckStatus { code, output });
     }
 
     /// Set factory reset status
@@ -133,11 +206,14 @@ pub fn create_ods_runtime_files(
         )))
     })?;
     set_ownership(ods_dir, uid, gid)?;
-    set_mode(ods_dir, DIR_MODE)?;
+    set_mode(ods_dir, FilePermission::DirStandard)?;
 
     write_status_file(ods_dir, status)?;
     set_ownership(&ods_dir.join(ODS_STATUS_FILE), uid, gid)?;
-    set_mode(&ods_dir.join(ODS_STATUS_FILE), FILE_MODE_RESTRICTED)?;
+    set_mode(
+        &ods_dir.join(ODS_STATUS_FILE),
+        FilePermission::FileRestricted,
+    )?;
 
     // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
@@ -147,7 +223,7 @@ pub fn create_ods_runtime_files(
     // Copy factory reset status if exists
     if let Some(dst) = copy_factory_reset_status(ods_dir)? {
         set_ownership(&dst, uid, gid)?;
-        set_mode(&dst, FILE_MODE_RESTRICTED)?;
+        set_mode(&dst, FilePermission::FileRestricted)?;
     }
 
     log::info!("Created ODS runtime files in {}", ods_dir.display());
@@ -182,11 +258,11 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 fn handle_update_validation(
     ods_dir: &Path,
     bootloader: &dyn Bootloader,
-    uid: u32,
-    gid: u32,
+    uid: Uid,
+    gid: Gid,
 ) -> Result<()> {
     let validate_update = bootloader
-        .get_env(vars::OMNECT_VALIDATE_UPDATE)
+        .get_env(BootloaderEnvKey::ValidateUpdate)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_validate_update from bootloader: {e}"
@@ -194,35 +270,43 @@ fn handle_update_validation(
         })?;
 
     if let Some(value) = validate_update {
-        if value == BOOTLOADER_FLAG_SET {
-            let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
-            fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Failed to write {}: {}",
-                    trigger_path.display(),
-                    e
-                )))
-            })?;
-            set_ownership(&trigger_path, uid, gid)?;
-            set_mode(&trigger_path, FILE_MODE_READABLE)?;
-            log::info!("Update validation requested - created trigger file");
-        } else if value == VALIDATE_UPDATE_FAILED_VALUE {
-            let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
-            fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                InitramfsError::Io(std::io::Error::other(format!(
-                    "Failed to write {}: {}",
-                    failed_path.display(),
-                    e
-                )))
-            })?;
-            set_ownership(&failed_path, uid, gid)?;
-            set_mode(&failed_path, FILE_MODE_READABLE)?;
-            log::warn!("Update validation failed marker created");
+        let state = ValidateUpdateState::from(value.as_str());
+        log::debug!("omnect_validate_update: {state}");
+        match state {
+            ValidateUpdateState::Requested => {
+                let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
+                fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Failed to write {}: {}",
+                        trigger_path.display(),
+                        e
+                    )))
+                })?;
+                set_ownership(&trigger_path, uid, gid)?;
+                set_mode(&trigger_path, FilePermission::FileReadable)?;
+                log::info!("Update validation requested - created trigger file");
+            }
+            ValidateUpdateState::Failed => {
+                let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
+                fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
+                    InitramfsError::Io(std::io::Error::other(format!(
+                        "Failed to write {}: {}",
+                        failed_path.display(),
+                        e
+                    )))
+                })?;
+                set_ownership(&failed_path, uid, gid)?;
+                set_mode(&failed_path, FilePermission::FileReadable)?;
+                log::warn!("Update validation failed marker created");
+            }
+            ValidateUpdateState::Other => {
+                log::warn!("omnect_validate_update: unexpected value {value:?}");
+            }
         }
     }
 
     let bootloader_updated = bootloader
-        .get_env(vars::OMNECT_BOOTLOADER_UPDATED)
+        .get_env(BootloaderEnvKey::BootloaderUpdated)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_bootloader_updated from bootloader: {e}"
@@ -241,7 +325,7 @@ fn handle_update_validation(
             )))
         })?;
         set_ownership(&marker_path, uid, gid)?;
-        set_mode(&marker_path, FILE_MODE_RESTRICTED)?;
+        set_mode(&marker_path, FilePermission::FileRestricted)?;
         log::info!("Bootloader update marker created");
     }
 
@@ -271,8 +355,8 @@ fn copy_factory_reset_status(ods_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(dst))
 }
 
-/// Look up the numeric UID for a user in the rootfs /etc/passwd.
-fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
+/// Look up the UID for a user in the rootfs /etc/passwd.
+fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<Uid> {
     let passwd = rootfs_dir.join("etc/passwd");
     let content = fs::read_to_string(&passwd).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
@@ -289,7 +373,7 @@ fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
         }
         let _password = fields.next();
         if let Some(uid_str) = fields.next() {
-            return uid_str.parse::<u32>().map_err(|e| {
+            return uid_str.parse::<u32>().map(Uid::from_raw).map_err(|e| {
                 InitramfsError::Io(std::io::Error::other(format!(
                     "Invalid UID for {}: {}",
                     username, e
@@ -305,7 +389,7 @@ fn lookup_uid(rootfs_dir: &Path, username: &str) -> Result<u32> {
 }
 
 /// Look up the numeric GID for a group in the rootfs /etc/group.
-fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
+fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<Gid> {
     let group = rootfs_dir.join("etc/group");
     let content = fs::read_to_string(&group).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
@@ -322,7 +406,7 @@ fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
         }
         let _password = fields.next();
         if let Some(gid_str) = fields.next() {
-            return gid_str.parse::<u32>().map_err(|e| {
+            return gid_str.parse::<u32>().map(Gid::from_raw).map_err(|e| {
                 InitramfsError::Io(std::io::Error::other(format!(
                     "Invalid GID for {}: {}",
                     groupname, e
@@ -337,8 +421,8 @@ fn lookup_gid(rootfs_dir: &Path, groupname: &str) -> Result<u32> {
     ))))
 }
 
-fn set_ownership(path: &Path, uid: u32, gid: u32) -> Result<()> {
-    chown(path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid))).map_err(|e| {
+fn set_ownership(path: &Path, uid: Uid, gid: Gid) -> Result<()> {
+    chown(path, Some(uid), Some(gid)).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to chown {}: {}",
             path.display(),
@@ -347,9 +431,9 @@ fn set_ownership(path: &Path, uid: u32, gid: u32) -> Result<()> {
     })
 }
 
-fn set_mode(path: &Path, mode: u32) -> Result<()> {
+fn set_mode(path: &Path, mode: FilePermission) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode.bits())).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to chmod {}: {}",
             path.display(),
@@ -361,32 +445,35 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::partition::PartitionName;
     use tempfile::TempDir;
 
-    fn current_uid() -> u32 {
-        nix::unistd::getuid().as_raw()
+    fn current_uid() -> Uid {
+        nix::unistd::getuid()
     }
 
-    fn current_gid() -> u32 {
-        nix::unistd::getgid().as_raw()
+    fn current_gid() -> Gid {
+        nix::unistd::getgid()
     }
 
     /// Create a minimal rootfs with /etc/passwd and /etc/group for ODS user,
     /// using the current process's uid/gid so chown succeeds without root.
-    fn make_fake_rootfs(uid: u32, gid: u32) -> TempDir {
+    fn make_fake_rootfs(uid: Uid, gid: Gid) -> TempDir {
         let rootfs = TempDir::new().unwrap();
         let etc = rootfs.path().join("etc");
         fs::create_dir_all(&etc).unwrap();
         fs::write(
             etc.join("passwd"),
             format!(
-                "root:x:0:0:root:/root:/bin/sh\nomnect_device_service:x:{uid}:{gid}::/:/bin/sh\n"
+                "root:x:0:0:root:/root:/bin/sh\nomnect_device_service:x:{}:{}::/:/bin/sh\n",
+                uid.as_raw(),
+                gid.as_raw()
             ),
         )
         .unwrap();
         fs::write(
             etc.join("group"),
-            format!("root:x:0:\nomnect_device_service:x:{gid}:\n"),
+            format!("root:x:0:\nomnect_device_service:x:{}:\n", gid.as_raw()),
         )
         .unwrap();
         rootfs
@@ -402,18 +489,18 @@ mod tests {
     #[test]
     fn test_ods_status_add_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
-        status.add_fsck_result("data", 1, "errors corrected".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
 
         assert_eq!(status.fsck.len(), 2);
-        assert_eq!(status.fsck.get("boot").unwrap().code, 0);
-        assert_eq!(status.fsck.get("data").unwrap().code, 1);
+        assert_eq!(status.fsck.get(&PartitionName::Boot).unwrap().code, 0);
+        assert_eq!(status.fsck.get(&PartitionName::Data).unwrap().code, 1);
     }
 
     #[test]
     fn test_ods_status_serialization() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"boot\""));
@@ -437,7 +524,7 @@ mod tests {
     #[test]
     fn test_factory_reset_status_serialization() {
         let status = FactoryResetStatus {
-            status: 0,
+            status: FactoryResetStatusCode::Success,
             error: None,
             context: Some("normal".to_string()),
             paths: vec!["/etc/hostname".to_string()],
@@ -449,10 +536,71 @@ mod tests {
     }
 
     #[test]
+    fn test_factory_reset_status_code_serializes_as_integer() {
+        use serde_json::Value;
+        let cases: &[(FactoryResetStatusCode, u64)] = &[
+            (FactoryResetStatusCode::Success, 0),
+            (FactoryResetStatusCode::Invalid, 1),
+            (FactoryResetStatusCode::Error, 2),
+            (FactoryResetStatusCode::ConfigError, 3),
+        ];
+        for (variant, expected) in cases {
+            let s = FactoryResetStatus {
+                status: *variant,
+                error: None,
+                context: None,
+                paths: vec![],
+            };
+            let json: Value = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(json["status"], *expected, "variant {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn test_factory_reset_status_code_display() {
+        assert_eq!(FactoryResetStatusCode::Success.to_string(), "success");
+        assert_eq!(FactoryResetStatusCode::Invalid.to_string(), "invalid");
+        assert_eq!(FactoryResetStatusCode::Error.to_string(), "error");
+        assert_eq!(
+            FactoryResetStatusCode::ConfigError.to_string(),
+            "config_error"
+        );
+    }
+
+    #[test]
+    fn test_validate_update_state_from_str() {
+        assert_eq!(
+            ValidateUpdateState::from("1"),
+            ValidateUpdateState::Requested
+        );
+        assert_eq!(
+            ValidateUpdateState::from("failed"),
+            ValidateUpdateState::Failed
+        );
+        assert_eq!(
+            ValidateUpdateState::from("true"),
+            ValidateUpdateState::Other
+        );
+        assert_eq!(ValidateUpdateState::from("0"), ValidateUpdateState::Other);
+        assert_eq!(ValidateUpdateState::from(""), ValidateUpdateState::Other);
+        assert_eq!(
+            ValidateUpdateState::from("unexpected"),
+            ValidateUpdateState::Other
+        );
+    }
+
+    #[test]
+    fn test_validate_update_state_display() {
+        assert_eq!(ValidateUpdateState::Requested.to_string(), "requested");
+        assert_eq!(ValidateUpdateState::Failed.to_string(), "failed");
+        assert_eq!(ValidateUpdateState::Other.to_string(), "other");
+    }
+
+    #[test]
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
-        let bl =
-            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -466,7 +614,7 @@ mod tests {
         // Only "1" is a valid truthy value; "true" must not create the trigger file.
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "true");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "true");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -477,7 +625,7 @@ mod tests {
     fn test_handle_update_validation_failed() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "failed");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "failed");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -489,7 +637,7 @@ mod tests {
     fn test_handle_update_validation_unexpected_value_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_VALIDATE_UPDATE, "unexpected");
+            .with_env(BootloaderEnvKey::ValidateUpdate, "unexpected");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -501,7 +649,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "1");
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -512,7 +660,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated_false_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(vars::OMNECT_BOOTLOADER_UPDATED, "0");
+            .with_env(BootloaderEnvKey::BootloaderUpdated, "0");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -571,10 +719,10 @@ mod tests {
         let ods_dir = TempDir::new().unwrap();
 
         let mut status = OdsStatus::new();
-        status.add_fsck_result("boot", 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
-        let bl =
-            crate::bootloader::create_mock_bootloader().with_env(vars::OMNECT_VALIDATE_UPDATE, "1");
+        let bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
 
         create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
 

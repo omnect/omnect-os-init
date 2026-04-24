@@ -6,19 +6,18 @@
 use std::process::Command;
 
 use crate::bootloader::{
-    Bootloader, FSCK_VAR_PREFIX, Result,
+    Bootloader, BootloaderEnvKey, FsckRecord, Result,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootloaderError;
+use crate::filesystem::FsckExitCode;
+use crate::partition::PartitionName;
 
 /// Command to read U-Boot environment variables
 const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 
 /// Command to write U-Boot environment variables
 const FW_SETENV_CMD: &str = "/bin/fw_setenv";
-
-/// Sentinel value used when a process exits due to a signal (no numeric exit code available)
-const UNKNOWN_EXIT_CODE: i32 = -1;
 
 /// U-Boot bootloader implementation
 ///
@@ -49,19 +48,19 @@ impl UBootBootloader {
                 reason: e.to_string(),
             })?;
 
-        // Exit code 1 means the variable was not found — that is a normal condition.
-        // Any other non-zero code indicates a real failure (bad /etc/fw_env.config,
-        // I/O error, permission denied, etc.) and must be surfaced as an error.
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(UNKNOWN_EXIT_CODE);
-            if code == 1 {
-                return Ok(None);
+        // Match on exit code directly so every case is explicit.
+        // Exit code 1 means "variable not set" — a normal condition in U-Boot env.
+        // None means the process was killed by a signal.
+        match output.status.code() {
+            Some(0) => {}
+            Some(1) => return Ok(None),
+            code => {
+                return Err(BootloaderError::CommandExitCode {
+                    command: FW_PRINTENV_CMD.to_string(),
+                    code,
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                });
             }
-            return Err(BootloaderError::CommandExitCode {
-                command: FW_PRINTENV_CMD.to_string(),
-                code: Some(code),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
         }
 
         let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -99,28 +98,36 @@ impl UBootBootloader {
 }
 
 impl Bootloader for UBootBootloader {
-    fn get_env(&self, key: &str) -> Result<Option<String>> {
-        self.run_fw_printenv(key)
+    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+        self.run_fw_printenv(key.as_str().as_ref())
     }
 
-    fn set_env(&mut self, key: &str, value: Option<&str>) -> Result<()> {
-        self.run_fw_setenv(key, value)
+    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+        self.run_fw_setenv(key.as_str().as_ref(), value)
     }
 
-    fn save_fsck_status(&mut self, partition: &str, code: i32, output: &str) -> Result<()> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.run_fw_setenv(&var_name, Some(&encode_fsck_output(code, output)))
+    fn save_fsck_status(
+        &mut self,
+        partition: PartitionName,
+        code: FsckExitCode,
+        output: &str,
+    ) -> Result<()> {
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
+        self.run_fw_setenv(
+            var_name.as_ref(),
+            Some(&encode_fsck_output(code.bits(), output)),
+        )
     }
 
-    fn get_fsck_status(&self, partition: &str) -> Result<Option<(i32, String)>> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
         Ok(self
-            .run_fw_printenv(&var_name)?
+            .run_fw_printenv(var_name.as_ref())?
             .and_then(|v| decode_fsck_output(&v)))
     }
 
-    fn clear_fsck_status(&mut self, partition: &str) -> Result<()> {
-        let var_name = format!("{}{}", FSCK_VAR_PREFIX, partition);
-        self.run_fw_setenv(&var_name, None)
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
+        self.run_fw_setenv(var_name.as_ref(), None)
     }
 }

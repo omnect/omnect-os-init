@@ -5,30 +5,74 @@
 //! the table type is a fixed property of the Yocto image.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::error::PartitionError;
 use crate::partition::RootDevice;
 
-/// Partition names used in omnect-os
-pub mod partition_names {
-    pub const BOOT: &str = "boot";
-    pub const ROOT_A: &str = "rootA";
-    pub const ROOT_B: &str = "rootB";
-    pub const FACTORY: &str = "factory";
-    pub const CERT: &str = "cert";
-    pub const ETC: &str = "etc";
-    pub const DATA: &str = "data";
-    pub const EXTENDED: &str = "extended";
-    pub const ROOT_CURRENT: &str = "rootCurrent";
-    pub const ROOTBLK: &str = "rootblk";
+/// Typed partition identifier.
+///
+/// Used as the key in `PartitionLayout.partitions`. Call `as_str()` to get
+/// the canonical string form for bootloader env writes, ODS JSON, and symlink names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PartitionName {
+    Boot,
+    RootA,
+    RootB,
+    RootCurrent,
+    Factory,
+    Cert,
+    Etc,
+    Data,
+    #[cfg(feature = "dos")]
+    Extended,
+}
+
+impl PartitionName {
+    /// The canonical string form of this partition name.
+    ///
+    /// Used for symlink names, ODS JSON keys, and bootloader env keys.
+    /// Returns `&'static str` — suitable for syscall and wire boundaries.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PartitionName::Boot => "boot",
+            PartitionName::RootA => "rootA",
+            PartitionName::RootB => "rootB",
+            PartitionName::RootCurrent => "rootCurrent",
+            PartitionName::Factory => "factory",
+            PartitionName::Cert => "cert",
+            PartitionName::Etc => "etc",
+            PartitionName::Data => "data",
+            #[cfg(feature = "dos")]
+            PartitionName::Extended => "extended",
+        }
+    }
+}
+
+impl fmt::Display for PartitionName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for PartitionName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl serde::Serialize for PartitionName {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
 }
 
 /// Partition layout for a block device
 #[derive(Debug, Clone)]
 pub struct PartitionLayout {
     /// Map of partition name to device path
-    pub partitions: HashMap<String, PathBuf>,
+    pub partitions: HashMap<PartitionName, PathBuf>,
     /// The root device
     pub device: RootDevice,
 }
@@ -43,8 +87,8 @@ impl PartitionLayout {
     }
 
     /// Get the device path for a named partition
-    pub fn get(&self, name: &str) -> Option<&PathBuf> {
-        self.partitions.get(name)
+    pub fn get(&self, name: PartitionName) -> Option<&PathBuf> {
+        self.partitions.get(&name)
     }
 
     /// Check if current root is rootA (partition 2)
@@ -59,7 +103,7 @@ impl PartitionLayout {
     pub fn root_current(&self) -> PathBuf {
         if self.is_root_a() {
             self.partitions
-                .get(partition_names::ROOT_A)
+                .get(&PartitionName::RootA)
                 .cloned()
                 .unwrap_or_else(|| {
                     log::warn!("rootA not in partition map; reconstructing path");
@@ -67,7 +111,7 @@ impl PartitionLayout {
                 })
         } else {
             self.partitions
-                .get(partition_names::ROOT_B)
+                .get(&PartitionName::RootB)
                 .cloned()
                 .unwrap_or_else(|| {
                     log::warn!("rootB not in partition map; reconstructing path");
@@ -124,19 +168,21 @@ fn partition_suffix(path: &std::path::Path) -> Option<u32> {
 ///
 /// Partition numbering is selected at compile time via the `gpt` or `dos` feature.
 /// Exactly one of `gpt` or `dos` must be enabled; build.rs enforces this.
-fn build_partition_map(device: &RootDevice) -> crate::partition::Result<HashMap<String, PathBuf>> {
+fn build_partition_map(
+    device: &RootDevice,
+) -> crate::partition::Result<HashMap<PartitionName, PathBuf>> {
     let mut partitions = HashMap::new();
 
     partitions.insert(
-        partition_names::BOOT.to_string(),
+        PartitionName::Boot,
         device.partition_path(PARTITION_NUM_BOOT),
     );
     partitions.insert(
-        partition_names::ROOT_A.to_string(),
+        PartitionName::RootA,
         device.partition_path(PARTITION_NUM_ROOT_A),
     );
     partitions.insert(
-        partition_names::ROOT_B.to_string(),
+        PartitionName::RootB,
         device.partition_path(PARTITION_NUM_ROOT_B),
     );
 
@@ -149,28 +195,25 @@ fn build_partition_map(device: &RootDevice) -> crate::partition::Result<HashMap<
             });
         }
     };
-    partitions.insert(partition_names::ROOT_CURRENT.to_string(), root_current);
+    partitions.insert(PartitionName::RootCurrent, root_current);
 
     #[cfg(feature = "dos")]
     partitions.insert(
-        partition_names::EXTENDED.to_string(),
+        PartitionName::Extended,
         device.partition_path(PARTITION_NUM_EXTENDED),
     );
 
     partitions.insert(
-        partition_names::FACTORY.to_string(),
+        PartitionName::Factory,
         device.partition_path(PARTITION_NUM_FACTORY),
     );
     partitions.insert(
-        partition_names::CERT.to_string(),
+        PartitionName::Cert,
         device.partition_path(PARTITION_NUM_CERT),
     );
+    partitions.insert(PartitionName::Etc, device.partition_path(PARTITION_NUM_ETC));
     partitions.insert(
-        partition_names::ETC.to_string(),
-        device.partition_path(PARTITION_NUM_ETC),
-    );
-    partitions.insert(
-        partition_names::DATA.to_string(),
+        PartitionName::Data,
         device.partition_path(PARTITION_NUM_DATA),
     );
 
@@ -212,34 +255,33 @@ mod tests {
         let map = build_partition_map(&sda_root_a()).unwrap();
 
         assert_eq!(
-            map.get(partition_names::BOOT),
+            map.get(&PartitionName::Boot),
             Some(&PathBuf::from("/dev/sda1"))
         );
         assert_eq!(
-            map.get(partition_names::ROOT_A),
+            map.get(&PartitionName::RootA),
             Some(&PathBuf::from("/dev/sda2"))
         );
         assert_eq!(
-            map.get(partition_names::ROOT_B),
+            map.get(&PartitionName::RootB),
             Some(&PathBuf::from("/dev/sda3"))
         );
         assert_eq!(
-            map.get(partition_names::FACTORY),
+            map.get(&PartitionName::Factory),
             Some(&PathBuf::from("/dev/sda4"))
         );
         assert_eq!(
-            map.get(partition_names::CERT),
+            map.get(&PartitionName::Cert),
             Some(&PathBuf::from("/dev/sda5"))
         );
         assert_eq!(
-            map.get(partition_names::ETC),
+            map.get(&PartitionName::Etc),
             Some(&PathBuf::from("/dev/sda6"))
         );
         assert_eq!(
-            map.get(partition_names::DATA),
+            map.get(&PartitionName::Data),
             Some(&PathBuf::from("/dev/sda7"))
         );
-        assert_eq!(map.get(partition_names::EXTENDED), None);
     }
 
     #[cfg(feature = "dos")]
@@ -248,35 +290,35 @@ mod tests {
         let map = build_partition_map(&sda_root_a()).unwrap();
 
         assert_eq!(
-            map.get(partition_names::BOOT),
+            map.get(&PartitionName::Boot),
             Some(&PathBuf::from("/dev/sda1"))
         );
         assert_eq!(
-            map.get(partition_names::ROOT_A),
+            map.get(&PartitionName::RootA),
             Some(&PathBuf::from("/dev/sda2"))
         );
         assert_eq!(
-            map.get(partition_names::ROOT_B),
+            map.get(&PartitionName::RootB),
             Some(&PathBuf::from("/dev/sda3"))
         );
         assert_eq!(
-            map.get(partition_names::EXTENDED),
+            map.get(&PartitionName::Extended),
             Some(&PathBuf::from("/dev/sda4"))
         );
         assert_eq!(
-            map.get(partition_names::FACTORY),
+            map.get(&PartitionName::Factory),
             Some(&PathBuf::from("/dev/sda5"))
         );
         assert_eq!(
-            map.get(partition_names::CERT),
+            map.get(&PartitionName::Cert),
             Some(&PathBuf::from("/dev/sda6"))
         );
         assert_eq!(
-            map.get(partition_names::ETC),
+            map.get(&PartitionName::Etc),
             Some(&PathBuf::from("/dev/sda7"))
         );
         assert_eq!(
-            map.get(partition_names::DATA),
+            map.get(&PartitionName::Data),
             Some(&PathBuf::from("/dev/sda8"))
         );
     }
@@ -287,15 +329,15 @@ mod tests {
         let map = build_partition_map(&nvme_root_a()).unwrap();
 
         assert_eq!(
-            map.get(partition_names::BOOT),
+            map.get(&PartitionName::Boot),
             Some(&PathBuf::from("/dev/nvme0n1p1"))
         );
         assert_eq!(
-            map.get(partition_names::ROOT_A),
+            map.get(&PartitionName::RootA),
             Some(&PathBuf::from("/dev/nvme0n1p2"))
         );
         assert_eq!(
-            map.get(partition_names::DATA),
+            map.get(&PartitionName::Data),
             Some(&PathBuf::from("/dev/nvme0n1p7"))
         );
     }
@@ -306,11 +348,11 @@ mod tests {
         let map = build_partition_map(&mmc_root_b()).unwrap();
 
         assert_eq!(
-            map.get(partition_names::BOOT),
+            map.get(&PartitionName::Boot),
             Some(&PathBuf::from("/dev/mmcblk0p1"))
         );
         assert_eq!(
-            map.get(partition_names::DATA),
+            map.get(&PartitionName::Data),
             Some(&PathBuf::from("/dev/mmcblk0p8"))
         );
     }
@@ -339,5 +381,35 @@ mod tests {
             Some(12)
         );
         assert_eq!(partition_suffix(&PathBuf::from("/dev/sda")), None);
+    }
+
+    #[test]
+    fn test_partition_name_as_str() {
+        assert_eq!(PartitionName::Boot.as_str(), "boot");
+        assert_eq!(PartitionName::RootA.as_str(), "rootA");
+        assert_eq!(PartitionName::RootB.as_str(), "rootB");
+        assert_eq!(PartitionName::RootCurrent.as_str(), "rootCurrent");
+        assert_eq!(PartitionName::Factory.as_str(), "factory");
+        assert_eq!(PartitionName::Cert.as_str(), "cert");
+        assert_eq!(PartitionName::Etc.as_str(), "etc");
+        assert_eq!(PartitionName::Data.as_str(), "data");
+    }
+
+    #[test]
+    fn test_partition_name_display() {
+        assert_eq!(PartitionName::Boot.to_string(), "boot");
+        assert_eq!(PartitionName::Data.to_string(), "data");
+    }
+
+    #[test]
+    fn test_partition_layout_uses_typed_keys() {
+        let device = RootDevice {
+            base: std::path::PathBuf::from("/dev/sda"),
+            partition_sep: "",
+            root_partition: std::path::PathBuf::from("/dev/sda2"),
+        };
+        let layout = PartitionLayout::new(device).unwrap();
+        assert!(layout.partitions.contains_key(&PartitionName::Boot));
+        assert!(layout.partitions.contains_key(&PartitionName::Data));
     }
 }

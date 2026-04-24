@@ -11,9 +11,9 @@ mod mount;
 mod overlayfs;
 
 pub use self::boot_sequence::{fsck_and_record, mount_partitions, persist_fsck_results};
-pub use self::fsck::{FsckResult, check_filesystem_lenient, describe_fsck_exit_code};
+pub use self::fsck::{FsckExitCode, FsckResult, check_filesystem_lenient};
 pub use self::mount::{
-    MountOptions, MountPoint, is_path_mounted, mount, mount_bind, mount_bind_private,
+    FsType, MountOptions, MountPoint, is_path_mounted, mount, mount_bind, mount_bind_private,
     mount_readwrite, mount_tmpfs,
 };
 pub use self::overlayfs::{

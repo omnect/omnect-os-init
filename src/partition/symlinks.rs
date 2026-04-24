@@ -8,22 +8,25 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use crate::error::PartitionError;
-use crate::partition::{PartitionLayout, Result, layout::partition_names};
+use crate::partition::{PartitionLayout, Result};
 
 /// Base directory for omnect device symlinks
 const OMNECT_DEV_DIR: &str = "/dev/omnect";
+
+/// Symlink name for the base block device (whole disk, not a partition).
+const ROOTBLK_SYMLINK_NAME: &str = "rootblk";
 
 /// Create all /dev/omnect/* symlinks for the given partition layout.
 pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     create_symlink_dir()?;
 
     // Create symlink to the base block device
-    create_symlink(&layout.device.base, &symlink_path(partition_names::ROOTBLK))?;
+    create_symlink(&layout.device.base, &symlink_path(ROOTBLK_SYMLINK_NAME))?;
 
     // Create partition symlinks — rootCurrent is already in layout.partitions
     // with the correct active-partition target, so no explicit creation needed.
     for (name, device_path) in &layout.partitions {
-        create_symlink(device_path, &symlink_path(name))?;
+        create_symlink(device_path, &symlink_path(name.as_str()))?;
     }
 
     log::info!(
@@ -91,12 +94,12 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
 /// Verify that all expected symlinks exist and are valid
 pub fn verify_symlinks(layout: &PartitionLayout) -> Result<()> {
     // Check rootblk
-    verify_symlink(&symlink_path(partition_names::ROOTBLK), &layout.device.base)?;
+    verify_symlink(&symlink_path(ROOTBLK_SYMLINK_NAME), &layout.device.base)?;
 
     // Check all partitions — rootCurrent is already in layout.partitions so
     // no explicit check needed (mirrors create_omnect_symlinks).
     for (name, device_path) in &layout.partitions {
-        verify_symlink(&symlink_path(name), device_path)?;
+        verify_symlink(&symlink_path(name.as_str()), device_path)?;
     }
 
     Ok(())
