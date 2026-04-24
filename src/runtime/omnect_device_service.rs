@@ -41,11 +41,11 @@ const ODS_GROUP: &str = "omnect_device_service";
 /// File and directory permission modes for ODS runtime files.
 #[derive(Debug, Clone, Copy)]
 enum FilePermission {
-    /// `rwxrwxr-x` (0o775) — ODS runtime directory
+    /// `rwxrwxr-x` (0o775) — readable and executable by all, writable by owner and group
     DirStandard,
-    /// `rw-------` (0o600) — sensitive files readable only by ODS
+    /// `rw-------` (0o600) — readable and writable only by owner (ODS)
     FileRestricted,
-    /// `rw-r--r--` (0o644) — trigger files readable by ODS and group
+    /// `rw-r--r--` (0o644) — readable by all, writable only by owner (ODS)
     FileReadable,
 }
 
