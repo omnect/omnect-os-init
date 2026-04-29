@@ -7,8 +7,8 @@
 - **Target:** Embedded Linux (x86-64 EFI with GRUB, ARM with U-Boot)
 
 ## 2. Key Files
-- `src/main.rs`: Entry point, mounts essential filesystems, initializes logging
-- `src/lib.rs`: Library exports for all modules
+- `src/main.rs`: PID 1 shim — early init, logging setup, calls `omnect_os_init::run_init()`
+- `src/lib.rs`: Library exports and `pub fn run_init()` (unit-testable boot orchestration)
 - `src/error.rs`: Hierarchical error types (`InitramfsError`, subsystem errors)
 - `src/early_init.rs`: Mounts `/dev`, `/proc`, `/sys` before anything else
 - `src/bootloader/mod.rs`: Trait-based abstraction over GRUB/U-Boot
@@ -16,6 +16,8 @@
 - `src/bootloader/uboot.rs`: U-Boot implementation using `fw_printenv`/`fw_setenv`
 - `src/config/mod.rs`: Parses `/proc/cmdline`; build-time constants from Yocto env via `build.rs`
 - `src/logging/kmsg.rs`: Writes to `/dev/kmsg` with kernel log levels
+- `src/mode/mod.rs`: `BootMode` enum, `BootContext<'a>`, `ROOTFS_DIR` const, `detect()`
+- `src/mode/normal.rs`: Normal boot handler — overlays, fs-links, ODS runtime files, switch_root
 - `src/partition/device.rs`: Detects root block device from cmdline (GRUB UUID or U-Boot path)
 - `src/filesystem/overlayfs.rs`: Sets up overlayfs for `/etc`, `/home`; bind-mounts `/var/lib`, `/usr/local`
 - `src/runtime/switch_root.rs`: MS_MOVE + chroot transition to real rootfs; execs init

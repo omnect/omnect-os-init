@@ -76,8 +76,8 @@ cargo test --features grub,gpt -- --nocapture
 
 ```
 src/
-├── main.rs                  # Entry point (PID 1)
-├── lib.rs                   # Library exports
+├── main.rs                  # PID 1 shim: early_init → logging → run_init()
+├── lib.rs                   # Library exports + run_init() (unit-testable entry point)
 ├── error.rs                 # Error type hierarchy
 ├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
 ├── bootloader/
@@ -96,6 +96,9 @@ src/
 ├── logging/
 │   ├── mod.rs               # KmsgLogger initializer
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
+├── mode/
+│   ├── mod.rs               # BootMode enum, BootContext, ROOTFS_DIR, detect()
+│   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
 ├── partition/
 │   ├── mod.rs               # Public API
 │   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
