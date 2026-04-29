@@ -13,12 +13,31 @@ pub mod normal;
 /// additional preflight will occur. Future modes (factory-reset, flash-mode)
 /// that need to unmount partitions before acting do so internally.
 pub struct BootContext<'a> {
-    pub config: &'a Config,
+    pub(crate) config: &'a Config,
     /// Reserved for FactoryReset/Resize handlers — unused in normal boot.
-    pub layout: &'a PartitionLayout,
-    pub rootfs: &'a Path,
-    pub bootloader: Option<Box<dyn Bootloader>>,
-    pub ods_status: OdsStatus,
+    #[allow(dead_code)]
+    pub(crate) layout: &'a PartitionLayout,
+    pub(crate) rootfs: &'a Path,
+    pub(crate) bootloader: Option<Box<dyn Bootloader>>,
+    pub(crate) ods_status: OdsStatus,
+}
+
+impl<'a> BootContext<'a> {
+    pub(crate) fn new(
+        config: &'a Config,
+        layout: &'a PartitionLayout,
+        rootfs: &'a Path,
+        bootloader: Option<Box<dyn Bootloader>>,
+        ods_status: OdsStatus,
+    ) -> Self {
+        Self {
+            config,
+            layout,
+            rootfs,
+            bootloader,
+            ods_status,
+        }
+    }
 }
 
 /// The detected boot mode to execute.

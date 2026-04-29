@@ -83,13 +83,7 @@ pub fn run_init() -> Result<()> {
 
     let mode = BootMode::detect(bootloader_opt.as_deref())?;
 
-    let ctx = BootContext {
-        config: &config,
-        layout: &layout,
-        rootfs,
-        bootloader: bootloader_opt,
-        ods_status,
-    };
+    let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
     // single_match: intentional scaffolding — additional variants land with
     // their implementation PRs.
