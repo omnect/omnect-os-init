@@ -20,6 +20,7 @@ pub mod normal;
 /// that need to unmount partitions before acting do so internally.
 pub struct BootContext<'a> {
     pub config: &'a Config,
+    /// Reserved for FactoryReset/Resize handlers — unused in normal boot.
     pub layout: &'a PartitionLayout,
     pub rootfs: &'a Path,
     pub bootloader: Option<Box<dyn Bootloader>>,

@@ -29,4 +29,4 @@ rewrite-initramfs-plan.md
 .worktrees/
 
 # Local design specs (brainstorming artifacts, not part of the repo)
-docs/
+/docs/

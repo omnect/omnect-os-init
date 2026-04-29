@@ -74,6 +74,10 @@ pub fn run_init() -> Result<()> {
 
     mount_result?;
 
+    if bootloader_opt.is_none() {
+        warn!("Bootloader unavailable after mount; ODS update-validation will be skipped");
+    }
+
     let mode = BootMode::detect(bootloader_opt.as_deref())?;
 
     let ctx = BootContext {
