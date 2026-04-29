@@ -3,34 +3,22 @@
 //! This binary replaces the bash-based initramfs scripts with a type-safe
 //! Rust implementation.
 
-use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
-use log::{error, info, warn};
+use log::{error, warn};
 
 use omnect_os_init::{
-    Result,
-    bootloader::create_bootloader,
-    config::Config,
     error::{FilesystemError, InitramfsError},
-    filesystem::{
-        mount_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
-        setup_raw_rootfs_mount,
-    },
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
-    partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
-    runtime::{ODS_RUNTIME_DIR, OdsStatus, create_fs_links, create_ods_runtime_files, switch_root},
 };
 
 /// Sleep duration for fatal error loop (seconds)
 const FATAL_ERROR_SLEEP_SECS: u64 = 60;
 const BASH_CMD: &str = "/bin/bash";
 const SH_CMD: &str = "/bin/sh";
-/// Mount point for the real rootfs inside the initramfs.
-const ROOTFS_DIR: &str = "/rootfs";
 
 fn main() {
     // Mount essential filesystems first (/dev, /proc, /sys, /run)
@@ -60,97 +48,10 @@ fn main() {
     }
 
     // Run main initialization
-    if let Err(e) = run() {
-        error!("Initramfs failed: {}", e);
+    if let Err(e) = omnect_os_init::run_init() {
+        error!("Initramfs failed: {e}");
         handle_fatal_error(e, is_release_image);
     }
-}
-
-fn run() -> Result<()> {
-    info!("omnect-os-initramfs starting");
-
-    let config = Config::load()?;
-    let rootfs = Path::new(ROOTFS_DIR);
-
-    // Detect root device
-    info!("Detecting root device...");
-    let root_device = detect_root_device(&config.cmdline)?;
-    info!(
-        "Root device: {} (partition {})",
-        root_device.base.display(),
-        root_device.root_partition.display()
-    );
-
-    // Detect partition layout
-    let layout = PartitionLayout::new(root_device)?;
-
-    // Create /dev/omnect/* symlinks
-    create_omnect_symlinks(&layout)?;
-
-    // Initialize ODS status
-    let mut ods_status = OdsStatus::new();
-
-    // Run fsck on partitions and mount them.
-    // Boot partition must be mounted before create_bootloader() so that
-    // GrubBootloader can access the grubenv file at rootfs/boot/EFI/BOOT/grubenv.
-    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
-
-    // Attempt to create bootloader and persist fsck results before propagating any
-    // mount error. This ensures results are stored even on the FsckRequiresReboot
-    // reboot path. For GRUB: requires boot partition mounted; best-effort if it isn't.
-    let mut bootloader_result = create_bootloader();
-    if let Ok(ref mut bl) = bootloader_result {
-        // Persist fsck results: gzip+base64 encoded output (code + full text) to
-        // bootloader env, and full output to data partition log.
-        // Non-fatal: failures are logged as warnings.
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
-    } else {
-        warn!("Could not create bootloader; fsck results will not be persisted to bootloader env");
-    }
-
-    // Propagate mount failure after persistence attempt (FsckRequiresReboot → reboot)
-    mount_result?;
-
-    // Bootloader is expected to be available after a successful mount, but can
-    // fail in edge cases (e.g. missing grubenv on a corrupted boot partition).
-    // Log a warning and continue — ODS bootloader-dependent state will be skipped
-    // rather than aborting a boot that otherwise succeeded.
-    let bootloader = match bootloader_result {
-        Ok(bl) => Some(bl),
-        Err(e) => {
-            warn!(
-                "Bootloader unavailable after mount: {}; ODS update-validation will be skipped",
-                e
-            );
-            None
-        }
-    };
-
-    // Setup raw rootfs mount (before overlays)
-    setup_raw_rootfs_mount(rootfs)?;
-
-    // Setup overlays
-    setup_etc_overlay(rootfs)?;
-    setup_data_overlay(rootfs)?;
-
-    // Create fs-links
-    create_fs_links(rootfs)?;
-
-    // Create ODS runtime files
-    create_ods_runtime_files(
-        &ods_status,
-        bootloader.as_deref(),
-        rootfs,
-        Path::new(ODS_RUNTIME_DIR),
-    )?;
-
-    info!("omnect-os-initramfs completed successfully");
-
-    // Switch root to final rootfs
-    switch_root(rootfs, &config.cmdline)?;
-
-    // This should never be reached
-    Ok(())
 }
 
 /// Handle fatal errors based on image type
