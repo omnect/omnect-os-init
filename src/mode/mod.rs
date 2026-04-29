@@ -2,12 +2,6 @@ use std::path::Path;
 
 use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus};
 
-/// The root filesystem mount point inside the initramfs.
-///
-/// Defined here (not in `main.rs`) so `run_init()` and all mode handlers
-/// share a single source of truth.
-pub const ROOTFS_DIR: &str = "/rootfs";
-
 pub mod normal;
 
 /// Context passed to every mode handler.

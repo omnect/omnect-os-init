@@ -10,7 +10,7 @@ use log::{info, warn};
 use crate::{
     config::Config,
     filesystem::{mount_partitions, persist_fsck_results},
-    mode::{BootContext, BootMode, ROOTFS_DIR},
+    mode::{BootContext, BootMode},
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
 };
@@ -30,6 +30,9 @@ pub use crate::bootloader::{Bootloader, create_bootloader};
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
+
+/// Mount point for the real rootfs inside the initramfs.
+const ROOTFS_DIR: &str = "/rootfs";
 
 pub fn run_init() -> Result<()> {
     info!("omnect-os-initramfs starting");
