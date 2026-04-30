@@ -97,7 +97,7 @@ src/
 │   ├── mod.rs               # KmsgLogger initializer
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── mode/
-│   ├── mod.rs               # BootMode enum, BootContext, ROOTFS_DIR, detect()
+│   ├── mod.rs               # BootMode enum, BootContext, detect()
 │   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
 ├── partition/
 │   ├── mod.rs               # Public API

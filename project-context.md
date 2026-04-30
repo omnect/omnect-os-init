@@ -16,7 +16,7 @@
 - `src/bootloader/uboot.rs`: U-Boot implementation using `fw_printenv`/`fw_setenv`
 - `src/config/mod.rs`: Parses `/proc/cmdline`; build-time constants from Yocto env via `build.rs`
 - `src/logging/kmsg.rs`: Writes to `/dev/kmsg` with kernel log levels
-- `src/mode/mod.rs`: `BootMode` enum, `BootContext<'a>`, `ROOTFS_DIR` const, `detect()`
+- `src/mode/mod.rs`: `BootMode` enum, `BootContext<'a>`, `detect()`
 - `src/mode/normal.rs`: Normal boot handler — overlays, fs-links, ODS runtime files, switch_root
 - `src/partition/device.rs`: Detects root block device from cmdline (GRUB UUID or U-Boot path)
 - `src/filesystem/overlayfs.rs`: Sets up overlayfs for `/etc`, `/home`; bind-mounts `/var/lib`, `/usr/local`
