@@ -69,7 +69,7 @@ impl BootMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::MockBootloader;
+    use crate::bootloader::create_mock_bootloader;
 
     // TODO: replace with a full env-var × variant matrix when the first non-Normal
     // BootMode variant lands. Each future variant must add tests covering:
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn detect_normal_with_live_bootloader() {
-        let mock = MockBootloader::new();
+        let mock = create_mock_bootloader();
         let mode = BootMode::detect(Some(&mock)).unwrap();
         assert!(matches!(mode, BootMode::Normal));
     }
