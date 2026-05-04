@@ -67,3 +67,26 @@
 - **Kernel cmdline:** `rootpart=` (GRUB: root partition number), `bootpart_fsuuid=` (GRUB: boot partition UUID), `root=` (U-Boot: full root device path), `init=` (optional init binary override), `quiet` (suppress console output); `rootblk=` is parsed for device symlink naming only — no logic reads it
 - **Device symlinks:** Creates `/dev/omnect/{boot,rootfs,data,...}`
 - **ODS:** Prepares runtime files for `omnect-device-service`
+
+## 8. Planned Features (not yet implemented)
+
+### BootMode variants
+The `BootMode` enum (`src/mode/mod.rs`) currently only has `Normal`. The following variants are planned:
+- `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
+- `Resize` — resizes partitions on first boot after image flash
+- `FlashMode(FlashKind)` — enables in-field OS flashing
+
+When implementing a new variant:
+1. Add the variant to `BootMode` and update `BootMode::detect()` to read the relevant bootloader env key. If the key is absent or the bootloader is unavailable, `detect()` must return `Normal` (degraded boot).
+2. Add typed payload structs as needed (define them in `src/mode/mod.rs` near the `BootMode` enum).
+3. Add `BootloaderEnvKey` entries for the detection keys.
+4. Add a handler module under `src/mode/` mirroring `src/mode/normal.rs`.
+5. Cover in tests: env-var present + live bootloader, env-var present + no bootloader (degraded fallback to `Normal`), env-var absent.
+
+## 9. Documentation Standards
+
+### Source-code comments and doc-strings
+- **Explain "why", not "what":** The code shows what it does; comments explain constraints, non-obvious rationale, or invariants.
+- **No history in comments:** Do not reference previous implementations ("legacy bash", "previously this was…"), PR numbers, or merge order.
+- **No forward scaffolding in comments:** Do not describe features not yet implemented in the same comment block. Track planned work in section 8 of this file instead.
+- **Concise doc-strings:** A doc-string should be as long as it needs to be and no longer. Avoid restating the function signature or obvious behaviour.

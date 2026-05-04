@@ -85,8 +85,6 @@ pub fn run_init() -> Result<()> {
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
-    // single_match: intentional scaffolding — additional variants land with
-    // their implementation PRs.
     #[allow(clippy::single_match)]
     match mode {
         BootMode::Normal => mode::normal::run(ctx),

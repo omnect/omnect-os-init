@@ -185,7 +185,7 @@ impl OdsStatus {
 /// moves that mount into the new root via `MS_MOVE`, so they remain visible
 /// to ODS at the same path after the root pivot.
 ///
-/// Ownership and permissions are set to match legacy bash:
+/// Ownership and permissions:
 /// - dir: omnect_device_service:omnect_device_service, 775
 /// - status JSON: 600
 /// - trigger files: 644

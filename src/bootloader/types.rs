@@ -13,8 +13,8 @@ const BASE64_CMD: &str = "/bin/base64";
 /// Encode fsck result for storage in the bootloader environment.
 ///
 /// Produces `base64(gzip("{code}\n{output}"))` using the busybox `gzip` and
-/// `base64` applets that are always present in the initramfs. This matches the
-/// legacy bash script encoding so ODS can decode the value identically.
+/// `base64` applets that are always present in the initramfs. The format must
+/// remain stable as ODS decodes this value at runtime.
 ///
 /// Returns an empty string if encoding fails (non-fatal; the plain log file
 /// on the data partition still captures the output). Note: an empty string
