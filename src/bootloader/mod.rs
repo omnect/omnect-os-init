@@ -43,6 +43,9 @@ pub enum BootloaderEnvKey {
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
     FsckStatus(PartitionName),
+    /// `omnect_resized_data` — set to `"1"` after data partition has been resized.
+    #[cfg(feature = "resize-data")]
+    ResizedData,
 }
 
 impl BootloaderEnvKey {
@@ -52,6 +55,8 @@ impl BootloaderEnvKey {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
+            #[cfg(feature = "resize-data")]
+            Self::ResizedData => Cow::Borrowed("omnect_resized_data"),
         }
     }
 }

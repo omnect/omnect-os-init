@@ -3,6 +3,8 @@ use std::path::Path;
 use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus};
 
 pub mod normal;
+#[cfg(feature = "resize-data")]
+pub mod resize_data;
 
 /// Runtime context passed to the active boot-mode handler.
 ///
