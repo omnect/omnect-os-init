@@ -57,13 +57,6 @@ mod tests {
     use super::*;
     use crate::bootloader::create_mock_bootloader;
 
-    // TODO: replace with a full env-var × variant matrix when the first non-Normal
-    // BootMode variant lands. Each future variant must add tests covering:
-    //   - env-var present + live bootloader  → correct variant returned
-    //   - env-var present + no bootloader    → degraded-boot fallback (Normal)
-    //   - env-var absent                     → Normal
-    // Until then these two tests only verify the degraded-boot path is reachable.
-
     #[test]
     fn detect_normal_with_live_bootloader() {
         let mock = create_mock_bootloader();
