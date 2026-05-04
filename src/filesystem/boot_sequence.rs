@@ -58,13 +58,17 @@ pub fn fsck_and_record(
     }
 }
 
-/// Mount all required partitions in the correct order.
-pub fn mount_partitions(
+/// Mount the core partitions required before the bootloader can be created.
+///
+/// Mounts rootCurrent (read-only) and boot (read-write). Must be called before
+/// `create_bootloader()` because GRUB reads grubenv from the boot partition.
+/// `mount_remaining_partitions` must be called afterward to mount factory,
+/// cert, etc, and data.
+pub fn mount_core_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
     ods_status: &mut OdsStatus,
 ) -> crate::error::Result<()> {
-    // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout
         .partitions
         .get(&PartitionName::RootCurrent)
@@ -101,19 +105,34 @@ pub fn mount_partitions(
     if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
-            // Boot already mounted at this stage is a logic error: mount_partitions
-            // is called exactly once, after rootfs is freshly mounted. If boot is
-            // already present something has gone wrong in the boot sequence.
+            // Boot already mounted at this stage is a logic error: mount_core_partitions
+            // is called exactly once per boot. If boot is already present something has
+            // gone wrong in the boot sequence.
             return Err(InitramfsError::Filesystem(FilesystemError::MountFailed {
                 src_path: boot_dev.clone(),
                 target: boot_mount,
-                reason: "boot partition already mounted at start of mount_partitions".to_string(),
+                reason: "boot partition already mounted at start of mount_core_partitions"
+                    .to_string(),
             }));
         }
         fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
         mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
     }
 
+    Ok(())
+}
+
+/// Mount the remaining partitions after the bootloader has been created.
+///
+/// Mounts factory, cert, etc, data, and var/volatile. Must be called after
+/// `mount_core_partitions` and bootloader creation. The data partition is
+/// mounted here, so `resize_data_if_needed` must be called before this
+/// function when the `resize-data` feature is enabled.
+pub fn mount_remaining_partitions(
+    layout: &PartitionLayout,
+    rootfs: &Path,
+    ods_status: &mut OdsStatus,
+) -> crate::error::Result<()> {
     // Mount factory partition read-only
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
