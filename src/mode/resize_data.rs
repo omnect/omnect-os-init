@@ -27,7 +27,7 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
     bootloader: &mut Option<Box<dyn Bootloader>>,
-    _rootfs: &Path, // reserved: may be needed for chroot-relative paths in future callers
+    _rootfs: &Path,
 ) -> Result<()> {
     let Some(ref mut bl) = *bootloader else {
         log::warn!("Bootloader unavailable; skipping data partition resize");
