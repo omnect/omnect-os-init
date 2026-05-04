@@ -236,7 +236,11 @@ fn run_cmd(program: &str, args: &[&str]) -> ResizeResult<()> {
         let output = String::from_utf8_lossy(&out.stdout).into_owned()
             + &String::from_utf8_lossy(&out.stderr);
         return Err(ResizeDataError::CommandFailed {
-            command: format!("{} {}", program, args.join(" ")),
+            command: if args.is_empty() {
+                program.to_string()
+            } else {
+                format!("{} {}", program, args.join(" "))
+            },
             code,
             output,
         });
