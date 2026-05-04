@@ -9,7 +9,7 @@ use log::{info, warn};
 
 use crate::{
     config::Config,
-    filesystem::{mount_partitions, persist_fsck_results},
+    filesystem::mount_core_partitions,
     mode::{BootContext, BootMode},
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
@@ -53,29 +53,20 @@ pub fn run_init() -> Result<()> {
 
     let mut ods_status = OdsStatus::new();
 
-    // Mount all partitions; boot must be mounted before create_bootloader()
+    // Mount core partitions (rootfs + boot); boot must be mounted before create_bootloader()
     // (GRUB reads grubenv from rootfs/boot/EFI/BOOT/grubenv).
-    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
+    mount_core_partitions(&layout, rootfs, &mut ods_status)?;
 
     // Best-effort: a corrupted grubenv is a recoverable degraded-boot condition.
     // Promote failure to None so the rest of init proceeds; ODS bootloader-dependent
     // state is skipped rather than aborting a boot that otherwise succeeds.
-    let mut bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {
+    let bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {
         Ok(bl) => Some(bl),
         Err(e) => {
-            warn!("Bootloader unavailable: {e}; fsck results will not be persisted");
+            warn!("Bootloader unavailable: {e}");
             None
         }
     };
-
-    // Persist fsck results BEFORE propagating mount_result.
-    // FsckRequiresReboot exits through mount_result?; diagnostics must be in
-    // the bootloader env before that reboot fires.
-    if let Some(ref mut bl) = bootloader_opt {
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
-    }
-
-    mount_result?;
 
     if bootloader_opt.is_none() {
         warn!("Bootloader unavailable after mount; ODS update-validation will be skipped");
