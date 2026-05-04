@@ -10,6 +10,7 @@ use std::process::Command;
 
 use crate::bootloader::{Bootloader, BootloaderEnvKey};
 use crate::error::{ResizeDataError, Result};
+use crate::partition::PartitionName;
 
 #[cfg(feature = "gpt")]
 const SGDISK_CMD: &str = "/sbin/sgdisk";
@@ -26,10 +27,8 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
     bootloader: Option<&mut dyn Bootloader>,
-    _rootfs: &Path,
+    _rootfs: &Path, // reserved: may be needed for chroot-relative paths in future callers
 ) -> Result<()> {
-    use crate::partition::PartitionName;
-
     let Some(bootloader) = bootloader else {
         log::warn!("Bootloader unavailable; skipping data partition resize");
         return Ok(());
@@ -61,11 +60,17 @@ pub fn resize_if_needed(
         part_nr
     );
 
+    let rootblk_str = rootblk.to_str().ok_or_else(|| {
+        crate::error::InitramfsError::ResizeData(ResizeDataError::NonUtf8Path(
+            rootblk.to_path_buf(),
+        ))
+    })?;
+
     #[cfg(feature = "gpt")]
     {
         // Move backup GPT header to end of disk before resizing — required when
         // the disk was grown after the image was written (e.g. flash → larger medium).
-        run_cmd(SGDISK_CMD, &[rootblk.to_str().unwrap_or(""), "-e"])
+        run_cmd(SGDISK_CMD, &[rootblk_str, "-e"])
             .map_err(crate::error::InitramfsError::ResizeData)?;
     }
 
@@ -77,24 +82,14 @@ pub fn resize_if_needed(
             find_extended_partition(rootblk).map_err(crate::error::InitramfsError::ResizeData)?;
         run_cmd(
             PARTED_CMD,
-            &[
-                rootblk.to_str().unwrap_or(""),
-                "resizepart",
-                &ext_nr.to_string(),
-                "100%",
-            ],
+            &[rootblk_str, "resizepart", &ext_nr.to_string(), "100%"],
         )
         .map_err(crate::error::InitramfsError::ResizeData)?;
     }
 
     run_cmd(
         PARTED_CMD,
-        &[
-            rootblk.to_str().unwrap_or(""),
-            "resizepart",
-            &part_nr.to_string(),
-            "100%",
-        ],
+        &[rootblk_str, "resizepart", &part_nr.to_string(), "100%"],
     )
     .map_err(crate::error::InitramfsError::ResizeData)?;
 
@@ -103,7 +98,10 @@ pub fn resize_if_needed(
     ensure_mtab().map_err(crate::error::InitramfsError::ResizeData)?;
     run_e2fsck(&data_dev).map_err(crate::error::InitramfsError::ResizeData)?;
 
-    run_cmd(RESIZE2FS_CMD, &["-f", data_dev.to_str().unwrap_or("")])
+    let data_dev_str = data_dev.to_str().ok_or_else(|| {
+        crate::error::InitramfsError::ResizeData(ResizeDataError::NonUtf8Path(data_dev.clone()))
+    })?;
+    run_cmd(RESIZE2FS_CMD, &["-f", data_dev_str])
         .map_err(crate::error::InitramfsError::ResizeData)?;
 
     run_cmd(SYNC_CMD, &[]).map_err(crate::error::InitramfsError::ResizeData)?;
@@ -141,31 +139,38 @@ fn partition_number(dev: &Path) -> Option<u32> {
 #[cfg(feature = "dos")]
 fn find_extended_partition(rootblk: &Path) -> ResizeResult<u32> {
     let out = Command::new(PARTED_CMD)
-        .args([rootblk.to_str().unwrap_or(""), "print"])
+        .args([
+            rootblk
+                .to_str()
+                .ok_or_else(|| ResizeDataError::NonUtf8Path(rootblk.to_path_buf()))?,
+            "print",
+        ])
         .output()
         .map_err(ResizeDataError::Io)?;
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for line in stdout.lines() {
+    parse_extended_partition_nr(&stdout)
+        .ok_or_else(|| ResizeDataError::ExtendedPartitionNotFound(rootblk.to_path_buf()))
+}
+
+#[cfg(feature = "dos")]
+fn parse_extended_partition_nr(parted_output: &str) -> Option<u32> {
+    for line in parted_output.lines() {
         let lower = line.to_lowercase();
         if lower.contains("extended")
             && let Some(nr_str) = line.split_whitespace().next()
             && let Ok(nr) = nr_str.parse::<u32>()
         {
-            return Ok(nr);
+            return Some(nr);
         }
     }
-
-    Err(ResizeDataError::ExtendedPartitionNotFound(
-        rootblk.to_path_buf(),
-    ))
+    None
 }
 
-/// Ensure `/etc/mtab` exists and points to `/proc/self/mounts`.
+/// Ensure `/etc/mtab` is present and readable by resize2fs.
 ///
-/// Some tools (resize2fs, fsck) rely on mtab being present. In an initramfs
-/// environment it often does not exist; a symlink to /proc/self/mounts is
-/// functionally equivalent.
+/// If no mtab exists (or a stale symlink is in its place), creates a symlink
+/// to `/proc/self/mounts`. A real mtab file is left untouched.
 fn ensure_mtab() -> ResizeResult<()> {
     let mtab = Path::new(MTAB_PATH);
     let target = Path::new(PROC_MOUNTS_PATH);
@@ -188,7 +193,9 @@ fn ensure_mtab() -> ResizeResult<()> {
 /// outcome for our purposes; we just need the filesystem to be consistent
 /// before resize2fs runs.
 fn run_e2fsck(dev: &Path) -> ResizeResult<()> {
-    let dev_str = dev.to_str().unwrap_or("");
+    let dev_str = dev
+        .to_str()
+        .ok_or_else(|| ResizeDataError::NonUtf8Path(dev.to_path_buf()))?;
     log::info!("Running: {} -y {}", E2FSCK_CMD, dev_str);
 
     let out = Command::new(E2FSCK_CMD)
@@ -213,7 +220,11 @@ fn run_e2fsck(dev: &Path) -> ResizeResult<()> {
 
 /// Run an external command and return an error if it exits non-zero.
 fn run_cmd(program: &str, args: &[&str]) -> ResizeResult<()> {
-    log::info!("Running: {} {}", program, args.join(" "));
+    if args.is_empty() {
+        log::info!("Running: {}", program);
+    } else {
+        log::info!("Running: {} {}", program, args.join(" "));
+    }
 
     let out = Command::new(program)
         .args(args)
@@ -263,6 +274,7 @@ mod tests {
         assert_eq!(partition_number(Path::new("/dev/sda")), None);
     }
 
+    #[cfg(feature = "dos")]
     #[test]
     fn test_find_extended_partition_parses_output() {
         let output = "\
@@ -278,20 +290,10 @@ Number  Start   End     Size    Type      File system  Flags
  3      1500MB  8589MB  7089MB  extended
  8      1501MB  8589MB  7088MB  logical   ext4";
 
-        let mut found: Option<u32> = None;
-        for line in output.lines() {
-            let lower = line.to_lowercase();
-            if lower.contains("extended")
-                && let Some(nr_str) = line.split_whitespace().next()
-                && let Ok(nr) = nr_str.parse::<u32>()
-            {
-                found = Some(nr);
-                break;
-            }
-        }
-        assert_eq!(found, Some(3));
+        assert_eq!(parse_extended_partition_nr(output), Some(3));
     }
 
+    #[cfg(feature = "dos")]
     #[test]
     fn test_find_extended_partition_not_found() {
         let output = "\
@@ -299,9 +301,6 @@ Number  Start   End     Size   File system  Name  Flags
  1      1049kB  500MB   499MB  fat32              boot, esp
  7      500MB   8589MB  8089MB ext4";
 
-        let found = output
-            .lines()
-            .find(|l| l.to_lowercase().contains("extended"));
-        assert!(found.is_none());
+        assert_eq!(parse_extended_partition_nr(output), None);
     }
 }
