@@ -26,15 +26,15 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: Option<&mut dyn Bootloader>,
+    bootloader: &mut Option<Box<dyn Bootloader>>,
     _rootfs: &Path, // reserved: may be needed for chroot-relative paths in future callers
 ) -> Result<()> {
-    let Some(bootloader) = bootloader else {
+    let Some(ref mut bl) = *bootloader else {
         log::warn!("Bootloader unavailable; skipping data partition resize");
         return Ok(());
     };
 
-    if bootloader.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
+    if bl.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
         log::info!("Data partition already resized, skipping");
         return Ok(());
     }
@@ -106,7 +106,7 @@ pub fn resize_if_needed(
 
     run_cmd(SYNC_CMD, &[]).map_err(crate::error::InitramfsError::ResizeData)?;
 
-    bootloader.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
+    bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
 
     log::info!("Data partition resize complete");
     Ok(())

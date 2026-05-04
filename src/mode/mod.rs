@@ -11,7 +11,6 @@ pub mod resize_data;
 /// A handler implements one boot path (normal, factory-reset, resize, …).
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
-    #[allow(dead_code)]
     pub(crate) layout: &'a PartitionLayout,
     pub(crate) rootfs: &'a Path,
     pub(crate) bootloader: Option<Box<dyn Bootloader>>,

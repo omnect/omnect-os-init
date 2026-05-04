@@ -4,7 +4,10 @@ use log::info;
 
 use crate::{
     Result,
-    filesystem::{setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount},
+    filesystem::{
+        mount_remaining_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
+        setup_raw_rootfs_mount,
+    },
     mode::BootContext,
     runtime::{ODS_RUNTIME_DIR, create_fs_links, create_ods_runtime_files, switch_root},
 };
@@ -12,11 +15,27 @@ use crate::{
 pub fn run(ctx: BootContext<'_>) -> Result<()> {
     let BootContext {
         config,
+        layout,
         rootfs,
-        bootloader,
-        ods_status,
-        ..
+        mut bootloader,
+        mut ods_status,
     } = ctx;
+
+    // Resize the data partition to fill the disk on first boot, before mounting it.
+    #[cfg(feature = "resize-data")]
+    crate::mode::resize_data::resize_if_needed(layout, &mut bootloader, rootfs)?;
+
+    // Mount factory, cert, etc, data, and var/volatile. Capture the result so we
+    // can persist fsck diagnostics before propagating a mount failure.
+    let mount_result = mount_remaining_partitions(layout, rootfs, &mut ods_status);
+
+    // Best-effort: persist any non-zero fsck results to the bootloader env and
+    // to /data/var/log/fsck/ (data may not be mounted if mount_result failed).
+    if let Some(ref mut bl) = bootloader {
+        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+    }
+
+    mount_result?;
 
     setup_raw_rootfs_mount(rootfs)?;
     setup_etc_overlay(rootfs)?;
