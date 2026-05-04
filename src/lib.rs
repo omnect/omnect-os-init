@@ -63,14 +63,10 @@ pub fn run_init() -> Result<()> {
     let bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {
         Ok(bl) => Some(bl),
         Err(e) => {
-            warn!("Bootloader unavailable: {e}");
+            warn!("Bootloader unavailable: {e}; ODS update-validation will be skipped");
             None
         }
     };
-
-    if bootloader_opt.is_none() {
-        warn!("Bootloader unavailable after mount; ODS update-validation will be skipped");
-    }
 
     let mode = BootMode::detect(bootloader_opt.as_deref())?;
 

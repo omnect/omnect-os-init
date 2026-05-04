@@ -207,7 +207,7 @@ pub fn persist_fsck_results(
     // the FsckRequiresReboot path (boot is mounted before fsck runs).
     //
     // The data partition log is best-effort: it is only mounted when
-    // mount_partitions() succeeds fully, so it may not be available here.
+    // mount_remaining_partitions() succeeds fully, so it may not be available here.
     let log_dir = rootfs_dir
         .join(mount_points::DATA_PARTITION)
         .join(FSCK_LOG_SUBDIR);
