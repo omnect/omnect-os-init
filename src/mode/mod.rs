@@ -4,12 +4,9 @@ use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runt
 
 pub mod normal;
 
-/// Context passed to every mode handler.
+/// Runtime context passed to the active boot-mode handler.
 ///
-/// All partitions are mounted when a handler is invoked: rootfs read-only
-/// at `/rootfs`, boot at `/rootfs/boot`, factory/data/cert/etc at their
-/// standard mount points. Handlers own the lifecycle of their overlay
-/// and bind mounts.
+/// A handler implements one boot path (normal, factory-reset, resize, …).
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
     #[allow(dead_code)]

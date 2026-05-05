@@ -76,7 +76,7 @@ cargo test --features grub,gpt -- --nocapture
 
 ```
 src/
-├── main.rs                  # PID 1 shim: early_init → logging → run_init()
+├── main.rs                  # Binary entry point; thin wrapper: early_init → logging → run_init()
 ├── lib.rs                   # Library exports + run_init() (unit-testable entry point)
 ├── error.rs                 # Error type hierarchy
 ├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
