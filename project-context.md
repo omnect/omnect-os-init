@@ -6,21 +6,44 @@
 - **Language:** Rust (safety-critical, no_std-friendly patterns)
 - **Target:** Embedded Linux (x86-64 EFI with GRUB, ARM with U-Boot)
 
-## 2. Key Files
-- `src/main.rs`: PID 1 shim — early init, logging setup, calls `omnect_os_init::run_init()`
-- `src/lib.rs`: Library exports and `pub fn run_init()` (unit-testable boot orchestration)
-- `src/error.rs`: Hierarchical error types (`InitramfsError`, subsystem errors)
-- `src/early_init.rs`: Mounts `/dev`, `/proc`, `/sys` before anything else
-- `src/bootloader/mod.rs`: Trait-based abstraction over GRUB/U-Boot
-- `src/bootloader/grub.rs`: GRUB implementation using `grub-editenv`
-- `src/bootloader/uboot.rs`: U-Boot implementation using `fw_printenv`/`fw_setenv`
-- `src/config/mod.rs`: Parses `/proc/cmdline`; build-time constants from Yocto env via `build.rs`
-- `src/logging/kmsg.rs`: Writes to `/dev/kmsg` with kernel log levels
-- `src/mode/mod.rs`: `BootMode` enum, `BootContext<'a>`, `detect()`
-- `src/mode/normal.rs`: Normal boot handler — overlays, fs-links, ODS runtime files, switch_root
-- `src/partition/device.rs`: Detects root block device from cmdline (GRUB UUID or U-Boot path)
-- `src/filesystem/overlayfs.rs`: Sets up overlayfs for `/etc`, `/home`; bind-mounts `/var/lib`, `/usr/local`
-- `src/runtime/switch_root.rs`: MS_MOVE + chroot transition to real rootfs; execs init
+## 2. Module Structure
+
+```
+src/
+├── main.rs                  # Binary entry point
+├── lib.rs                   # Library exports + run_init() (unit-testable entry point)
+├── error.rs                 # Error type hierarchy
+├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
+├── bootloader/
+│   ├── mod.rs               # Bootloader trait + build-time selection (grub/uboot feature)
+│   ├── grub.rs              # GRUB implementation (grub-editenv)
+│   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
+│   └── types.rs             # BootloaderType enum
+├── config/
+│   └── mod.rs               # /proc/cmdline parser; build-time constants via build.rs
+├── filesystem/
+│   ├── mod.rs               # Public API
+│   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
+│   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
+│   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
+│   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+├── logging/
+│   ├── mod.rs               # KmsgLogger initializer
+│   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
+├── mode/
+│   ├── mod.rs               # BootMode enum, BootContext, detect()
+│   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
+├── partition/
+│   ├── mod.rs               # Public API
+│   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
+│   ├── layout.rs            # GPT/DOS partition map builder
+│   └── symlinks.rs          # /dev/omnect/* symlink creation
+└── runtime/
+    ├── mod.rs               # Public API
+    ├── fs_link.rs           # fs-link symlink creation
+    ├── omnect_device_service.rs  # ODS JSON status file writer
+    └── switch_root.rs       # MS_MOVE + chroot transition to real rootfs; execs init
+```
 
 ## 3. Build & Test Commands
 - **Build:** `cargo build` / `cargo build --release`
