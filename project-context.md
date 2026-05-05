@@ -6,19 +6,44 @@
 - **Language:** Rust (safety-critical, no_std-friendly patterns)
 - **Target:** Embedded Linux (x86-64 EFI with GRUB, ARM with U-Boot)
 
-## 2. Key Files
-- `src/main.rs`: Entry point, mounts essential filesystems, initializes logging
-- `src/lib.rs`: Library exports for all modules
-- `src/error.rs`: Hierarchical error types (`InitramfsError`, subsystem errors)
-- `src/early_init.rs`: Mounts `/dev`, `/proc`, `/sys` before anything else
-- `src/bootloader/mod.rs`: Trait-based abstraction over GRUB/U-Boot
-- `src/bootloader/grub.rs`: GRUB implementation using `grub-editenv`
-- `src/bootloader/uboot.rs`: U-Boot implementation using `fw_printenv`/`fw_setenv`
-- `src/config/mod.rs`: Parses `/proc/cmdline`; build-time constants from Yocto env via `build.rs`
-- `src/logging/kmsg.rs`: Writes to `/dev/kmsg` with kernel log levels
-- `src/partition/device.rs`: Detects root block device from cmdline (GRUB UUID or U-Boot path)
-- `src/filesystem/overlayfs.rs`: Sets up overlayfs for `/etc`, `/home`; bind-mounts `/var/lib`, `/usr/local`
-- `src/runtime/switch_root.rs`: MS_MOVE + chroot transition to real rootfs; execs init
+## 2. Module Structure
+
+```
+src/
+├── main.rs                  # Binary entry point
+├── lib.rs                   # Library exports + run_init() (unit-testable entry point)
+├── error.rs                 # Error type hierarchy
+├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
+├── bootloader/
+│   ├── mod.rs               # Bootloader trait + build-time selection (grub/uboot feature)
+│   ├── grub.rs              # GRUB implementation (grub-editenv)
+│   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
+│   └── types.rs             # BootloaderType enum
+├── config/
+│   └── mod.rs               # /proc/cmdline parser; build-time constants via build.rs
+├── filesystem/
+│   ├── mod.rs               # Public API
+│   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
+│   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
+│   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
+│   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+├── logging/
+│   ├── mod.rs               # KmsgLogger initializer
+│   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
+├── mode/
+│   ├── mod.rs               # BootMode enum, BootContext, detect()
+│   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
+├── partition/
+│   ├── mod.rs               # Public API
+│   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
+│   ├── layout.rs            # GPT/DOS partition map builder
+│   └── symlinks.rs          # /dev/omnect/* symlink creation
+└── runtime/
+    ├── mod.rs               # Public API
+    ├── fs_link.rs           # fs-link symlink creation
+    ├── omnect_device_service.rs  # ODS JSON status file writer
+    └── switch_root.rs       # MS_MOVE + chroot transition to real rootfs; execs init
+```
 
 ## 3. Build & Test Commands
 - **Build:** `cargo build` / `cargo build --release`
@@ -65,3 +90,26 @@
 - **Kernel cmdline:** `rootpart=` (GRUB: root partition number), `bootpart_fsuuid=` (GRUB: boot partition UUID), `root=` (U-Boot: full root device path), `init=` (optional init binary override), `quiet` (suppress console output); `rootblk=` is parsed for device symlink naming only — no logic reads it
 - **Device symlinks:** Creates `/dev/omnect/{boot,rootfs,data,...}`
 - **ODS:** Prepares runtime files for `omnect-device-service`
+
+## 8. Planned Features (not yet implemented)
+
+### BootMode variants
+The `BootMode` enum (`src/mode/mod.rs`) currently only has `Normal`. The following variants are planned:
+- `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
+- `Resize` — resizes partitions on first boot after image flash
+- `FlashMode(FlashKind)` — enables in-field OS flashing
+
+When implementing a new variant:
+1. Add the variant to `BootMode` and update `BootMode::detect()` to read the relevant bootloader env key. If the key is absent or the bootloader is unavailable, `detect()` must return `Normal` (degraded boot).
+2. Add typed payload structs as needed (define them in `src/mode/mod.rs` near the `BootMode` enum).
+3. Add `BootloaderEnvKey` entries for the detection keys.
+4. Add a handler module under `src/mode/` mirroring `src/mode/normal.rs`.
+5. Cover in tests: env-var present + live bootloader, env-var present + no bootloader (degraded fallback to `Normal`), env-var absent.
+
+## 9. Documentation Standards
+
+### Source-code comments and doc-strings
+- **Explain "why", not "what":** The code shows what it does; comments explain constraints, non-obvious rationale, or invariants.
+- **No history in comments:** Do not reference previous implementations ("legacy bash", "previously this was…"), PR numbers, or merge order.
+- **No forward scaffolding in comments:** Do not describe features not yet implemented in the same comment block. Track planned work in section 8 of this file instead.
+- **Concise doc-strings:** A doc-string should be as long as it needs to be and no longer. Avoid restating the function signature or obvious behaviour.

@@ -72,42 +72,6 @@ cargo test --features uboot,dos  # ARM targets, DOS/MBR
 cargo test --features grub,gpt -- --nocapture
 ```
 
-## Architecture
-
-```
-src/
-├── main.rs                  # Entry point (PID 1)
-├── lib.rs                   # Library exports
-├── error.rs                 # Error type hierarchy
-├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
-├── bootloader/
-│   ├── mod.rs               # Bootloader trait + build-time selection (grub/uboot feature)
-│   ├── grub.rs              # GRUB implementation (grub-editenv)
-│   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
-│   └── types.rs             # BootloaderType enum
-├── config/
-│   └── mod.rs               # /proc/cmdline parser; build-time constants via build.rs
-├── filesystem/
-│   ├── mod.rs               # Public API
-│   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
-│   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
-│   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
-│   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
-├── logging/
-│   ├── mod.rs               # KmsgLogger initializer
-│   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
-├── partition/
-│   ├── mod.rs               # Public API
-│   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
-│   ├── layout.rs            # GPT/DOS partition map builder
-│   └── symlinks.rs          # /dev/omnect/* symlink creation
-└── runtime/
-    ├── mod.rs               # Public API
-    ├── fs_link.rs           # fs-link symlink creation
-    ├── omnect_device_service.rs  # ODS JSON status file writer
-    └── switch_root.rs       # MS_MOVE new root to / + chroot + exec init
-```
-
 ## License
 
 MIT OR Apache-2.0

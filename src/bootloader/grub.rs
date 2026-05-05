@@ -46,7 +46,7 @@ fn get_fsck_from_file(partition: PartitionName) -> crate::bootloader::Result<Opt
         command: format!("read {}", file_path.display()),
         reason: e.to_string(),
     })?;
-    // Remove file after reading — matches legacy behaviour
+    // Remove file after reading; each fsck result is consumed once.
     if let Err(e) = fs::remove_file(&file_path) {
         log::warn!(
             "Failed to remove fsck status file {}: {}",
@@ -154,7 +154,7 @@ impl Bootloader for GrubBootloader {
             PartitionName::Boot => {
                 // When the boot partition's own fsck requests a reboot, writing to
                 // grubenv is unreliable — the filesystem is in an inconsistent state.
-                // Match legacy behaviour and skip; a clean check runs on next boot.
+                // Skip; a clean check runs on next boot.
                 if code.is_reboot_required() {
                     log::warn!(
                         "Skipping grubenv write for boot partition (fsck exit code {code} — reboot required)"
@@ -177,7 +177,7 @@ impl Bootloader for GrubBootloader {
                 // instead of grubenv. grubenv is a fixed 1024-byte block — storing multiple
                 // large encoded blobs there would overflow it. Boot is healthy at this point
                 // (its own fsck ran first), so this write is safe regardless of this
-                // partition's exit code. Matches legacy bash behaviour.
+                // partition's exit code.
                 save_fsck_to_file(partition, &encoded)
             }
             #[cfg(feature = "dos")]

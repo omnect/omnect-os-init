@@ -84,10 +84,10 @@ pub fn mount_partitions(
         )))
     })?;
 
-    // rootCurrent is mounted directly — no fsck. Legacy bash never runs check_fs on
-    // rootCurrent either: the kernel's own ext4 journal replay is the correct recovery
-    // mechanism. Running fsck -y before mount can interfere with journal replay and
-    // cause EUCLEAN on a filesystem that the kernel could have mounted cleanly.
+    // rootCurrent is mounted directly without fsck: the kernel's own ext4 journal
+    // replay is the correct recovery mechanism. Running fsck -y before mount can
+    // interfere with journal replay and cause EUCLEAN on a filesystem that the kernel
+    // could have mounted cleanly.
     mount(MountPoint::new(
         root_dev,
         rootfs,
