@@ -22,7 +22,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     } = ctx;
 
     #[cfg(feature = "resize-data")]
-    crate::mode::resize_data::resize_if_needed(layout, &mut bootloader, rootfs)?;
+    crate::mode::resize_data::resize_if_needed(layout, &mut bootloader)?;
 
     // Capture the result so we can persist fsck diagnostics before propagating
     // a mount failure.

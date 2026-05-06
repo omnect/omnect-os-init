@@ -131,17 +131,6 @@ pub fn mount_remaining_partitions(
     rootfs: &Path,
     ods_status: &mut OdsStatus,
 ) -> crate::error::Result<()> {
-    // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
-    if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
-        let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            cert_dev,
-            &cert_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
-    }
-
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
         fsck_and_record(
@@ -154,6 +143,17 @@ pub fn mount_remaining_partitions(
             factory_dev,
             &factory_mount,
             MountOptions::ext4_readonly().noatime().nodiratime(),
+        ))?;
+    }
+
+    // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
+    if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
+        let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
+        fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
+        mount(MountPoint::new(
+            cert_dev,
+            &cert_mount,
+            MountOptions::ext4_readwrite().noatime().nodiratime(),
         ))?;
     }
 
@@ -350,8 +350,6 @@ mod tests {
     fn test_persist_zero_code_not_saved() {
         // Exit code 0 (clean) must not trigger any bootloader write.
         let ods = make_ods_with(PartitionName::Boot, 0, "clean");
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -364,8 +362,6 @@ mod tests {
     fn test_persist_nonzero_calls_save_fsck_status() {
         // Non-zero exit code must call save_fsck_status with correct args.
         let ods = make_ods_with(PartitionName::Boot, 1, "errors corrected");
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -381,8 +377,6 @@ mod tests {
     fn test_persist_empty_output_still_calls_bootloader_but_no_log_dir() {
         // Empty output: bootloader is still called (code != 0), but no log dir is created.
         let ods = make_ods_with(PartitionName::Data, 4, "");
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -402,8 +396,6 @@ mod tests {
         ods.add_fsck_result(PartitionName::Etc, 0, "clean".to_string());
         ods.add_fsck_result(PartitionName::Cert, 4, "uncorrected errors".to_string());
 
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
@@ -422,8 +414,6 @@ mod tests {
     fn test_persist_bootloader_save_failure_does_not_abort() {
         // A failing bootloader must not panic or propagate — it is non-fatal.
         let ods = make_ods_with(PartitionName::Boot, 2, "reboot required");
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = FailingBootloader;
 
@@ -435,8 +425,6 @@ mod tests {
     fn test_persist_data_not_mounted_no_log_dir_created() {
         // When data partition is not mounted (normal in tests), no log dir is created.
         let ods = make_ods_with(PartitionName::Boot, 1, "some output");
-        // safe: TempDir::new() only fails if the OS cannot create temp directories;
-        //       that would be a test infrastructure failure, not a code defect.
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
