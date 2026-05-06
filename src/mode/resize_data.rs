@@ -180,9 +180,10 @@ fn parse_extended_partition_nr(parted_output: &str) -> Option<u32> {
 /// If no mtab exists (or a stale symlink is in its place), creates a symlink
 /// to `/proc/self/mounts`. A real mtab file is left untouched.
 fn ensure_mtab() -> ResizeResult<()> {
-    let mtab = Path::new(MTAB_PATH);
-    let target = Path::new(PROC_MOUNTS_PATH);
+    ensure_mtab_at(Path::new(MTAB_PATH), Path::new(PROC_MOUNTS_PATH))
+}
 
+fn ensure_mtab_at(mtab: &Path, target: &Path) -> ResizeResult<()> {
     if mtab.exists() && !mtab.is_symlink() {
         return Ok(());
     }
@@ -381,42 +382,35 @@ Number  Start   End     Size   File system  Name  Flags
         let target = dir.path().join("mounts");
         std::fs::write(&target, "").unwrap();
 
-        // Temporarily override by calling the logic inline via a helper.
-        // We can't override the consts, so test the behaviour by invoking
-        // the same steps ensure_mtab performs.
-        assert!(!mtab.exists());
-        std::os::unix::fs::symlink(&target, &mtab).unwrap();
+        assert!(ensure_mtab_at(&mtab, &target).is_ok());
         assert!(mtab.is_symlink());
+        assert!(mtab.exists());
     }
 
     #[test]
     fn test_ensure_mtab_leaves_real_file_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let mtab = dir.path().join("mtab");
+        let target = dir.path().join("mounts");
         std::fs::write(&mtab, "original").unwrap();
 
-        // A real file must not be modified.
-        assert!(mtab.exists() && !mtab.is_symlink());
-        let content = std::fs::read_to_string(&mtab).unwrap();
-        assert_eq!(content, "original");
+        assert!(ensure_mtab_at(&mtab, &target).is_ok());
+        assert!(!mtab.is_symlink());
+        assert_eq!(std::fs::read_to_string(&mtab).unwrap(), "original");
     }
 
     #[test]
     fn test_ensure_mtab_replaces_stale_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let mtab = dir.path().join("mtab");
-        let stale_target = dir.path().join("nonexistent");
-        let real_target = dir.path().join("mounts");
-        std::fs::write(&real_target, "").unwrap();
+        let stale = dir.path().join("nonexistent");
+        let target = dir.path().join("mounts");
+        std::fs::write(&target, "").unwrap();
 
-        // Create a stale (dangling) symlink.
-        std::os::unix::fs::symlink(&stale_target, &mtab).unwrap();
-        assert!(mtab.is_symlink());
+        std::os::unix::fs::symlink(&stale, &mtab).unwrap();
         assert!(!mtab.exists()); // dangling
 
-        // Replace stale symlink with a valid one.
-        std::fs::remove_file(&mtab).unwrap();
-        std::os::unix::fs::symlink(&real_target, &mtab).unwrap();
+        assert!(ensure_mtab_at(&mtab, &target).is_ok());
         assert!(mtab.is_symlink());
         assert!(mtab.exists());
     }
