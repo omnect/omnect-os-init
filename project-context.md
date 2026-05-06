@@ -32,7 +32,8 @@ src/
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── mode/
 │   ├── mod.rs               # BootMode enum, BootContext, detect()
-│   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
+│   ├── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
+│   └── resize_data.rs       # Data partition auto-resize on first boot (feature = resize-data)
 ├── partition/
 │   ├── mod.rs               # Public API
 │   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
@@ -50,12 +51,16 @@ src/
 - **Check:** `cargo check`
 - **Format:** `cargo fmt -- --check`
 - **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
-- **Test:** Run all four valid feature combinations:
+- **Test:** Run all eight valid feature combinations:
   ```
   cargo test --features grub,gpt
   cargo test --features grub,dos
   cargo test --features uboot,gpt
   cargo test --features uboot,dos
+  cargo test --features grub,gpt,resize-data
+  cargo test --features grub,dos,resize-data
+  cargo test --features uboot,gpt,resize-data
+  cargo test --features uboot,dos,resize-data
   ```
 - **Audit:** `cargo audit`
 
@@ -69,6 +74,7 @@ src/
 | `dos` | DOS/MBR partition table (extended at slot 4, logical 5-8; mutually exclusive with `gpt`) |
 | `persistent-var-log` | Persistent `/var/log` mount |
 | `release-image` | Release behaviour: infinite loop on fatal error |
+| `resize-data` | Expand data partition + filesystem to fill disk on first boot |
 
 ## 5. Runtime Constraints
 - **Heap allocation is used freely** (`String`, `PathBuf`, `HashMap`); the OS image provides a standard allocator
@@ -96,7 +102,6 @@ src/
 ### BootMode variants
 The `BootMode` enum (`src/mode/mod.rs`) currently only has `Normal`. The following variants are planned:
 - `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
-- `Resize` — resizes partitions on first boot after image flash
 - `FlashMode(FlashKind)` — enables in-field OS flashing
 
 When implementing a new variant:
