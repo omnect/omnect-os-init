@@ -316,8 +316,6 @@ Number  Start   End     Size   File system  Name  Flags
         assert_eq!(parse_extended_partition_nr(output), None);
     }
 
-    // ---- one-shot guard tests (M4) ----------------------------------------
-
     #[test]
     fn test_guard_skips_when_already_resized() {
         use crate::bootloader::MockBootloader;
@@ -375,8 +373,6 @@ Number  Start   End     Size   File system  Name  Flags
                 .is_none()
         );
     }
-
-    // ---- ensure_mtab tests (M6) -------------------------------------------
 
     #[test]
     fn test_ensure_mtab_creates_symlink_when_missing() {
