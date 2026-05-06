@@ -39,7 +39,6 @@ impl<'a> BootContext<'a> {
 pub enum BootMode {
     Normal,
     // FactoryReset(FactoryResetConfig)
-    // Resize
     // FlashMode(FlashKind)
 }
 
