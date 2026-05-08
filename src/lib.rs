@@ -53,11 +53,11 @@ pub fn run_init() -> Result<()> {
 
     let mut ods_status = OdsStatus::new();
 
-    // Mount core partitions (rootfs + boot); boot must be mounted before create_bootloader()
-    // (GRUB reads grubenv from rootfs/boot/EFI/BOOT/grubenv).
+    // Mount core partitions (rootfs + boot); boot must be mounted before
+    // open_bootloader_env() — on GRUB builds grubenv lives on the boot partition.
     mount_core_partitions(&layout, rootfs, &mut ods_status)?;
 
-    // Best-effort: a corrupted grubenv is a recoverable degraded-boot condition.
+    // Best-effort: a corrupted bootloader environment is a recoverable degraded-boot condition.
     // Promote failure to None so the rest of init proceeds; ODS bootloader-dependent
     // state is skipped rather than aborting a boot that otherwise succeeds.
     let bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {

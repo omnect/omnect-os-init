@@ -61,9 +61,9 @@ pub fn fsck_and_record(
 /// Mount the core partitions required before the bootloader can be created.
 ///
 /// Mounts rootCurrent (read-only) and boot (read-write). Must be called before
-/// `create_bootloader()` because GRUB reads grubenv from the boot partition.
-/// `mount_remaining_partitions` must be called afterward to complete
-/// the full partition mount sequence.
+/// `open_bootloader_env()` — the boot partition must be present when the bootloader
+/// environment is opened. `mount_remaining_partitions` must be called afterward
+/// to complete the full partition mount sequence.
 pub fn mount_core_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
