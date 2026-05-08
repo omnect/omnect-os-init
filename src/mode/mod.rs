@@ -38,8 +38,6 @@ impl<'a> BootContext<'a> {
 /// The detected boot mode to execute.
 pub enum BootMode {
     Normal,
-    // FactoryReset(FactoryResetConfig)
-    // FlashMode(FlashKind)
 }
 
 impl BootMode {
