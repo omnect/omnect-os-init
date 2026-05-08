@@ -57,13 +57,13 @@ pub fn run_init() -> Result<()> {
     // open_bootloader_env() — on GRUB builds grubenv lives on the boot partition.
     mount_core_partitions(&layout, rootfs, &mut ods_status)?;
 
-    // Best-effort: a corrupted bootloader environment is a recoverable degraded-boot condition.
-    // Promote failure to None so the rest of init proceeds; ODS bootloader-dependent
-    // state is skipped rather than aborting a boot that otherwise succeeds.
+    // Best-effort: an unavailable bootloader environment is a recoverable degraded-boot condition.
+    // Promote failure to None so the rest of init proceeds rather than aborting a boot that
+    // otherwise succeeds.
     let bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
         Ok(bl) => Some(bl),
         Err(e) => {
-            warn!("Bootloader unavailable: {e}; ODS update-validation will be skipped");
+            warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
             None
         }
     };
