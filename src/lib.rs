@@ -26,7 +26,7 @@ pub mod partition;
 pub mod runtime;
 
 // Re-export main types for convenience
-pub use crate::bootloader::{Bootloader, create_bootloader};
+pub use crate::bootloader::{Bootloader, open_bootloader_env};
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
@@ -60,7 +60,7 @@ pub fn run_init() -> Result<()> {
     // Best-effort: a corrupted bootloader environment is a recoverable degraded-boot condition.
     // Promote failure to None so the rest of init proceeds; ODS bootloader-dependent
     // state is skipped rather than aborting a boot that otherwise succeeds.
-    let bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {
+    let bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
         Ok(bl) => Some(bl),
         Err(e) => {
             warn!("Bootloader unavailable: {e}; ODS update-validation will be skipped");

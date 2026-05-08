@@ -99,14 +99,14 @@ pub trait Bootloader: Send + Sync {
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()>;
 }
 
-/// Creates the appropriate bootloader implementation based on the build-time feature flag.
+/// Opens the appropriate bootloader environment implementation based on the build-time feature flag.
 ///
 /// The bootloader type is a build-time property of the target platform:
 /// - `grub` feature: x86-64 EFI targets using GRUB (`grub-editenv`)
 /// - `uboot` feature: ARM targets using U-Boot (`fw_printenv`/`fw_setenv`)
 ///
 /// Exactly one of `grub` or `uboot` must be enabled; build.rs enforces this.
-pub fn create_bootloader() -> Result<Box<dyn Bootloader>> {
+pub fn open_bootloader_env() -> Result<Box<dyn Bootloader>> {
     #[cfg(feature = "grub")]
     return Ok(Box::new(GrubBootloader::new()?));
 
