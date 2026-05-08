@@ -58,7 +58,7 @@ pub fn fsck_and_record(
     }
 }
 
-/// Mount the core partitions required before the bootloader can be created.
+/// Mount the core partitions required before the bootloader environment can be opened.
 ///
 /// Mounts rootCurrent (read-only) and boot (read-write). Must be called before
 /// `open_bootloader_env()` — the boot partition must be present when the bootloader
