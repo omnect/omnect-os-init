@@ -48,8 +48,18 @@ impl BootMode {
     /// Detect the boot mode from bootloader environment variables.
     ///
     /// Returns `Normal` when the bootloader is absent (degraded boot).
-    /// `_bl` becomes active once a non-Normal variant is added.
-    pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
+    pub fn detect(bl: Option<&dyn Bootloader>) -> Result<Self> {
+        #[cfg(feature = "resize-data")]
+        {
+            if let Some(bl) = bl
+                && bl
+                    .get_env(crate::bootloader::BootloaderEnvKey::ResizedData)?
+                    .is_none()
+            {
+                return Ok(Self::FirstBoot);
+            }
+        }
+        let _ = bl;
         Ok(Self::Normal)
     }
 }
@@ -61,9 +71,20 @@ mod tests {
 
     #[test]
     fn detect_normal_with_live_bootloader() {
-        let mock = create_mock_bootloader();
-        let mode = BootMode::detect(Some(&mock)).unwrap();
-        assert!(matches!(mode, BootMode::Normal));
+        // Guard is set → normal boot even with a live bootloader
+        #[cfg(feature = "resize-data")]
+        {
+            let mock = create_mock_bootloader()
+                .with_env(crate::bootloader::BootloaderEnvKey::ResizedData, "1");
+            let mode = BootMode::detect(Some(&mock)).unwrap();
+            assert!(matches!(mode, BootMode::Normal));
+        }
+        #[cfg(not(feature = "resize-data"))]
+        {
+            let mock = create_mock_bootloader();
+            let mode = BootMode::detect(Some(&mock)).unwrap();
+            assert!(matches!(mode, BootMode::Normal));
+        }
     }
 
     #[test]
