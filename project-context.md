@@ -26,14 +26,15 @@ src/
 │   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
 │   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
 │   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
-│   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+│   ├── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+│   └── resize_data.rs       # Data partition auto-resize on first boot (feature = resize-data)
 ├── logging/
 │   ├── mod.rs               # KmsgLogger initializer
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── mode/
 │   ├── mod.rs               # BootMode enum, BootContext, detect()
-│   ├── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
-│   └── resize_data.rs       # Data partition auto-resize on first boot (feature = resize-data)
+│   ├── first_boot.rs        # FirstBoot handler: resize data partition then delegate to normal (feature = resize-data)
+│   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
 ├── partition/
 │   ├── mod.rs               # Public API
 │   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
@@ -100,7 +101,11 @@ src/
 ## 8. Planned Features (not yet implemented)
 
 ### BootMode variants
-The `BootMode` enum (`src/mode/mod.rs`) currently only has `Normal`. The following variants are planned:
+The `BootMode` enum (`src/mode/mod.rs`) has the following implemented variants:
+- `FirstBoot` (feature = `resize-data`) — expands data partition + filesystem to fill disk; detected when `omnect_resized_data` guard is absent and a live bootloader is available; delegates to `Normal` after resize
+- `Normal` — standard boot path
+
+The following variants are planned:
 - `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
 - `FlashMode(FlashKind)` — enables in-field OS flashing
 
