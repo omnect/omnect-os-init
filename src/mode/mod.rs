@@ -2,6 +2,8 @@ use std::path::Path;
 
 use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus};
 
+#[cfg(feature = "resize-data")]
+pub mod first_boot;
 pub mod normal;
 #[cfg(feature = "resize-data")]
 pub mod resize_data;
@@ -37,6 +39,8 @@ impl<'a> BootContext<'a> {
 
 /// The detected boot mode to execute.
 pub enum BootMode {
+    #[cfg(feature = "resize-data")]
+    FirstBoot,
     Normal,
 }
 

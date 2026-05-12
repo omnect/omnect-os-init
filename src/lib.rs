@@ -72,8 +72,9 @@ pub fn run_init() -> Result<()> {
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
-    #[allow(clippy::single_match)]
     match mode {
+        #[cfg(feature = "resize-data")]
+        BootMode::FirstBoot => mode::first_boot::run(ctx),
         BootMode::Normal => mode::normal::run(ctx),
     }
 }
