@@ -67,4 +67,23 @@ mod tests {
         let mode = BootMode::detect(None).unwrap();
         assert!(matches!(mode, BootMode::Normal));
     }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn detect_first_boot_when_guard_absent() {
+        // No ResizedData key → first boot
+        let mock = create_mock_bootloader();
+        let mode = BootMode::detect(Some(&mock)).unwrap();
+        assert!(matches!(mode, BootMode::FirstBoot));
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn detect_normal_when_guard_present() {
+        // ResizedData already set → normal boot
+        let mock = create_mock_bootloader()
+            .with_env(crate::bootloader::BootloaderEnvKey::ResizedData, "1");
+        let mode = BootMode::detect(Some(&mock)).unwrap();
+        assert!(matches!(mode, BootMode::Normal));
+    }
 }
