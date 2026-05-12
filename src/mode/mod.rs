@@ -5,8 +5,6 @@ use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runt
 #[cfg(feature = "resize-data")]
 pub mod first_boot;
 pub mod normal;
-#[cfg(feature = "resize-data")]
-pub mod resize_data;
 
 /// Runtime context passed to the active boot-mode handler.
 ///

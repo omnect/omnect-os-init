@@ -9,6 +9,8 @@ mod boot_sequence;
 mod fsck;
 mod mount;
 mod overlayfs;
+#[cfg(feature = "resize-data")]
+pub mod resize_data;
 
 pub use self::boot_sequence::{
     fsck_and_record, mount_core_partitions, mount_remaining_partitions, persist_fsck_results,

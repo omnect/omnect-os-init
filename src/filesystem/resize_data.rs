@@ -1,8 +1,8 @@
 //! Data partition auto-resize
 //!
 //! Expands the data partition and its ext4 filesystem to fill available disk
-//! space on first boot. Guarded by the `omnect_resized_data` bootloader variable so
-//! it runs exactly once.
+//! space on first boot. Called from `mode::first_boot` on every first boot
+//! (the caller guarantees the resize guard is absent before invoking this).
 
 use std::os::unix::fs::symlink;
 use std::path::Path;
@@ -35,18 +35,8 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: &mut Option<Box<dyn Bootloader>>,
+    bootloader: &mut Box<dyn Bootloader>,
 ) -> Result<()> {
-    let Some(ref mut bl) = *bootloader else {
-        log::warn!("Bootloader unavailable; skipping data partition resize");
-        return Ok(());
-    };
-
-    if bl.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
-        log::info!("Data partition already resized, skipping");
-        return Ok(());
-    }
-
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
         None => {
@@ -114,7 +104,7 @@ pub fn resize_if_needed(
 
     run_cmd(SYNC_CMD, &[])?;
 
-    bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
+    bootloader.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
 
     log::info!("Data partition resize complete");
     Ok(())
@@ -318,7 +308,7 @@ Number  Start   End     Size   File system  Name  Flags
     }
 
     #[test]
-    fn test_guard_skips_when_already_resized() {
+    fn test_resize_skips_when_data_partition_absent() {
         use crate::bootloader::MockBootloader;
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
@@ -331,48 +321,10 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        let mock = MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1");
-        let mut bl: Option<Box<dyn crate::bootloader::Bootloader>> = Some(Box::new(mock));
+        let mut bl: Box<dyn crate::bootloader::Bootloader> = Box::new(MockBootloader::new());
 
         assert!(resize_if_needed(&layout, &mut bl).is_ok());
-        // Flag must still be set — no commands ran to modify it.
-        assert!(
-            bl.as_ref()
-                .unwrap()
-                .get_env(BootloaderEnvKey::ResizedData)
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn test_guard_does_not_set_flag_on_missing_data_partition() {
-        use crate::bootloader::MockBootloader;
-        use crate::partition::{PartitionLayout, RootDevice};
-        use std::collections::HashMap;
-
-        // Empty layout — no data partition present.
-        let layout = PartitionLayout {
-            partitions: HashMap::new(),
-            device: RootDevice {
-                base: std::path::PathBuf::from("/dev/sda"),
-                partition_sep: "",
-                root_partition: std::path::PathBuf::from("/dev/sda2"),
-            },
-        };
-        let mock = MockBootloader::new();
-        let mut bl: Option<Box<dyn crate::bootloader::Bootloader>> = Some(Box::new(mock));
-
-        // Returns Ok early with a warning — no real resize attempted.
-        assert!(resize_if_needed(&layout, &mut bl).is_ok());
-        // Flag must NOT be set because no resize was performed.
-        assert!(
-            bl.as_ref()
-                .unwrap()
-                .get_env(BootloaderEnvKey::ResizedData)
-                .unwrap()
-                .is_none()
-        );
+        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none());
     }
 
     #[test]

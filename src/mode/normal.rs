@@ -21,9 +21,6 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
         mut ods_status,
     } = ctx;
 
-    #[cfg(feature = "resize-data")]
-    crate::mode::resize_data::resize_if_needed(layout, &mut bootloader)?;
-
     // Capture the result so we can persist fsck diagnostics before propagating
     // a mount failure.
     let mount_result = mount_remaining_partitions(layout, rootfs, &mut ods_status);
