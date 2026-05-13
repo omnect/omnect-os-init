@@ -3,6 +3,13 @@
 //!
 //! Each step is independently feature-gated and idempotent — guarded by
 //! bootloader env or filesystem state so it runs at most once per trigger.
+//!
+//! # Two-layer structure
+//!
+//! Each preflight step module (`preflight::resize_data`, …) is responsible
+//! only for the guard check and feature routing. The implementation
+//! lives in the corresponding `filesystem::*` module so it can be tested
+//! in isolation without a full `PreflightCtx`.
 
 #[cfg(feature = "resize-data")]
 pub mod resize_data;
