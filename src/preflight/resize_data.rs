@@ -10,7 +10,7 @@ use crate::preflight::PreflightCtx;
 
 pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
     let Some(ref mut bl) = ctx.bootloader else {
-        log::warn!("resize-data preflight: bootloader unavailable; skipping");
+        log::warn!("resize-data preflight: bootloader environment unavailable; skipping");
         return Ok(());
     };
 
