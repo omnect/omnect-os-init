@@ -1,11 +1,16 @@
-use crate::{Result, mode::BootContext};
+use crate::{
+    Result,
+    error::{BootloaderError, InitramfsError},
+    mode::BootContext,
+};
 
 pub fn run(mut ctx: BootContext<'_>) -> Result<()> {
-    // Invariant: FirstBoot is only dispatched when a live bootloader was detected.
-    let bl = ctx
-        .bootloader
-        .as_mut()
-        .expect("FirstBoot requires a live bootloader");
+    let bl = ctx.bootloader.as_mut().ok_or_else(|| {
+        InitramfsError::Bootloader(BootloaderError::CommandFailed {
+            command: "first_boot::run".into(),
+            reason: "bootloader unavailable on first boot".into(),
+        })
+    })?;
     crate::filesystem::resize_data::resize_if_needed(ctx.layout, bl)?;
     crate::mode::normal::run(ctx)
 }
