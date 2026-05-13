@@ -66,6 +66,12 @@ impl BootloaderEnvKey {
 /// This trait abstracts the differences between GRUB and U-Boot bootloader
 /// environment access, allowing the rest of the codebase to work with
 /// bootloader variables in a unified way.
+///
+/// The minimal required interface is `get_env` and `set_env`. The fsck helpers
+/// (`save_fsck_status`, `get_fsck_status`, `clear_fsck_status`) have default
+/// implementations that encode/decode via `get_env`/`set_env`. Bootloader
+/// backends with custom storage strategies (e.g. GRUB's per-partition files)
+/// should override the relevant methods.
 pub trait Bootloader: Send + Sync {
     /// Get the value of a bootloader environment variable
     ///
@@ -87,16 +93,25 @@ pub trait Bootloader: Send + Sync {
         partition: PartitionName,
         code: FsckExitCode,
         output: &str,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        let encoded = types::encode_fsck_output(code.bits(), output);
+        self.set_env(BootloaderEnvKey::FsckStatus(partition), Some(&encoded))
+    }
 
     /// Get fsck status from bootloader environment.
     ///
     /// Returns the decoded `FsckRecord` if a value is present,
     /// or `None` if no status was stored for this partition.
-    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>>;
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        Ok(self
+            .get_env(BootloaderEnvKey::FsckStatus(partition))?
+            .and_then(|v| types::decode_fsck_output(&v)))
+    }
 
     /// Clear fsck status from bootloader environment
-    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()>;
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        self.set_env(BootloaderEnvKey::FsckStatus(partition), None)
+    }
 }
 
 /// Opens the appropriate bootloader environment implementation based on the build-time feature flag.

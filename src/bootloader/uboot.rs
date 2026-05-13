@@ -5,13 +5,8 @@
 
 use std::process::Command;
 
-use crate::bootloader::{
-    Bootloader, BootloaderEnvKey, FsckRecord, Result,
-    types::{decode_fsck_output, encode_fsck_output},
-};
+use crate::bootloader::{Bootloader, BootloaderEnvKey, Result};
 use crate::error::BootloaderError;
-use crate::filesystem::FsckExitCode;
-use crate::partition::PartitionName;
 
 /// Command to read U-Boot environment variables
 const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
@@ -22,8 +17,7 @@ const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
-/// Fsck status is stored as gzip+base64 encoded `"exit_code\noutput"` string
-/// via busybox subprocess commands to survive the reboot required after fsck.
+/// Fsck status encoding is handled by the default `Bootloader` trait methods.
 pub struct UBootBootloader {
     // No state needed - commands access environment directly
 }
@@ -104,30 +98,5 @@ impl Bootloader for UBootBootloader {
 
     fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
         self.run_fw_setenv(key.as_str().as_ref(), value)
-    }
-
-    fn save_fsck_status(
-        &mut self,
-        partition: PartitionName,
-        code: FsckExitCode,
-        output: &str,
-    ) -> Result<()> {
-        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
-        self.run_fw_setenv(
-            var_name.as_ref(),
-            Some(&encode_fsck_output(code.bits(), output)),
-        )
-    }
-
-    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
-        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
-        Ok(self
-            .run_fw_printenv(var_name.as_ref())?
-            .and_then(|v| decode_fsck_output(&v)))
-    }
-
-    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
-        let var_name = BootloaderEnvKey::FsckStatus(partition).as_str();
-        self.run_fw_setenv(var_name.as_ref(), None)
     }
 }
