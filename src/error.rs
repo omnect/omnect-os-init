@@ -170,7 +170,7 @@ pub enum ResizeDataError {
     #[error("Could not find extended partition on {}", .0.display())]
     ExtendedPartitionNotFound(PathBuf),
 
-    #[error("device path is not valid UTF-8: {}", .0.display())]
+    #[error("Device path is not valid UTF-8: {}", .0.display())]
     NonUtf8Path(PathBuf),
 
     #[error("Filesystem error: {0}")]

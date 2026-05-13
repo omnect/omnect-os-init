@@ -12,6 +12,14 @@ use crate::{
     runtime::{ODS_RUNTIME_DIR, create_fs_links, create_ods_runtime_files, switch_root},
 };
 
+/// Run the normal boot path.
+///
+/// # Mode obligation: persist fsck results
+///
+/// This handler (and any future mode handler) is responsible for calling
+/// `persist_fsck_results` after `mount_remaining_partitions`, capturing the
+/// result before propagating any mount error. Skipping this call means fsck
+/// diagnostics for data/factory/cert/etc are silently lost on a failed boot.
 pub fn run(ctx: BootContext<'_>) -> Result<()> {
     let BootContext {
         config,

@@ -87,6 +87,10 @@ pub fn resize_if_needed(
         ],
     )?;
 
+    // Run fsck on the (unmounted) data partition before expanding the filesystem.
+    // If this returns FsckRequiresReboot, the error propagates without persisting
+    // to ods_status. This is intentional: the data partition is fscked again in
+    // mount_remaining_partitions on the next boot, so the diagnostic is not lost.
     check_filesystem(&data_dev, FsType::Ext4)?;
 
     let data_dev_str = data_dev

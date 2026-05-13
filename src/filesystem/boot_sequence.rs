@@ -64,6 +64,16 @@ pub fn fsck_and_record(
 /// `open_bootloader_env()` — the boot partition must be present when the bootloader
 /// environment is opened. `mount_remaining_partitions` must be called afterward
 /// to complete the full partition mount sequence.
+///
+/// # Errors
+///
+/// Returns `FilesystemError::FsckRequiresReboot` if the boot partition fsck
+/// determines a clean reboot is needed before the filesystem can be safely used.
+/// In that case `ods_status` already holds the fsck diagnostic (recorded by
+/// `fsck_and_record`). **Callers must persist `ods_status` to the bootloader
+/// environment before propagating this error**, or the diagnostic is lost on
+/// the subsequent reboot. `run_init` handles this by opening the bootloader and
+/// calling `persist_fsck_results` before propagating.
 pub fn mount_core_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
