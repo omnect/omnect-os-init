@@ -10,7 +10,7 @@ use log::{info, warn};
 use crate::{
     config::Config,
     filesystem::{mount_core_partitions, persist_fsck_results},
-    mode::BootContext,
+    mode::{BootContext, BootMode},
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
 };
@@ -93,5 +93,7 @@ pub fn run_init() -> Result<()> {
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
-    mode::normal::run(ctx)
+    match BootMode::detect(ctx.bootloader.as_deref())? {
+        BootMode::Normal => mode::normal::run(ctx),
+    }
 }
