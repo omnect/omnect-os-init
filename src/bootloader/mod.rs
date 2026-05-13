@@ -142,6 +142,8 @@ pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
     /// fsck results stored as typed records — no subprocess encoding needed in tests.
     fsck: std::collections::HashMap<PartitionName, FsckRecord>,
+    /// Keys passed to set_env, in call order. Used by tests to verify set_env was/wasn't called.
+    pub set_env_calls: Vec<BootloaderEnvKey>,
 }
 
 #[cfg(test)]
@@ -163,6 +165,7 @@ impl Bootloader for MockBootloader {
     }
 
     fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+        self.set_env_calls.push(key);
         match value {
             Some(v) => {
                 self.env.insert(key.as_str().to_string(), v.to_string());

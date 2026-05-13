@@ -41,6 +41,22 @@ mod tests {
         }
     }
 
+    fn layout_with_data() -> PartitionLayout {
+        let mut partitions = HashMap::new();
+        partitions.insert(
+            crate::partition::PartitionName::Data,
+            std::path::PathBuf::from("/dev/sda8"),
+        );
+        PartitionLayout {
+            partitions,
+            device: RootDevice {
+                base: std::path::PathBuf::from("/dev/sda"),
+                partition_sep: "",
+                root_partition: std::path::PathBuf::from("/dev/sda2"),
+            },
+        }
+    }
+
     #[test]
     fn skips_when_bootloader_unavailable() {
         let layout = empty_layout();
@@ -53,7 +69,11 @@ mod tests {
 
     #[test]
     fn skips_when_guard_present() {
-        let layout = empty_layout();
+        // Layout includes a Data partition: if the guard check is bypassed and
+        // resize_if_needed runs, it will attempt to spawn sgdisk/parted (not present
+        // in the test environment) and return Err. The assert!(is_ok()) below would
+        // then fail, catching the bug.
+        let layout = layout_with_data();
         let mut bl: Box<dyn crate::bootloader::Bootloader> =
             Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
         {
