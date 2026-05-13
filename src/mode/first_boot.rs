@@ -11,6 +11,6 @@ pub fn run(mut ctx: BootContext<'_>) -> Result<()> {
             reason: "bootloader unavailable on first boot".into(),
         })
     })?;
-    crate::filesystem::resize_data::resize_if_needed(ctx.layout, bl)?;
+    crate::filesystem::resize_data::resize_if_needed(ctx.layout, bl.as_mut())?;
     crate::mode::normal::run(ctx)
 }

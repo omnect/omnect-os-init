@@ -34,7 +34,7 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: &mut Box<dyn Bootloader>,
+    bootloader: &mut dyn Bootloader,
 ) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
@@ -291,7 +291,7 @@ Number  Start   End     Size   File system  Name  Flags
         };
         let mut bl: Box<dyn crate::bootloader::Bootloader> = Box::new(MockBootloader::new());
 
-        assert!(resize_if_needed(&layout, &mut bl).is_ok());
+        assert!(resize_if_needed(&layout, bl.as_mut()).is_ok());
         assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none());
     }
 

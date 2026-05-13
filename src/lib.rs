@@ -23,6 +23,7 @@ pub mod filesystem;
 pub mod logging;
 pub mod mode;
 pub mod partition;
+pub mod preflight;
 pub mod runtime;
 
 // Re-export main types for convenience
