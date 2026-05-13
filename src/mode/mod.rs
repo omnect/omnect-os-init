@@ -2,13 +2,11 @@ use std::path::Path;
 
 use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus};
 
-#[cfg(feature = "resize-data")]
-pub mod first_boot;
 pub mod normal;
 
 /// Runtime context passed to the active boot-mode handler.
 ///
-/// A handler implements one boot path (normal, factory-reset, resize, …).
+/// A handler implements one boot path (normal, factory-reset, …).
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
     pub(crate) layout: &'a PartitionLayout,
@@ -37,8 +35,6 @@ impl<'a> BootContext<'a> {
 
 /// The detected boot mode to execute.
 pub enum BootMode {
-    #[cfg(feature = "resize-data")]
-    FirstBoot,
     Normal,
 }
 
@@ -46,18 +42,7 @@ impl BootMode {
     /// Detect the boot mode from bootloader environment variables.
     ///
     /// Returns `Normal` when the bootloader is absent (degraded boot).
-    pub fn detect(bl: Option<&dyn Bootloader>) -> Result<Self> {
-        #[cfg(feature = "resize-data")]
-        {
-            if let Some(bl) = bl
-                && bl
-                    .get_env(crate::bootloader::BootloaderEnvKey::ResizedData)?
-                    .is_none()
-            {
-                return Ok(Self::FirstBoot);
-            }
-        }
-        let _ = bl;
+    pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
         Ok(Self::Normal)
     }
 }
@@ -69,44 +54,14 @@ mod tests {
 
     #[test]
     fn detect_normal_with_live_bootloader() {
-        // Guard is set → normal boot even with a live bootloader
-        #[cfg(feature = "resize-data")]
-        {
-            let mock = create_mock_bootloader()
-                .with_env(crate::bootloader::BootloaderEnvKey::ResizedData, "1");
-            let mode = BootMode::detect(Some(&mock)).unwrap();
-            assert!(matches!(mode, BootMode::Normal));
-        }
-        #[cfg(not(feature = "resize-data"))]
-        {
-            let mock = create_mock_bootloader();
-            let mode = BootMode::detect(Some(&mock)).unwrap();
-            assert!(matches!(mode, BootMode::Normal));
-        }
+        let mock = create_mock_bootloader();
+        let mode = BootMode::detect(Some(&mock)).unwrap();
+        assert!(matches!(mode, BootMode::Normal));
     }
 
     #[test]
     fn detect_normal_degraded_boot_no_bootloader() {
         let mode = BootMode::detect(None).unwrap();
-        assert!(matches!(mode, BootMode::Normal));
-    }
-
-    #[cfg(feature = "resize-data")]
-    #[test]
-    fn detect_first_boot_when_guard_absent() {
-        // No ResizedData key → first boot
-        let mock = create_mock_bootloader();
-        let mode = BootMode::detect(Some(&mock)).unwrap();
-        assert!(matches!(mode, BootMode::FirstBoot));
-    }
-
-    #[cfg(feature = "resize-data")]
-    #[test]
-    fn detect_normal_when_guard_present() {
-        // ResizedData already set → normal boot
-        let mock = create_mock_bootloader()
-            .with_env(crate::bootloader::BootloaderEnvKey::ResizedData, "1");
-        let mode = BootMode::detect(Some(&mock)).unwrap();
         assert!(matches!(mode, BootMode::Normal));
     }
 }

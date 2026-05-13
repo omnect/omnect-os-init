@@ -10,7 +10,7 @@ use log::{info, warn};
 use crate::{
     config::Config,
     filesystem::mount_core_partitions,
-    mode::{BootContext, BootMode},
+    mode::BootContext,
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
 };
@@ -61,7 +61,7 @@ pub fn run_init() -> Result<()> {
     // Best-effort: an unavailable bootloader environment is a recoverable degraded-boot condition.
     // Promote failure to None so the rest of init proceeds rather than aborting a boot that
     // otherwise succeeds.
-    let bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
+    let mut bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
         Ok(bl) => Some(bl),
         Err(e) => {
             warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
@@ -69,13 +69,15 @@ pub fn run_init() -> Result<()> {
         }
     };
 
-    let mode = BootMode::detect(bootloader_opt.as_deref())?;
+    {
+        let ctx = preflight::PreflightCtx {
+            layout: &layout,
+        bootloader: bootloader_opt.as_mut(),
+        };
+        preflight::run(ctx)?;
+    }
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
-    match mode {
-        #[cfg(feature = "resize-data")]
-        BootMode::FirstBoot => mode::first_boot::run(ctx),
-        BootMode::Normal => mode::normal::run(ctx),
-    }
+    mode::normal::run(ctx)
 }

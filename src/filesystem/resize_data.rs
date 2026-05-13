@@ -34,7 +34,7 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: &mut dyn Bootloader,
+    bootloader: &mut (dyn Bootloader + '_),
 ) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),

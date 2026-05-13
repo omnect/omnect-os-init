@@ -8,7 +8,7 @@ use crate::bootloader::BootloaderEnvKey;
 use crate::error::Result;
 use crate::preflight::PreflightCtx;
 
-pub fn run(ctx: &mut PreflightCtx<'_>) -> Result<()> {
+pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
     let Some(ref mut bl) = ctx.bootloader else {
         log::warn!("resize-data preflight: bootloader unavailable; skipping");
         return Ok(());
@@ -19,7 +19,7 @@ pub fn run(ctx: &mut PreflightCtx<'_>) -> Result<()> {
         return Ok(());
     }
 
-    crate::filesystem::resize_data::resize_if_needed(ctx.layout, *bl)
+    crate::filesystem::resize_data::resize_if_needed(ctx.layout, bl.as_mut())
 }
 
 #[cfg(test)]
@@ -54,13 +54,14 @@ mod tests {
     #[test]
     fn skips_when_guard_present() {
         let layout = empty_layout();
-        let mut bl = MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1");
+        let mut bl: Box<dyn crate::bootloader::Bootloader> =
+            Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
         let mut ctx = PreflightCtx {
             layout: &layout,
             bootloader: Some(&mut bl),
         };
         assert!(run(&mut ctx).is_ok());
-        // Guard still set — resize_if_needed was never called.
+        drop(ctx);
         assert!(bl
             .get_env(BootloaderEnvKey::ResizedData)
             .unwrap()
