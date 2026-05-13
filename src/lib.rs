@@ -9,7 +9,7 @@ use log::{info, warn};
 
 use crate::{
     config::Config,
-    filesystem::mount_core_partitions,
+    filesystem::{mount_core_partitions, persist_fsck_results},
     mode::BootContext,
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
@@ -54,13 +54,19 @@ pub fn run_init() -> Result<()> {
 
     let mut ods_status = OdsStatus::new();
 
-    // Mount core partitions (rootfs + boot); boot must be mounted before
-    // open_bootloader_env() — on GRUB builds grubenv lives on the boot partition.
-    mount_core_partitions(&layout, rootfs, &mut ods_status)?;
+    // Mount core partitions (rootfs + boot). Capture the result rather than
+    // propagating immediately: if fsck on the boot partition requires a reboot,
+    // ods_status already holds the diagnostic (fsck_and_record stores it before
+    // returning the error). We must persist that data to the bootloader env
+    // before exiting, so we open the bootloader first and persist best-effort.
+    let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
 
     // Best-effort: an unavailable bootloader environment is a recoverable degraded-boot condition.
     // Promote failure to None so the rest of init proceeds rather than aborting a boot that
     // otherwise succeeds.
+    // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition may not
+    // be mounted (GRUB). open_bootloader_env() will then fail and fall through to None — this
+    // is acceptable; we log and proceed to propagate the original error.
     let mut bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
         Ok(bl) => Some(bl),
         Err(e) => {
@@ -68,6 +74,14 @@ pub fn run_init() -> Result<()> {
             None
         }
     };
+
+    // Persist any fsck results captured during core partition mounting (boot fsck).
+    // Must happen before propagating core_result so diagnostics survive a reboot.
+    if let Some(ref mut bl) = bootloader_opt {
+        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+    }
+
+    core_result?;
 
     {
         let ctx = preflight::PreflightCtx {
