@@ -94,7 +94,7 @@ pub fn resize_if_needed(
     // resize2fs requires a valid mtab entry; create a symlink to /proc/self/mounts
     // if one does not already exist.
     ensure_mtab()?;
-    check_filesystem(&data_dev, FsType::Ext4).map(|_| ())?;
+    check_filesystem(&data_dev, FsType::Ext4)?;
 
     let data_dev_str = data_dev
         .to_str()
