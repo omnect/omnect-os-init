@@ -215,13 +215,12 @@ pub fn persist_fsck_results(
         is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
-        if FsckExitCode::from(fsck.code).is_clean() {
+        let exit_code = FsckExitCode::from(fsck.code);
+        if exit_code.is_clean() {
             continue;
         }
 
-        if let Err(e) =
-            bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output)
-        {
+        if let Err(e) = bootloader.save_fsck_status(*partition, exit_code, &fsck.output) {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,
