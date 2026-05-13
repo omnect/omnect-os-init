@@ -56,15 +56,13 @@ mod tests {
         let layout = empty_layout();
         let mut bl: Box<dyn crate::bootloader::Bootloader> =
             Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
-        let mut ctx = PreflightCtx {
-            layout: &layout,
-            bootloader: Some(&mut bl),
-        };
-        assert!(run(&mut ctx).is_ok());
-        drop(ctx);
-        assert!(bl
-            .get_env(BootloaderEnvKey::ResizedData)
-            .unwrap()
-            .is_some());
+        {
+            let mut ctx = PreflightCtx {
+                layout: &layout,
+                bootloader: Some(&mut bl),
+            };
+            assert!(run(&mut ctx).is_ok());
+        }
+        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_some());
     }
 }

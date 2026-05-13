@@ -72,7 +72,7 @@ pub fn run_init() -> Result<()> {
     {
         let ctx = preflight::PreflightCtx {
             layout: &layout,
-        bootloader: bootloader_opt.as_mut(),
+            bootloader: bootloader_opt.as_mut(),
         };
         preflight::run(ctx)?;
     }
