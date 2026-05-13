@@ -13,6 +13,12 @@ use crate::{Result, bootloader::Bootloader, partition::PartitionLayout};
 #[non_exhaustive]
 pub struct PreflightCtx<'l, 'b> {
     pub layout: &'l PartitionLayout,
+    // `&mut Box<dyn Bootloader>` rather than `&mut dyn Bootloader` is intentional:
+    // `&mut dyn Trait` is invariant in `dyn Trait`, so the compiler cannot coerce
+    // `&mut (dyn Bootloader + 'static)` (from Box) to `&mut (dyn Bootloader + 'b)`.
+    // Holding a reference to the Box avoids the invariance issue while still giving
+    // full mutable access via `.as_mut()`.
+    #[allow(clippy::borrowed_box)]
     pub bootloader: Option<&'b mut Box<dyn Bootloader>>,
 }
 
