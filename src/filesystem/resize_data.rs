@@ -1,10 +1,9 @@
 //! Data partition auto-resize
 //!
 //! Expands the data partition and its ext4 filesystem to fill available disk
-//! space on first boot. Called from `mode::first_boot` on every first boot
-//! (the caller guarantees the resize guard is absent before invoking this).
+//! space on first boot. Called from the preflight phase when the resize guard
+//! is absent.
 
-use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 
@@ -26,9 +25,6 @@ const PARTED_RESIZE_FULL: &str = "100%";
 #[cfg(feature = "dos")]
 const PARTED_PRINT: &str = "print";
 const RESIZE2FS_FORCE: &str = "-f";
-
-const MTAB_PATH: &str = "/etc/mtab";
-const PROC_MOUNTS_PATH: &str = "/proc/self/mounts";
 
 type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
@@ -91,9 +87,6 @@ pub fn resize_if_needed(
         ],
     )?;
 
-    // resize2fs requires a valid mtab entry; create a symlink to /proc/self/mounts
-    // if one does not already exist.
-    ensure_mtab()?;
     check_filesystem(&data_dev, FsType::Ext4)?;
 
     let data_dev_str = data_dev
@@ -162,27 +155,6 @@ fn parse_extended_partition_nr(parted_output: &str) -> Option<u32> {
         }
     }
     None
-}
-
-/// Ensure `/etc/mtab` is present and readable by resize2fs.
-///
-/// If no mtab exists (or a stale symlink is in its place), creates a symlink
-/// to `/proc/self/mounts`. A real mtab file is left untouched.
-fn ensure_mtab() -> ResizeResult<()> {
-    ensure_mtab_at(Path::new(MTAB_PATH), Path::new(PROC_MOUNTS_PATH))
-}
-
-fn ensure_mtab_at(mtab: &Path, target: &Path) -> ResizeResult<()> {
-    if mtab.exists() && !mtab.is_symlink() {
-        return Ok(());
-    }
-
-    if mtab.is_symlink() {
-        std::fs::remove_file(mtab)?;
-    }
-
-    symlink(target, mtab)?;
-    Ok(())
 }
 
 /// Run an external command and return an error if it exits non-zero.
@@ -293,45 +265,5 @@ Number  Start   End     Size   File system  Name  Flags
 
         assert!(resize_if_needed(&layout, bl.as_mut()).is_ok());
         assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_ensure_mtab_creates_symlink_when_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let mtab = dir.path().join("mtab");
-        let target = dir.path().join("mounts");
-        std::fs::write(&target, "").unwrap();
-
-        assert!(ensure_mtab_at(&mtab, &target).is_ok());
-        assert!(mtab.is_symlink());
-        assert!(mtab.exists());
-    }
-
-    #[test]
-    fn test_ensure_mtab_leaves_real_file_untouched() {
-        let dir = tempfile::tempdir().unwrap();
-        let mtab = dir.path().join("mtab");
-        let target = dir.path().join("mounts");
-        std::fs::write(&mtab, "original").unwrap();
-
-        assert!(ensure_mtab_at(&mtab, &target).is_ok());
-        assert!(!mtab.is_symlink());
-        assert_eq!(std::fs::read_to_string(&mtab).unwrap(), "original");
-    }
-
-    #[test]
-    fn test_ensure_mtab_replaces_stale_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let mtab = dir.path().join("mtab");
-        let stale = dir.path().join("nonexistent");
-        let target = dir.path().join("mounts");
-        std::fs::write(&target, "").unwrap();
-
-        std::os::unix::fs::symlink(&stale, &mtab).unwrap();
-        assert!(!mtab.exists()); // dangling
-
-        assert!(ensure_mtab_at(&mtab, &target).is_ok());
-        assert!(mtab.is_symlink());
-        assert!(mtab.exists());
     }
 }
