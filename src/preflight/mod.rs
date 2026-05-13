@@ -26,7 +26,7 @@ pub struct PreflightCtx<'l, 'b> {
 ///
 /// Steps are independent and idempotent. Order is intentional: resize-data
 /// must run before any partition is mounted read-write.
-#[allow(unused_mut, unused_variables)]
+#[cfg_attr(not(feature = "resize-data"), allow(unused_mut, unused_variables))]
 pub fn run(mut ctx: PreflightCtx<'_, '_>) -> Result<()> {
     #[cfg(feature = "resize-data")]
     resize_data::run(&mut ctx)?;
