@@ -10,12 +10,12 @@ use std::process::Command;
 
 use crate::bootloader::{Bootloader, BootloaderEnvKey};
 use crate::error::{ResizeDataError, Result};
+use crate::filesystem::{FsType, check_filesystem};
 use crate::partition::PartitionName;
 
 #[cfg(feature = "gpt")]
 const SGDISK_CMD: &str = "/sbin/sgdisk";
 const PARTED_CMD: &str = "/sbin/parted";
-const E2FSCK_CMD: &str = "/sbin/e2fsck";
 const RESIZE2FS_CMD: &str = "/sbin/resize2fs";
 const SYNC_CMD: &str = "/bin/sync";
 
@@ -25,7 +25,6 @@ const PARTED_RESIZEPART: &str = "resizepart";
 const PARTED_RESIZE_FULL: &str = "100%";
 #[cfg(feature = "dos")]
 const PARTED_PRINT: &str = "print";
-const E2FSCK_FIX: &str = "-y";
 const RESIZE2FS_FORCE: &str = "-f";
 
 const MTAB_PATH: &str = "/etc/mtab";
@@ -95,7 +94,7 @@ pub fn resize_if_needed(
     // resize2fs requires a valid mtab entry; create a symlink to /proc/self/mounts
     // if one does not already exist.
     ensure_mtab()?;
-    run_e2fsck(&data_dev)?;
+    check_filesystem(&data_dev, FsType::Ext4).map(|_| ())?;
 
     let data_dev_str = data_dev
         .to_str()
@@ -183,37 +182,6 @@ fn ensure_mtab_at(mtab: &Path, target: &Path) -> ResizeResult<()> {
     }
 
     symlink(target, mtab)?;
-    Ok(())
-}
-
-/// Run `e2fsck -y` on a device, tolerating exit codes 0 and 1.
-///
-/// e2fsck exit code 1 means "errors were corrected" — that is a success
-/// outcome for our purposes; we just need the filesystem to be consistent
-/// before resize2fs runs.
-fn run_e2fsck(dev: &Path) -> ResizeResult<()> {
-    let dev_str = dev
-        .to_str()
-        .ok_or_else(|| ResizeDataError::NonUtf8Path(dev.to_path_buf()))?;
-    log::info!("Running: {} -y {}", E2FSCK_CMD, dev_str);
-
-    let out = Command::new(E2FSCK_CMD)
-        .args([E2FSCK_FIX, dev_str])
-        .output()
-        .map_err(ResizeDataError::Io)?;
-
-    let code = out.status.code().unwrap_or(-1);
-    // 0 = clean, 1 = errors corrected; both are acceptable
-    if code > 1 {
-        let output = String::from_utf8_lossy(&out.stdout).into_owned()
-            + &String::from_utf8_lossy(&out.stderr);
-        return Err(ResizeDataError::CommandFailed {
-            command: format!("{} -y {}", E2FSCK_CMD, dev_str),
-            code,
-            output,
-        });
-    }
-
     Ok(())
 }
 

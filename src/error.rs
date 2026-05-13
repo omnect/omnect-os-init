@@ -173,6 +173,9 @@ pub enum ResizeDataError {
     #[error("device path is not valid UTF-8: {}", .0.display())]
     NonUtf8Path(PathBuf),
 
+    #[error("Filesystem error: {0}")]
+    Filesystem(#[from] FilesystemError),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
