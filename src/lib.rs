@@ -68,18 +68,20 @@ pub fn run_init() -> Result<()> {
     // be mounted (GRUB). open_bootloader_env() will then fail and fall through to None — this
     // is acceptable; we log and proceed to propagate the original error.
     let mut bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
-        Ok(bl) => Some(bl),
+        Ok(mut bl) => {
+            // Persist boot fsck results immediately — before propagating core_result —
+            // so diagnostics survive a FsckRequiresReboot. Clear afterwards so mode
+            // handlers only persist the entries they add (factory, cert, etc, data)
+            // and the same keys are not written twice on the happy path.
+            persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+            ods_status.fsck.clear();
+            Some(bl)
+        }
         Err(e) => {
             warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
             None
         }
     };
-
-    // Persist any fsck results captured during core partition mounting (boot fsck).
-    // Must happen before propagating core_result so diagnostics survive a reboot.
-    if let Some(ref mut bl) = bootloader_opt {
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
-    }
 
     core_result?;
 
