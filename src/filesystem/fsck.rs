@@ -195,32 +195,27 @@ impl FsckResult {
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)
 /// * `Err(FilesystemError::FsckRequiresReboot)` - If fsck requests a reboot (exit code 2 only)
 /// * `Err(FilesystemError::FsckFailed)` - If check failed with uncorrectable errors
-fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
+pub fn check_filesystem(device: &Path, fstype: FsType) -> Result<FsckResult> {
     log::info!("Running fsck on {}", device.display());
 
     // Disable kernel message rate limiting during fsck — RAII guard restores on all exit paths.
     disable_kmsg_ratelimit();
     let _ratelimit_guard = KmsgRatelimitGuard;
 
-    let mut cmd = Command::new(FSCK_CMD);
-    cmd.arg(FSCK_AUTO_REPAIR_FLAG);
-
-    // Explicitly specify the filesystem type so the wrapper dispatches
-    // directly to fsck.ext4 / fsck.fat without needing blkid probing.
-    cmd.args([FSCK_TYPE_FLAG, fstype.as_str()]);
-
-    cmd.arg(device);
-
-    let output = cmd.output().map_err(|e| FilesystemError::FsckFailed {
-        device: device.to_path_buf(),
-        code: FsckExitCode::UNKNOWN,
-        output: format!("Failed to execute fsck: {}", e),
-    })?;
+    let output = Command::new(FSCK_CMD)
+        .args([FSCK_AUTO_REPAIR_FLAG, FSCK_TYPE_FLAG, fstype.as_str()])
+        .arg(device)
+        .output()
+        .map_err(|e| FilesystemError::FsckFailed {
+            device: device.to_path_buf(),
+            code: FsckExitCode::UNKNOWN,
+            output: format!("failed to execute {FSCK_CMD}: {e}"),
+        })?;
 
     let exit_code = FsckExitCode::from(output.status.code());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined_output = format!("{}{}", stdout, stderr);
+    let combined_output = format!("{stdout}{stderr}");
 
     if exit_code.is_clean() {
         log::debug!("fsck: {} is clean", device.display());

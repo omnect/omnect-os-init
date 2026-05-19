@@ -6,10 +6,9 @@ pub mod normal;
 
 /// Runtime context passed to the active boot-mode handler.
 ///
-/// A handler implements one boot path (normal, factory-reset, resize, …).
+/// A handler implements one boot path (normal, factory-reset, …).
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
-    #[allow(dead_code)]
     pub(crate) layout: &'a PartitionLayout,
     pub(crate) rootfs: &'a Path,
     pub(crate) bootloader: Option<Box<dyn Bootloader>>,
@@ -37,16 +36,12 @@ impl<'a> BootContext<'a> {
 /// The detected boot mode to execute.
 pub enum BootMode {
     Normal,
-    // FactoryReset(FactoryResetConfig)
-    // Resize
-    // FlashMode(FlashKind)
 }
 
 impl BootMode {
     /// Detect the boot mode from bootloader environment variables.
     ///
     /// Returns `Normal` when the bootloader is absent (degraded boot).
-    /// `_bl` becomes active once a non-Normal variant is added.
     pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
         Ok(Self::Normal)
     }

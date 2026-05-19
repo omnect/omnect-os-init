@@ -9,7 +9,7 @@ use log::{info, warn};
 
 use crate::{
     config::Config,
-    filesystem::{mount_partitions, persist_fsck_results},
+    filesystem::{mount_core_partitions, persist_fsck_results},
     mode::{BootContext, BootMode},
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
     runtime::OdsStatus,
@@ -23,10 +23,11 @@ pub mod filesystem;
 pub mod logging;
 pub mod mode;
 pub mod partition;
+pub mod preflight;
 pub mod runtime;
 
 // Re-export main types for convenience
-pub use crate::bootloader::{Bootloader, create_bootloader};
+pub use crate::bootloader::{Bootloader, open_bootloader_env};
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
@@ -53,40 +54,48 @@ pub fn run_init() -> Result<()> {
 
     let mut ods_status = OdsStatus::new();
 
-    // Mount all partitions; boot must be mounted before create_bootloader()
-    // (GRUB reads grubenv from rootfs/boot/EFI/BOOT/grubenv).
-    let mount_result = mount_partitions(&layout, rootfs, &mut ods_status);
+    // Mount core partitions (rootfs + boot). Capture the result rather than
+    // propagating immediately: if fsck on the boot partition requires a reboot,
+    // ods_status already holds the diagnostic (fsck_and_record stores it before
+    // returning the error). We must persist that data to the bootloader env
+    // before exiting, so we open the bootloader first and persist best-effort.
+    let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
 
-    // Best-effort: a corrupted grubenv is a recoverable degraded-boot condition.
-    // Promote failure to None so the rest of init proceeds; ODS bootloader-dependent
-    // state is skipped rather than aborting a boot that otherwise succeeds.
-    let mut bootloader_opt: Option<Box<dyn Bootloader>> = match create_bootloader() {
-        Ok(bl) => Some(bl),
+    // Best-effort: an unavailable bootloader environment is a recoverable degraded-boot condition.
+    // Promote failure to None so the rest of init proceeds rather than aborting a boot that
+    // otherwise succeeds.
+    // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition may not
+    // be mounted (GRUB). open_bootloader_env() will then fail and fall through to None — this
+    // is acceptable; we log and proceed to propagate the original error.
+    let mut bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
+        Ok(mut bl) => {
+            // Persist boot fsck results immediately — before propagating core_result —
+            // so diagnostics survive a FsckRequiresReboot. Clear afterwards so mode
+            // handlers only persist the entries they add (factory, cert, etc, data)
+            // and the same keys are not written twice on the happy path.
+            persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+            ods_status.fsck.clear();
+            Some(bl)
+        }
         Err(e) => {
-            warn!("Bootloader unavailable: {e}; fsck results will not be persisted");
+            warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
             None
         }
     };
 
-    // Persist fsck results BEFORE propagating mount_result.
-    // FsckRequiresReboot exits through mount_result?; diagnostics must be in
-    // the bootloader env before that reboot fires.
-    if let Some(ref mut bl) = bootloader_opt {
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
+    core_result?;
+
+    {
+        let ctx = preflight::PreflightCtx {
+            layout: &layout,
+            bootloader: bootloader_opt.as_mut(),
+        };
+        preflight::run(ctx)?;
     }
-
-    mount_result?;
-
-    if bootloader_opt.is_none() {
-        warn!("Bootloader unavailable after mount; ODS update-validation will be skipped");
-    }
-
-    let mode = BootMode::detect(bootloader_opt.as_deref())?;
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
 
-    #[allow(clippy::single_match)]
-    match mode {
+    match BootMode::detect(ctx.bootloader.as_deref())? {
         BootMode::Normal => mode::normal::run(ctx),
     }
 }

@@ -32,6 +32,10 @@ pub enum InitramfsError {
     #[error("Config error: {0}")]
     Config(#[from] ConfigError),
 
+    #[cfg(feature = "resize-data")]
+    #[error("Resize data error: {0}")]
+    ResizeData(#[from] ResizeDataError),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -147,6 +151,33 @@ pub enum FilesystemError {
 pub enum ConfigError {
     #[error("failed to read /proc/cmdline: {0}")]
     CmdlineReadFailed(#[source] std::io::Error),
+}
+
+/// Errors during data partition resize
+#[cfg(feature = "resize-data")]
+#[derive(Error, Debug)]
+pub enum ResizeDataError {
+    #[error("Command '{command}' failed with code {code}: {output}")]
+    CommandFailed {
+        command: String,
+        code: i32,
+        output: String,
+    },
+
+    #[error("Could not determine partition number from device path: {}", .0.display())]
+    InvalidDevicePath(PathBuf),
+
+    #[error("Could not find extended partition on {}", .0.display())]
+    ExtendedPartitionNotFound(PathBuf),
+
+    #[error("Device path is not valid UTF-8: {}", .0.display())]
+    NonUtf8Path(PathBuf),
+
+    #[error("Filesystem error: {0}")]
+    Filesystem(#[from] FilesystemError),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Errors related to logging

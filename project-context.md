@@ -26,12 +26,14 @@ src/
 │   ├── boot_sequence.rs     # Mount + fsck orchestration (testable with mock bootloaders)
 │   ├── fsck.rs              # e2fsck wrapper (all exit codes handled)
 │   ├── mount.rs             # Mount primitives (RAII, idempotency checks)
-│   └── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+│   ├── overlayfs.rs         # /etc overlay, /home overlay, bind mounts
+│   └── resize_data.rs       # Data partition auto-resize on first boot (feature = resize-data)
 ├── logging/
 │   ├── mod.rs               # KmsgLogger initializer
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── mode/
 │   ├── mod.rs               # BootMode enum, BootContext, detect()
+│   ├── first_boot.rs        # FirstBoot handler: resize data partition then delegate to normal (feature = resize-data)
 │   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
 ├── partition/
 │   ├── mod.rs               # Public API
@@ -50,12 +52,16 @@ src/
 - **Check:** `cargo check`
 - **Format:** `cargo fmt -- --check`
 - **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
-- **Test:** Run all four valid feature combinations:
+- **Test:** Run all eight valid feature combinations:
   ```
   cargo test --features grub,gpt
   cargo test --features grub,dos
   cargo test --features uboot,gpt
   cargo test --features uboot,dos
+  cargo test --features grub,gpt,resize-data
+  cargo test --features grub,dos,resize-data
+  cargo test --features uboot,gpt,resize-data
+  cargo test --features uboot,dos,resize-data
   ```
 - **Audit:** `cargo audit`
 
@@ -69,6 +75,7 @@ src/
 | `dos` | DOS/MBR partition table (extended at slot 4, logical 5-8; mutually exclusive with `gpt`) |
 | `persistent-var-log` | Persistent `/var/log` mount |
 | `release-image` | Release behaviour: infinite loop on fatal error |
+| `resize-data` | Expand data partition + filesystem to fill disk on first boot |
 
 ## 5. Runtime Constraints
 - **Heap allocation is used freely** (`String`, `PathBuf`, `HashMap`); the OS image provides a standard allocator
@@ -94,9 +101,12 @@ src/
 ## 8. Planned Features (not yet implemented)
 
 ### BootMode variants
-The `BootMode` enum (`src/mode/mod.rs`) currently only has `Normal`. The following variants are planned:
+The `BootMode` enum (`src/mode/mod.rs`) has the following implemented variants:
+- `FirstBoot` (feature = `resize-data`) — expands data partition + filesystem to fill disk; detected when `omnect_resized_data` guard is absent and a live bootloader is available; delegates to `Normal` after resize
+- `Normal` — standard boot path
+
+The following variants are planned:
 - `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
-- `Resize` — resizes partitions on first boot after image flash
 - `FlashMode(FlashKind)` — enables in-field OS flashing
 
 When implementing a new variant:

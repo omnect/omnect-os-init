@@ -17,8 +17,8 @@ use crate::filesystem::{
 use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
 
-/// Path within the mounted data partition where fsck logs are written.
-const FSCK_LOG_DIR: &str = "mnt/data/var/log/fsck";
+/// Subdirectory within the data partition where fsck logs are written.
+const FSCK_LOG_SUBDIR: &str = "var/log/fsck";
 
 /// Run fsck on a partition and record the result (including output) in `ods_status`.
 ///
@@ -58,13 +58,27 @@ pub fn fsck_and_record(
     }
 }
 
-/// Mount all required partitions in the correct order.
-pub fn mount_partitions(
+/// Mount the core partitions required before the bootloader environment can be opened.
+///
+/// Mounts rootCurrent (read-only) and boot (read-write). Must be called before
+/// `open_bootloader_env()` — the boot partition must be present when the bootloader
+/// environment is opened. `mount_remaining_partitions` must be called afterward
+/// to complete the full partition mount sequence.
+///
+/// # Errors
+///
+/// Returns `FilesystemError::FsckRequiresReboot` if the boot partition fsck
+/// determines a clean reboot is needed before the filesystem can be safely used.
+/// In that case `ods_status` already holds the fsck diagnostic (recorded by
+/// `fsck_and_record`). **Callers must persist `ods_status` to the bootloader
+/// environment before propagating this error**, or the diagnostic is lost on
+/// the subsequent reboot. `run_init` handles this by opening the bootloader and
+/// calling `persist_fsck_results` before propagating.
+pub fn mount_core_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
     ods_status: &mut OdsStatus,
 ) -> crate::error::Result<()> {
-    // Mount rootfs read-only — rootCurrent is mandatory; abort if missing.
     let root_dev = layout
         .partitions
         .get(&PartitionName::RootCurrent)
@@ -101,20 +115,32 @@ pub fn mount_partitions(
     if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
-            // Boot already mounted at this stage is a logic error: mount_partitions
-            // is called exactly once, after rootfs is freshly mounted. If boot is
-            // already present something has gone wrong in the boot sequence.
+            // Boot already mounted at this stage is a logic error: mount_core_partitions
+            // is called exactly once per boot. If boot is already present something has
+            // gone wrong in the boot sequence.
             return Err(InitramfsError::Filesystem(FilesystemError::MountFailed {
                 src_path: boot_dev.clone(),
                 target: boot_mount,
-                reason: "boot partition already mounted at start of mount_partitions".to_string(),
+                reason: "boot partition already mounted at start of mount_core_partitions"
+                    .to_string(),
             }));
         }
         fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
         mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
     }
 
-    // Mount factory partition read-only
+    Ok(())
+}
+
+/// Mount the remaining partitions after the bootloader has been created.
+///
+/// Mounts factory, cert, etc, data, and var/volatile. Must be called after
+/// `mount_core_partitions` and bootloader creation.
+pub fn mount_remaining_partitions(
+    layout: &PartitionLayout,
+    rootfs: &Path,
+    ods_status: &mut OdsStatus,
+) -> crate::error::Result<()> {
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
         fsck_and_record(
@@ -152,7 +178,6 @@ pub fn mount_partitions(
         ))?;
     }
 
-    // Mount data partition
     if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
         fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
@@ -180,8 +205,9 @@ pub fn mount_partitions(
 /// For each partition with a non-zero fsck exit code:
 /// - Stores the gzip+base64 encoded exit code and full output in the bootloader
 ///   environment (grubenv / uboot-env) for inspection after the next boot.
-/// - Writes the full output to `/data/var/log/fsck/<partition>.log` on the data
-///   partition so ODS and operators can inspect it after boot.
+/// - Writes the full output to `/data/var/log/fsck/<partition>.log` (written
+///   to /rootfs/mnt/data/var/log/fsck/; visible as `/data/var/log/fsck/`
+///   after switch_root) so ODS and operators can inspect it after boot.
 pub fn persist_fsck_results(
     ods_status: &OdsStatus,
     bootloader: &mut dyn Bootloader,
@@ -192,19 +218,20 @@ pub fn persist_fsck_results(
     // the FsckRequiresReboot path (boot is mounted before fsck runs).
     //
     // The data partition log is best-effort: it is only mounted when
-    // mount_partitions() succeeds fully, so it may not be available here.
-    let log_dir = rootfs_dir.join(FSCK_LOG_DIR);
+    // mount_remaining_partitions() succeeds fully, so it may not be available here.
+    let log_dir = rootfs_dir
+        .join(mount_points::DATA_PARTITION)
+        .join(FSCK_LOG_SUBDIR);
     let data_mounted =
         is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
-        if FsckExitCode::from(fsck.code).is_clean() {
+        let exit_code = FsckExitCode::from(fsck.code);
+        if exit_code.is_clean() {
             continue;
         }
 
-        if let Err(e) =
-            bootloader.save_fsck_status(*partition, FsckExitCode::from(fsck.code), &fsck.output)
-        {
+        if let Err(e) = bootloader.save_fsck_status(*partition, exit_code, &fsck.output) {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,

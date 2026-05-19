@@ -43,6 +43,9 @@ pub enum BootloaderEnvKey {
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
     FsckStatus(PartitionName),
+    /// `omnect_resized_data` — set to `"1"` after data partition has been resized.
+    #[cfg(feature = "resize-data")]
+    ResizedData,
 }
 
 impl BootloaderEnvKey {
@@ -52,6 +55,8 @@ impl BootloaderEnvKey {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
+            #[cfg(feature = "resize-data")]
+            Self::ResizedData => Cow::Borrowed("omnect_resized_data"),
         }
     }
 }
@@ -61,6 +66,12 @@ impl BootloaderEnvKey {
 /// This trait abstracts the differences between GRUB and U-Boot bootloader
 /// environment access, allowing the rest of the codebase to work with
 /// bootloader variables in a unified way.
+///
+/// The minimal required interface is `get_env` and `set_env`. The fsck helpers
+/// (`save_fsck_status`, `get_fsck_status`, `clear_fsck_status`) have default
+/// implementations that encode/decode via `get_env`/`set_env`. Bootloader
+/// backends with custom storage strategies (e.g. GRUB's per-partition files)
+/// should override the relevant methods.
 pub trait Bootloader: Send + Sync {
     /// Get the value of a bootloader environment variable
     ///
@@ -82,26 +93,35 @@ pub trait Bootloader: Send + Sync {
         partition: PartitionName,
         code: FsckExitCode,
         output: &str,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        let encoded = types::encode_fsck_output(code.bits(), output);
+        self.set_env(BootloaderEnvKey::FsckStatus(partition), Some(&encoded))
+    }
 
     /// Get fsck status from bootloader environment.
     ///
     /// Returns the decoded `FsckRecord` if a value is present,
     /// or `None` if no status was stored for this partition.
-    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>>;
+    fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        Ok(self
+            .get_env(BootloaderEnvKey::FsckStatus(partition))?
+            .and_then(|v| types::decode_fsck_output(&v)))
+    }
 
     /// Clear fsck status from bootloader environment
-    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()>;
+    fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
+        self.set_env(BootloaderEnvKey::FsckStatus(partition), None)
+    }
 }
 
-/// Creates the appropriate bootloader implementation based on the build-time feature flag.
+/// Opens the appropriate bootloader environment implementation based on the build-time feature flag.
 ///
 /// The bootloader type is a build-time property of the target platform:
 /// - `grub` feature: x86-64 EFI targets using GRUB (`grub-editenv`)
 /// - `uboot` feature: ARM targets using U-Boot (`fw_printenv`/`fw_setenv`)
 ///
 /// Exactly one of `grub` or `uboot` must be enabled; build.rs enforces this.
-pub fn create_bootloader() -> Result<Box<dyn Bootloader>> {
+pub fn open_bootloader_env() -> Result<Box<dyn Bootloader>> {
     #[cfg(feature = "grub")]
     return Ok(Box::new(GrubBootloader::new()?));
 
@@ -122,6 +142,8 @@ pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
     /// fsck results stored as typed records — no subprocess encoding needed in tests.
     fsck: std::collections::HashMap<PartitionName, FsckRecord>,
+    /// Keys passed to set_env, in call order. Used by tests to verify set_env was/wasn't called.
+    pub set_env_calls: Vec<BootloaderEnvKey>,
 }
 
 #[cfg(test)]
@@ -143,6 +165,7 @@ impl Bootloader for MockBootloader {
     }
 
     fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+        self.set_env_calls.push(key);
         match value {
             Some(v) => {
                 self.env.insert(key.as_str().to_string(), v.to_string());

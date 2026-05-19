@@ -22,7 +22,6 @@ Not yet implemented (planned):
 
 - Factory reset (backup, wipe, restore)
 - Flash modes (disk clone, network, HTTP/HTTPS)
-- Data partition auto-resize
 
 ## Building
 
@@ -54,7 +53,7 @@ cargo build --release --features "grub,persistent-var-log"
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
 | `flash-mode-3` | HTTP/HTTPS flashing | Planned |
-| `resize-data` | Data partition auto-resize | Planned |
+| `resize-data` | Data partition auto-resize on first boot | Implemented |
 
 > **Note:** `grub` and `uboot` are mutually exclusive. Exactly one must be set at build time.
 > The Yocto recipe selects the correct feature via `CARGO_FEATURES` based on `MACHINE_FEATURES`.
@@ -62,11 +61,17 @@ cargo build --release --features "grub,persistent-var-log"
 ## Testing
 
 ```bash
-# All four valid feature combinations (bootloader × partition table)
+# All four valid base combinations (bootloader × partition table)
 cargo test --features grub,gpt   # x86-64 targets, GPT
 cargo test --features grub,dos   # x86-64 targets, DOS/MBR
 cargo test --features uboot,gpt  # ARM targets, GPT
 cargo test --features uboot,dos  # ARM targets, DOS/MBR
+
+# With resize-data feature
+cargo test --features grub,gpt,resize-data
+cargo test --features grub,dos,resize-data
+cargo test --features uboot,gpt,resize-data
+cargo test --features uboot,dos,resize-data
 
 # Verbose output
 cargo test --features grub,gpt -- --nocapture
