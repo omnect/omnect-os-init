@@ -205,8 +205,9 @@ pub fn mount_remaining_partitions(
 /// For each partition with a non-zero fsck exit code:
 /// - Stores the gzip+base64 encoded exit code and full output in the bootloader
 ///   environment (grubenv / uboot-env) for inspection after the next boot.
-/// - Writes the full output to `/data/var/log/fsck/<partition>.log` on the data
-///   partition so ODS and operators can inspect it after boot.
+/// - Writes the full output to `/data/var/log/fsck/<partition>.log` (written
+///   to /rootfs/mnt/data/var/log/fsck/; visible as `/data/var/log/fsck/`
+///   after switch_root) so ODS and operators can inspect it after boot.
 pub fn persist_fsck_results(
     ods_status: &OdsStatus,
     bootloader: &mut dyn Bootloader,

@@ -34,7 +34,8 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     let mount_result = mount_remaining_partitions(layout, rootfs, &mut ods_status);
 
     // Best-effort: persist any non-zero fsck results to the bootloader env and
-    // to /data/var/log/fsck/ (data may not be mounted if mount_result failed).
+    // to /rootfs/mnt/data/var/log/fsck/ (visible as /data/var/log/fsck/ after
+    // switch_root; data may not be mounted if mount_result failed).
     if let Some(ref mut bl) = bootloader {
         persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
     }
