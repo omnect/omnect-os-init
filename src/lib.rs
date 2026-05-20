@@ -61,45 +61,49 @@ pub fn run_init() -> Result<()> {
     // Mount core partitions (rootfs + boot). Capture the result rather than
     // propagating immediately: if fsck on the boot partition requires a reboot,
     // ods_status already holds the diagnostic (fsck_and_record stores it before
-    // returning the error). We must persist that data to the bootloader env
-    // before exiting, so we open the bootloader first and persist best-effort.
+    // returning the error). We persist that data to the bootloader env before
+    // exiting, so we open the bootloader first and persist best-effort.
     let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
 
-    // Best-effort: an unavailable bootloader environment is a recoverable degraded-boot condition.
-    // Promote failure to None so the rest of init proceeds rather than aborting a boot that
-    // otherwise succeeds.
-    // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition may not
-    // be mounted (GRUB). open_bootloader_env() will then fail and fall through to None — this
-    // is acceptable; we log and proceed to propagate the original error.
-    let mut bootloader_opt: Option<Box<dyn Bootloader>> = match open_bootloader_env() {
-        Ok(mut bl) => {
-            // Persist boot fsck results immediately — before propagating core_result —
-            // so diagnostics survive a FsckRequiresReboot. Clear afterwards so mode
-            // handlers only persist the entries they add (factory, cert, etc, data)
-            // and the same keys are not written twice on the happy path.
-            persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
-            ods_status.fsck.clear();
-            Some(bl)
-        }
-        Err(e) => {
-            warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
-            None
-        }
-    };
-
-    core_result?;
+    // Best-effort: open the bootloader environment. The image type determines how
+    // to proceed when it is unavailable — see classify_bootloader.
+    //
+    // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition
+    // may not be mounted (GRUB), causing open_bootloader_env() to fail. core_result?
+    // runs inside both branches below, so FsckRequiresReboot is always propagated
+    // before DegradedBoot — the reboot invariant is preserved.
+    let is_release = cfg!(feature = "release-image");
+    let mut bootloader_env: BootloaderEnv =
+        match classify_bootloader(open_bootloader_env(), is_release) {
+            BootloaderDecision::Continue(mut env, degraded) => {
+                if let Some(bl) = env.available_mut() {
+                    persist_fsck_results(&ods_status, bl, rootfs);
+                    ods_status.fsck.clear();
+                }
+                core_result?;
+                if degraded {
+                    warn!("Bootloader environment unavailable; booting in degraded mode");
+                    ods_status.set_degraded_boot();
+                }
+                env
+            }
+            BootloaderDecision::Abort(err) => {
+                core_result?;
+                return Err(err);
+            }
+        };
 
     {
         let ctx = preflight::PreflightCtx {
             layout: &layout,
-            bootloader: bootloader_opt.as_mut(),
+            bootloader: &mut bootloader_env,
         };
         preflight::run(ctx)?;
     }
 
-    let ctx = BootContext::new(&config, &layout, rootfs, bootloader_opt, ods_status);
+    let ctx = BootContext::new(&config, &layout, rootfs, bootloader_env, ods_status);
 
-    match BootMode::detect(ctx.bootloader.as_deref())? {
+    match BootMode::detect(ctx.bootloader.available())? {
         BootMode::Normal => mode::normal::run(ctx),
     }
 }
