@@ -41,5 +41,9 @@ codegen-units = 1      # Better optimization
 strip = true           # Strip symbols
 panic = "abort"        # Smaller panic handling
 
+[[test]]
+name = "degraded_boot"
+required-features = ["test-utils"]
+
 [dev-dependencies]
 tempfile = { version = "3.20", default-features = false }
