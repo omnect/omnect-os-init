@@ -30,7 +30,7 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: &mut (dyn Bootloader + '_),
+    bootloader: Option<&mut dyn Bootloader>,
 ) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
@@ -100,7 +100,9 @@ pub fn resize_if_needed(
 
     run_cmd(SYNC_CMD, &[])?;
 
-    bootloader.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
+    if let Some(bl) = bootloader {
+        bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
+    }
 
     log::info!("Data partition resize complete");
     Ok(())
@@ -267,7 +269,23 @@ Number  Start   End     Size   File system  Name  Flags
         };
         let mut bl: Box<dyn crate::bootloader::Bootloader> = Box::new(MockBootloader::new());
 
-        assert!(resize_if_needed(&layout, bl.as_mut()).is_ok());
+        assert!(resize_if_needed(&layout, Some(bl.as_mut())).is_ok());
         assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none());
+    }
+
+    #[test]
+    fn resize_with_none_bootloader_skips_guard_set() {
+        use crate::partition::{PartitionLayout, RootDevice};
+        use std::collections::HashMap;
+
+        let layout = PartitionLayout {
+            partitions: HashMap::new(),
+            device: RootDevice {
+                base: std::path::PathBuf::from("/dev/sda"),
+                partition_sep: "",
+                root_partition: std::path::PathBuf::from("/dev/sda2"),
+            },
+        };
+        assert!(resize_if_needed(&layout, None).is_ok());
     }
 }

@@ -19,7 +19,7 @@ pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
         return Ok(());
     }
 
-    crate::filesystem::resize_data::resize_if_needed(ctx.layout, bl.as_mut())
+    crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl.as_mut()))
 }
 
 #[cfg(test)]
