@@ -12,7 +12,6 @@ use crate::{
     filesystem::{mount_core_partitions, persist_fsck_results},
     mode::{BootContext, BootMode},
     partition::{PartitionLayout, create_omnect_symlinks, detect_root_device},
-    runtime::OdsStatus,
 };
 
 pub mod bootloader;
@@ -27,10 +26,15 @@ pub mod preflight;
 pub mod runtime;
 
 // Re-export main types for convenience
-pub use crate::bootloader::{Bootloader, open_bootloader_env};
+#[cfg(any(test, feature = "test-utils"))]
+pub use crate::bootloader::MockBootloader;
+pub use crate::bootloader::{
+    Bootloader, BootloaderDecision, BootloaderEnv, classify_bootloader, open_bootloader_env,
+};
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
+pub use crate::runtime::OdsStatus;
 
 /// Mount point for the real rootfs inside the initramfs.
 const ROOTFS_DIR: &str = "/rootfs";

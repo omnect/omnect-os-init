@@ -187,13 +187,13 @@ pub fn classify_bootloader(
 }
 
 /// Create a mock bootloader for testing
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn create_mock_bootloader() -> MockBootloader {
     MockBootloader::new()
 }
 
 /// Mock bootloader for testing
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Default)]
 pub struct MockBootloader {
     env: std::collections::HashMap<String, String>,
@@ -203,7 +203,7 @@ pub struct MockBootloader {
     pub set_env_calls: Vec<BootloaderEnvKey>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl MockBootloader {
     pub fn new() -> Self {
         Self::default()
@@ -215,7 +215,7 @@ impl MockBootloader {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Bootloader for MockBootloader {
     fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
         Ok(self.env.get(key.as_str().as_ref()).cloned())

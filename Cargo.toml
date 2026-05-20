@@ -31,6 +31,7 @@ grub = ["core"]           # x86-64 EFI targets (GRUB bootloader)
 persistent-var-log = ["core"]
 release-image = ["core"]  # Enables release-mode error handling (loop on fatal error)
 resize-data = ["core"]    # Expands data partition to fill disk on first boot
+test-utils = []
 uboot = ["core"]          # ARM targets (U-Boot bootloader)
 
 [profile.release]
