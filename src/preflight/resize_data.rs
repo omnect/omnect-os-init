@@ -1,42 +1,49 @@
 //! Preflight step: data partition auto-resize
 //!
-//! Checks the `omnect_resized_data` guard and, if absent, expands the data
-//! partition to fill available disk space via `filesystem::resize_data`.
-//! Runs at most once per image lifetime — the guard prevents re-execution.
+//! On a live bootloader: checks the `omnect_resized_data` guard and, if
+//! absent, expands the data partition via `filesystem::resize_data`.
+//!
+//! On a degraded boot (bootloader unavailable): runs resize without the
+//! guard. Only reached on release-images; debug-images abort in lib.rs
+//! before preflight executes.
 
 use crate::bootloader::BootloaderEnvKey;
 use crate::error::Result;
 use crate::preflight::PreflightCtx;
 
 pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
-    let Some(ref mut bl) = ctx.bootloader else {
-        log::debug!("resize-data preflight: bootloader environment unavailable; skipping");
-        return Ok(());
-    };
-
-    if bl.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
-        log::debug!("resize-data preflight: guard present; already resized");
-        return Ok(());
+    match ctx.bootloader.available_mut() {
+        Some(bl) => {
+            if bl.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
+                log::debug!("resize-data preflight: guard present; already resized");
+                return Ok(());
+            }
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl))
+        }
+        None => {
+            log::warn!("resize-data: running without bootloader guard (degraded boot)");
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout, None)
+        }
     }
-
-    crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl.as_mut()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootloaderEnvKey, MockBootloader};
+    use crate::bootloader::{BootloaderEnv, BootloaderEnvKey, MockBootloader};
+    use crate::error::BootloaderError;
     use crate::partition::{PartitionLayout, RootDevice};
     use crate::preflight::PreflightCtx;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     fn empty_layout() -> PartitionLayout {
         PartitionLayout {
             partitions: HashMap::new(),
             device: RootDevice {
-                base: std::path::PathBuf::from("/dev/sda"),
+                base: PathBuf::from("/dev/sda"),
                 partition_sep: "",
-                root_partition: std::path::PathBuf::from("/dev/sda2"),
+                root_partition: PathBuf::from("/dev/sda2"),
             },
         }
     }
@@ -45,44 +52,46 @@ mod tests {
         let mut partitions = HashMap::new();
         partitions.insert(
             crate::partition::PartitionName::Data,
-            std::path::PathBuf::from("/dev/sda8"),
+            PathBuf::from("/dev/sda8"),
         );
         PartitionLayout {
             partitions,
             device: RootDevice {
-                base: std::path::PathBuf::from("/dev/sda"),
+                base: PathBuf::from("/dev/sda"),
                 partition_sep: "",
-                root_partition: std::path::PathBuf::from("/dev/sda2"),
+                root_partition: PathBuf::from("/dev/sda2"),
             },
         }
     }
 
     #[test]
-    fn skips_when_bootloader_unavailable() {
-        let layout = empty_layout();
+    fn skips_when_guard_present() {
+        // layout_with_data: if the guard check is bypassed, resize_if_needed
+        // will attempt to spawn sgdisk/parted (not in test env) and return Err.
+        let layout = layout_with_data();
+        let bl: Box<dyn crate::bootloader::Bootloader> =
+            Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
+        let mut env = BootloaderEnv::Available(bl);
         let mut ctx = PreflightCtx {
             layout: &layout,
-            bootloader: None,
+            bootloader: &mut env,
         };
         assert!(run(&mut ctx).is_ok());
     }
 
     #[test]
-    fn skips_when_guard_present() {
-        // Layout includes a Data partition: if the guard check is bypassed and
-        // resize_if_needed runs, it will attempt to spawn sgdisk/parted (not present
-        // in the test environment) and return Err. The assert!(is_ok()) below would
-        // then fail, catching the bug.
-        let layout = layout_with_data();
-        let mut bl: Box<dyn crate::bootloader::Bootloader> =
-            Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
-        {
-            let mut ctx = PreflightCtx {
-                layout: &layout,
-                bootloader: Some(&mut bl),
-            };
-            assert!(run(&mut ctx).is_ok());
-        }
-        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_some());
+    fn degraded_env_with_empty_layout_returns_ok() {
+        // Data partition absent in layout → resize_if_needed returns Ok immediately.
+        // Verifies the Degraded arm is reached and does not panic.
+        let layout = empty_layout();
+        let mut env = BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "test".into(),
+        });
+        let mut ctx = PreflightCtx {
+            layout: &layout,
+            bootloader: &mut env,
+        };
+        assert!(run(&mut ctx).is_ok());
     }
 }
