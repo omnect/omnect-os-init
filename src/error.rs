@@ -17,6 +17,9 @@ pub enum InitramfsError {
     #[error("Bootloader error: {0}")]
     Bootloader(#[from] BootloaderError),
 
+    #[error("degraded boot: {0}")]
+    DegradedBoot(#[source] BootloaderError),
+
     #[error("Early init error: {0}")]
     EarlyInit(#[from] EarlyInitError),
 
