@@ -135,6 +135,10 @@ pub struct OdsStatus {
     /// Factory reset status (if performed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub factory_reset: Option<FactoryResetStatus>,
+
+    /// Set when the bootloader environment was unavailable during boot.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub degraded_boot: bool,
 }
 
 /// Fsck status for a single partition
@@ -176,6 +180,11 @@ impl OdsStatus {
     /// Set factory reset status
     pub fn set_factory_reset(&mut self, status: FactoryResetStatus) {
         self.factory_reset = Some(status);
+    }
+
+    /// Mark this boot as degraded (bootloader environment unavailable).
+    pub fn set_degraded_boot(&mut self) {
+        self.degraded_boot = true;
     }
 }
 
@@ -750,5 +759,23 @@ mod tests {
 
         assert!(ods_dir.path().join(ODS_STATUS_FILE).exists());
         assert!(!ods_dir.path().join(UPDATE_VALIDATE_FILE).exists());
+    }
+
+    #[test]
+    fn degraded_boot_serializes_only_when_true() {
+        let status_normal = OdsStatus::new();
+        let json_normal = serde_json::to_string(&status_normal).unwrap();
+        assert!(
+            !json_normal.contains("degraded_boot"),
+            "degraded_boot must be absent when false; got: {json_normal}"
+        );
+
+        let mut status_degraded = OdsStatus::new();
+        status_degraded.set_degraded_boot();
+        let json_degraded = serde_json::to_string(&status_degraded).unwrap();
+        assert!(
+            json_degraded.contains("\"degraded_boot\":true"),
+            "degraded_boot must be present and true; got: {json_degraded}"
+        );
     }
 }
