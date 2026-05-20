@@ -129,6 +129,63 @@ pub fn open_bootloader_env() -> Result<Box<dyn Bootloader>> {
     return Ok(Box::new(UBootBootloader::new()?));
 }
 
+/// The result of a bootloader availability check.
+pub enum BootloaderEnv {
+    /// Bootloader environment opened successfully.
+    Available(Box<dyn Bootloader>),
+    /// Bootloader environment could not be opened.
+    Degraded(BootloaderError),
+}
+
+impl BootloaderEnv {
+    /// Returns `true` if the bootloader environment is unavailable.
+    pub fn is_degraded(&self) -> bool {
+        matches!(self, Self::Degraded(_))
+    }
+
+    /// Returns a mutable reference to the bootloader if available.
+    pub fn available_mut(&mut self) -> Option<&mut dyn Bootloader> {
+        match self {
+            Self::Available(b) => Some(b.as_mut()),
+            Self::Degraded(_) => None,
+        }
+    }
+
+    /// Returns a shared reference to the bootloader if available.
+    pub fn available(&self) -> Option<&dyn Bootloader> {
+        match self {
+            Self::Available(b) => Some(b.as_ref()),
+            Self::Degraded(_) => None,
+        }
+    }
+}
+
+/// The outcome of `classify_bootloader`.
+pub enum BootloaderDecision {
+    /// Continue init with this bootloader env. The bool is `true` iff degraded.
+    Continue(BootloaderEnv, bool),
+    /// Abort init with this error — caller passes it to `handle_fatal_error`.
+    Abort(crate::error::InitramfsError),
+}
+
+/// Decide how to proceed based on the bootloader open result and the image type.
+///
+/// - `Ok(bl)` → `Continue(Available(bl), false)` — normal boot, both image types.
+/// - `Err(e)` + release-image → `Continue(Degraded(e), true)` — degraded boot continues.
+/// - `Err(e)` + debug-image → `Abort(DegradedBoot(e))` — enter debug shell immediately.
+pub fn classify_bootloader(
+    open_result: std::result::Result<Box<dyn Bootloader>, BootloaderError>,
+    is_release_image: bool,
+) -> BootloaderDecision {
+    match open_result {
+        Ok(bl) => BootloaderDecision::Continue(BootloaderEnv::Available(bl), false),
+        Err(e) if is_release_image => {
+            BootloaderDecision::Continue(BootloaderEnv::Degraded(e), true)
+        }
+        Err(e) => BootloaderDecision::Abort(crate::error::InitramfsError::DegradedBoot(e)),
+    }
+}
+
 /// Create a mock bootloader for testing
 #[cfg(test)]
 pub fn create_mock_bootloader() -> MockBootloader {
@@ -206,6 +263,58 @@ impl Bootloader for MockBootloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod classify_tests {
+        use super::*;
+        use crate::error::{BootloaderError, InitramfsError};
+
+        fn ok_bootloader() -> std::result::Result<Box<dyn Bootloader>, BootloaderError> {
+            Ok(Box::new(MockBootloader::new()))
+        }
+
+        fn err_bootloader() -> std::result::Result<Box<dyn Bootloader>, BootloaderError> {
+            Err(BootloaderError::CommandFailed {
+                command: "grub-editenv".into(),
+                reason: "not found".into(),
+            })
+        }
+
+        #[test]
+        fn ok_release_image_returns_available_not_degraded() {
+            let decision = classify_bootloader(ok_bootloader(), true);
+            assert!(matches!(
+                decision,
+                BootloaderDecision::Continue(BootloaderEnv::Available(_), false)
+            ));
+        }
+
+        #[test]
+        fn ok_debug_image_returns_available_not_degraded() {
+            let decision = classify_bootloader(ok_bootloader(), false);
+            assert!(matches!(
+                decision,
+                BootloaderDecision::Continue(BootloaderEnv::Available(_), false)
+            ));
+        }
+
+        #[test]
+        fn err_release_image_returns_degraded_continue() {
+            let decision = classify_bootloader(err_bootloader(), true);
+            assert!(matches!(
+                decision,
+                BootloaderDecision::Continue(BootloaderEnv::Degraded(_), true)
+            ));
+        }
+
+        #[test]
+        fn err_debug_image_returns_abort_with_degraded_boot_error() {
+            let decision = classify_bootloader(err_bootloader(), false);
+            assert!(matches!(
+                decision,
+                BootloaderDecision::Abort(InitramfsError::DegradedBoot(_))
+            ));
+        }
+    }
 
     #[test]
     fn test_mock_bootloader_get_set() {
