@@ -44,13 +44,23 @@ fn err_release_image_is_degraded_continue() {
 #[test]
 fn err_debug_image_is_abort_with_cause() {
     let decision = classify_bootloader(make_err(), false);
-    assert!(
-        matches!(
-            decision,
-            BootloaderDecision::Abort(InitramfsError::DegradedBoot(_))
-        ),
-        "debug-image: expected Abort(DegradedBoot)"
-    );
+    // Verify not just the variant shape but also that the cause is the exact
+    // BootloaderError we injected, proving #[source] wiring is in place.
+    match decision {
+        BootloaderDecision::Abort(InitramfsError::DegradedBoot(ref cause)) => {
+            assert!(
+                matches!(
+                    cause,
+                    BootloaderError::CommandFailed {
+                        command,
+                        ..
+                    } if command == "grub-editenv"
+                ),
+                "expected cause CommandFailed(grub-editenv), got: {cause:?}"
+            );
+        }
+        other => panic!("debug-image: expected Abort(DegradedBoot), got unexpected decision"),
+    }
 }
 
 #[test]
