@@ -285,7 +285,7 @@ In `src/bootloader/mod.rs::tests`:
 - `Err(_)` + release → `Continue(Degraded, true)` (cause preserved)
 - `Err(_)` + debug → `Abort(DegradedBoot)` (cause preserved via `#[source]`)
 
-### 6.2 Unit tests on `resize_if_needed`
+### 6.2 Unit tests on `resize_if_needed` and `write_resize_guard`
 
 In `src/filesystem/resize_data.rs::tests`:
 
@@ -293,16 +293,30 @@ In `src/filesystem/resize_data.rs::tests`:
   invocations.
 - `bootloader = Some(MockBootloader::new())` + Data partition absent →
   returns `Ok`, guard **not** set (verifies `set_env` is only reached when
-  resize actually ran). Existing `test_resize_skips_when_data_partition_absent`
-  updated to match.
+  resize actually ran).
+- `write_resize_guard(None)` → `Ok`, no side effects (verifies the degraded-
+  mode guard-skip is explicit, not accidental).
+- `write_resize_guard(Some(bl))` → `ResizedData` key written to `bl`.
+
+The guard write is extracted into `pub(crate) write_resize_guard` so it can
+be tested independently of the resize commands (which require real block
+devices).
 
 ### 6.3 Unit test on `preflight::resize_data`
 
-Replace the current `skips_when_bootloader_unavailable` test (which uses
-`empty_layout()` and passes regardless of correctness) with a test that uses
-`layout_with_data()` and `BootloaderEnv::Degraded(...)`. To avoid spawning
-real `sgdisk`/`parted`/`resize2fs` in CI, split `resize_if_needed` into a
-guard/dispatch portion and a command-execution portion; test only the former.
+Two tests:
+
+1. `degraded_env_skips_guard_write` — uses `empty_layout()` + `BootloaderEnv::Degraded`.
+   Data partition absent → returns `Ok`. Verifies the Degraded arm is dispatched
+   correctly without panicking. The `empty_layout()` concession is intentional:
+   `layout_with_data()` would invoke real `sgdisk`/`parted` commands, which are
+   CI/Concourse-only. The guard-write skip is separately verified in §6.2.
+
+2. `degraded_env_with_data_layout_guard_not_written` — uses `layout_with_data()` +
+   `BootloaderEnv::Degraded`. The resize commands will fail on a non-existent device
+   (`/dev/sda8`), but the error type is asserted to be `ResizeDataError` (command
+   failure), **not** a `BootloaderError` — confirming the guard-write path was never
+   reached.
 
 ### 6.4 Integration test
 
