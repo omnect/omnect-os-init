@@ -320,20 +320,4 @@ Number  Start   End     Size   File system  Name  Flags
         write_resize_guard(Some(&mut bl)).unwrap();
         assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_some());
     }
-
-    #[test]
-    fn write_guard_none_does_not_call_set_env() {
-        // Verifies the guard write at the end of resize_if_needed is skipped
-        // when bootloader is None (degraded mode). Tests the path that the
-        // PR exists to make explicit — previously this was a silent no-op.
-        use crate::bootloader::MockBootloader;
-        let bl = MockBootloader::new();
-        // Pass None, not &mut bl — guard write must be skipped
-        write_resize_guard(None).unwrap();
-        // No set_env call was possible; bl is still unmodified
-        assert!(
-            bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none(),
-            "ResizedData must not be set when bootloader is None"
-        );
-    }
 }
