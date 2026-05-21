@@ -112,8 +112,13 @@ pub fn resize_if_needed(
 /// (degraded mode), the guard is intentionally not written — the resize
 /// will run again on the next boot, which is idempotent.
 pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn Bootloader>) -> Result<()> {
-    if let Some(bl) = bootloader {
-        bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
+    if let Some(bl) = bootloader
+        && let Err(e) = bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))
+    {
+        log::warn!(
+            "data partition resize completed but guard write failed: {e}; \
+             resize will run again on next boot (idempotent)"
+        );
     }
     Ok(())
 }
