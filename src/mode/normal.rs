@@ -31,9 +31,9 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     let mount_result = mount_remaining_partitions(layout, rootfs, &mut ods_status);
 
-    if let Some(bl) = bootloader.available_mut() {
-        persist_fsck_results(&ods_status, bl, rootfs);
-    }
+    // Write fsck diagnostics regardless of bootloader availability so on-disk
+    // log files (/data/var/log/fsck/) are produced even in degraded mode.
+    persist_fsck_results(&ods_status, bootloader.available_mut(), rootfs);
 
     mount_result?;
 

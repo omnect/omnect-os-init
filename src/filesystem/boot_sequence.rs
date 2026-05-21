@@ -205,12 +205,14 @@ pub fn mount_remaining_partitions(
 /// For each partition with a non-zero fsck exit code:
 /// - Stores the gzip+base64 encoded exit code and full output in the bootloader
 ///   environment (grubenv / uboot-env) for inspection after the next boot.
+///   Skipped when `bootloader` is `None` (degraded boot — env unavailable).
 /// - Writes the full output to `/data/var/log/fsck/<partition>.log` (written
 ///   to /rootfs/mnt/data/var/log/fsck/; visible as `/data/var/log/fsck/`
 ///   after switch_root) so ODS and operators can inspect it after boot.
+///   Written regardless of bootloader availability when the data partition is mounted.
 pub fn persist_fsck_results(
     ods_status: &OdsStatus,
-    bootloader: &mut dyn Bootloader,
+    mut bootloader: Option<&mut dyn Bootloader>,
     rootfs_dir: &Path,
 ) {
     // Bootloader save (grubenv or env file) is the primary persistence mechanism
@@ -231,7 +233,9 @@ pub fn persist_fsck_results(
             continue;
         }
 
-        if let Err(e) = bootloader.save_fsck_status(*partition, exit_code, &fsck.output) {
+        if let Some(bl) = &mut bootloader
+            && let Err(e) = bl.save_fsck_status(*partition, exit_code, &fsck.output)
+        {
             log::warn!(
                 "Failed to save fsck status for {} to bootloader env: {}",
                 partition,
@@ -363,7 +367,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         assert!(bl.saved.is_empty(), "zero exit code must not be persisted");
     }
@@ -375,7 +379,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         assert_eq!(bl.saved.len(), 1);
         assert_eq!(bl.saved[0].0, PartitionName::Boot);
@@ -390,7 +394,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         assert_eq!(bl.saved.len(), 1);
         // No log dir should be created for empty output.
@@ -409,7 +413,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         assert_eq!(bl.saved.len(), 2);
         let saved_partitions: std::collections::HashSet<PartitionName> =
@@ -428,7 +432,7 @@ mod tests {
         let mut bl = FailingBootloader;
 
         // Must not panic.
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
     }
 
     #[test]
@@ -438,7 +442,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootloader::new();
 
-        persist_fsck_results(&ods, &mut bl, temp.path());
+        persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         // Bootloader was still called.
         assert_eq!(bl.saved.len(), 1);

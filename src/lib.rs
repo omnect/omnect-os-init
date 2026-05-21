@@ -76,8 +76,13 @@ pub fn run_init() -> Result<()> {
     let mut bootloader_env: BootloaderEnv =
         match classify_bootloader(open_bootloader_env(), is_release) {
             BootloaderDecision::Continue(mut env, _) => {
-                if let Some(bl) = env.available_mut() {
-                    persist_fsck_results(&ods_status, bl, rootfs);
+                // Persist fsck data to the bootloader env when available. The
+                // on-disk log write is skipped here (data not yet mounted) but
+                // will run again in normal.rs after mount_remaining_partitions.
+                persist_fsck_results(&ods_status, env.available_mut(), rootfs);
+                if env.available_mut().is_some() {
+                    // Records moved to bootloader env; clear to avoid
+                    // double-serialization into the ODS runtime JSON.
                     ods_status.fsck.clear();
                 }
                 core_result?;
