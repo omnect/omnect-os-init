@@ -227,6 +227,11 @@ pub fn create_ods_runtime_files(
     // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
         handle_update_validation(ods_dir, bl, uid, gid)?;
+    } else {
+        log::warn!(
+            "update validation skipped — bootloader unavailable; \
+             any in-flight A/B update will roll back on timer expiry"
+        );
     }
 
     // Copy factory reset status if exists
