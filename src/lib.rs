@@ -75,14 +75,14 @@ pub fn run_init() -> Result<()> {
     let is_release = cfg!(feature = "release-image");
     let mut bootloader_env: BootloaderEnv =
         match classify_bootloader(open_bootloader_env(), is_release) {
-            BootloaderDecision::Continue(mut env, degraded) => {
+            BootloaderDecision::Continue(mut env, _) => {
                 if let Some(bl) = env.available_mut() {
                     persist_fsck_results(&ods_status, bl, rootfs);
                     ods_status.fsck.clear();
                 }
                 core_result?;
-                if degraded {
-                    warn!("Bootloader environment unavailable; booting in degraded mode");
+                if let BootloaderEnv::Degraded(ref e) = env {
+                    warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
                     ods_status.set_degraded_boot();
                 }
                 env
