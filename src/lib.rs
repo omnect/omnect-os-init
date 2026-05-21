@@ -50,7 +50,7 @@ fn apply_bootloader_decision(
     ods_status: &mut OdsStatus,
 ) -> Result<BootloaderEnv> {
     match decision {
-        BootloaderDecision::Continue(env, _) => {
+        BootloaderDecision::Continue(env) => {
             core_result?;
             if let BootloaderEnv::Degraded(ref e) = env {
                 warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
@@ -137,20 +137,14 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_available() -> BootloaderDecision {
-        BootloaderDecision::Continue(
-            BootloaderEnv::Available(Box::new(MockBootloader::new())),
-            false,
-        )
+        BootloaderDecision::Continue(BootloaderEnv::Available(Box::new(MockBootloader::new())))
     }
 
     fn make_degraded() -> BootloaderDecision {
-        BootloaderDecision::Continue(
-            BootloaderEnv::Degraded(BootloaderError::CommandFailed {
-                command: "grub-editenv".into(),
-                reason: "test".into(),
-            }),
-            true,
-        )
+        BootloaderDecision::Continue(BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "test".into(),
+        }))
     }
 
     fn make_abort() -> BootloaderDecision {
@@ -202,7 +196,10 @@ mod tests {
             ),
             "expected FsckRequiresReboot, not DegradedBoot"
         );
-        assert!(!ods.degraded_boot, "degraded flag must not be set on reboot path");
+        assert!(
+            !ods.degraded_boot,
+            "degraded flag must not be set on reboot path"
+        );
     }
 
     #[test]

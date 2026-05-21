@@ -162,26 +162,24 @@ impl BootloaderEnv {
 
 /// The outcome of `classify_bootloader`.
 pub enum BootloaderDecision {
-    /// Continue init with this bootloader env. The bool is `true` iff degraded.
-    Continue(BootloaderEnv, bool),
+    /// Continue init with this bootloader env.
+    Continue(BootloaderEnv),
     /// Abort init with this error — caller passes it to `handle_fatal_error`.
     Abort(crate::error::InitramfsError),
 }
 
 /// Decide how to proceed based on the bootloader open result and the image type.
 ///
-/// - `Ok(bl)` → `Continue(Available(bl), false)` — successful open, both image types.
-/// - `Err(e)` + release-image → `Continue(Degraded(e), true)` — degraded boot continues.
+/// - `Ok(bl)` → `Continue(Available(bl))` — successful open, both image types.
+/// - `Err(e)` + release-image → `Continue(Degraded(e))` — degraded boot continues.
 /// - `Err(e)` + debug-image → `Abort(DegradedBoot(e))` — enter debug shell immediately.
 pub fn classify_bootloader(
     open_result: std::result::Result<Box<dyn Bootloader>, BootloaderError>,
     is_release_image: bool,
 ) -> BootloaderDecision {
     match open_result {
-        Ok(bl) => BootloaderDecision::Continue(BootloaderEnv::Available(bl), false),
-        Err(e) if is_release_image => {
-            BootloaderDecision::Continue(BootloaderEnv::Degraded(e), true)
-        }
+        Ok(bl) => BootloaderDecision::Continue(BootloaderEnv::Available(bl)),
+        Err(e) if is_release_image => BootloaderDecision::Continue(BootloaderEnv::Degraded(e)),
         Err(e) => BootloaderDecision::Abort(crate::error::InitramfsError::DegradedBoot(e)),
     }
 }
@@ -284,7 +282,7 @@ mod tests {
             let decision = classify_bootloader(ok_bootloader(), true);
             assert!(matches!(
                 decision,
-                BootloaderDecision::Continue(BootloaderEnv::Available(_), false)
+                BootloaderDecision::Continue(BootloaderEnv::Available(_))
             ));
         }
 
@@ -293,7 +291,7 @@ mod tests {
             let decision = classify_bootloader(ok_bootloader(), false);
             assert!(matches!(
                 decision,
-                BootloaderDecision::Continue(BootloaderEnv::Available(_), false)
+                BootloaderDecision::Continue(BootloaderEnv::Available(_))
             ));
         }
 
@@ -302,7 +300,7 @@ mod tests {
             let decision = classify_bootloader(err_bootloader(), true);
             assert!(matches!(
                 decision,
-                BootloaderDecision::Continue(BootloaderEnv::Degraded(_), true)
+                BootloaderDecision::Continue(BootloaderEnv::Degraded(_))
             ));
         }
 

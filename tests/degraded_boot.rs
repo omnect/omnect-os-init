@@ -22,7 +22,7 @@ fn ok_result_is_not_degraded_regardless_of_image_type() {
         assert!(
             matches!(
                 decision,
-                BootloaderDecision::Continue(BootloaderEnv::Available(_), false)
+                BootloaderDecision::Continue(BootloaderEnv::Available(_))
             ),
             "is_release={is_release}: expected Available/not-degraded"
         );
@@ -34,10 +34,10 @@ fn err_release_image_is_degraded_continue() {
     let decision = classify_bootloader(make_err(), true);
     // Use is_degraded() to give the method a regression test (M1/M9).
     match decision {
-        BootloaderDecision::Continue(ref env, true) => {
+        BootloaderDecision::Continue(ref env) => {
             assert!(env.is_degraded(), "release-image: expected Degraded env");
         }
-        _ => panic!("release-image: expected Continue(Degraded, true)"),
+        _ => panic!("release-image: expected Continue(Degraded)"),
     }
 }
 
