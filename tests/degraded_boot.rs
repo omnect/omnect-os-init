@@ -59,7 +59,7 @@ fn err_debug_image_is_abort_with_cause() {
                 "expected cause CommandFailed(grub-editenv), got: {cause:?}"
             );
         }
-        other => panic!("debug-image: expected Abort(DegradedBoot), got unexpected decision"),
+        _ => panic!("debug-image: expected Abort(DegradedBoot), got unexpected decision"),
     }
 }
 

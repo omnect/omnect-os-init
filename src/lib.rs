@@ -39,6 +39,32 @@ pub use crate::runtime::OdsStatus;
 /// Mount point for the real rootfs inside the initramfs.
 const ROOTFS_DIR: &str = "/rootfs";
 
+/// Apply a bootloader decision, enforcing the FsckRequiresReboot-wins invariant.
+///
+/// `core_result` (e.g. `FsckRequiresReboot`) is always propagated before either
+/// `DegradedBoot` or `set_degraded_boot()`, so a reboot request is never silently
+/// swallowed by a concurrent bootloader failure.
+fn apply_bootloader_decision(
+    decision: BootloaderDecision,
+    core_result: Result<()>,
+    ods_status: &mut OdsStatus,
+) -> Result<BootloaderEnv> {
+    match decision {
+        BootloaderDecision::Continue(env, _) => {
+            core_result?;
+            if let BootloaderEnv::Degraded(ref e) = env {
+                warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
+                ods_status.set_degraded_boot();
+            }
+            Ok(env)
+        }
+        BootloaderDecision::Abort(err) => {
+            core_result?;
+            Err(err)
+        }
+    }
+}
+
 pub fn run_init() -> Result<()> {
     info!("omnect-os-initramfs starting");
 
@@ -69,34 +95,22 @@ pub fn run_init() -> Result<()> {
     // to proceed when it is unavailable — see classify_bootloader.
     //
     // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition
-    // may not be mounted (GRUB), causing open_bootloader_env() to fail. core_result?
-    // runs inside both branches below, so FsckRequiresReboot is always propagated
-    // before DegradedBoot — the reboot invariant is preserved.
+    // may not be mounted (GRUB), causing open_bootloader_env() to fail.
+    // apply_bootloader_decision always propagates core_result before DegradedBoot.
     let is_release = cfg!(feature = "release-image");
-    let mut bootloader_env: BootloaderEnv =
-        match classify_bootloader(open_bootloader_env(), is_release) {
-            BootloaderDecision::Continue(mut env, _) => {
-                // Persist fsck data to the bootloader env when available. The
-                // on-disk log write is skipped here (data not yet mounted) but
-                // will run again in normal.rs after mount_remaining_partitions.
-                persist_fsck_results(&ods_status, env.available_mut(), rootfs);
-                if env.available_mut().is_some() {
-                    // Records moved to bootloader env; clear to avoid
-                    // double-serialization into the ODS runtime JSON.
-                    ods_status.fsck.clear();
-                }
-                core_result?;
-                if let BootloaderEnv::Degraded(ref e) = env {
-                    warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
-                    ods_status.set_degraded_boot();
-                }
-                env
-            }
-            BootloaderDecision::Abort(err) => {
-                core_result?;
-                return Err(err);
-            }
-        };
+    let decision = classify_bootloader(open_bootloader_env(), is_release);
+
+    let mut bootloader_env = apply_bootloader_decision(decision, core_result, &mut ods_status)?;
+
+    // Persist fsck results now that we have a mutable BootloaderEnv.
+    // On-disk log write is skipped here (data not yet mounted) but runs again
+    // in normal.rs after mount_remaining_partitions.
+    persist_fsck_results(&ods_status, bootloader_env.available_mut(), rootfs);
+    if bootloader_env.available_mut().is_some() {
+        // Records moved to bootloader env; clear to avoid
+        // double-serialization into the ODS runtime JSON.
+        ods_status.fsck.clear();
+    }
 
     {
         let ctx = preflight::PreflightCtx {
@@ -110,5 +124,99 @@ pub fn run_init() -> Result<()> {
 
     match BootMode::detect(ctx.bootloader.available())? {
         BootMode::Normal => mode::normal::run(ctx),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootloader::MockBootloader;
+    use crate::error::{BootloaderError, FilesystemError, InitramfsError};
+    use crate::filesystem::FsckExitCode;
+    use std::path::PathBuf;
+
+    fn make_available() -> BootloaderDecision {
+        BootloaderDecision::Continue(
+            BootloaderEnv::Available(Box::new(MockBootloader::new())),
+            false,
+        )
+    }
+
+    fn make_degraded() -> BootloaderDecision {
+        BootloaderDecision::Continue(
+            BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+                command: "grub-editenv".into(),
+                reason: "test".into(),
+            }),
+            true,
+        )
+    }
+
+    fn make_abort() -> BootloaderDecision {
+        BootloaderDecision::Abort(InitramfsError::DegradedBoot(
+            BootloaderError::CommandFailed {
+                command: "grub-editenv".into(),
+                reason: "test".into(),
+            },
+        ))
+    }
+
+    fn fsck_reboot_err() -> Result<()> {
+        Err(InitramfsError::Filesystem(
+            FilesystemError::FsckRequiresReboot {
+                device: PathBuf::from("/dev/sda1"),
+                code: FsckExitCode::REBOOT_REQUIRED,
+                output: String::new(),
+            },
+        ))
+    }
+
+    #[test]
+    fn available_ok_core_returns_available_env() {
+        let mut ods = OdsStatus::new();
+        let result = apply_bootloader_decision(make_available(), Ok(()), &mut ods);
+        assert!(matches!(result, Ok(BootloaderEnv::Available(_))));
+        assert!(!ods.degraded_boot);
+    }
+
+    #[test]
+    fn degraded_ok_core_sets_degraded_flag() {
+        let mut ods = OdsStatus::new();
+        let result = apply_bootloader_decision(make_degraded(), Ok(()), &mut ods);
+        assert!(matches!(result, Ok(BootloaderEnv::Degraded(_))));
+        assert!(ods.degraded_boot);
+    }
+
+    #[test]
+    fn fsck_reboot_wins_over_degraded_continue() {
+        // FsckRequiresReboot must propagate even when bootloader is also unavailable.
+        let mut ods = OdsStatus::new();
+        let result = apply_bootloader_decision(make_degraded(), fsck_reboot_err(), &mut ods);
+        assert!(
+            matches!(
+                result,
+                Err(InitramfsError::Filesystem(
+                    FilesystemError::FsckRequiresReboot { .. }
+                ))
+            ),
+            "expected FsckRequiresReboot, not DegradedBoot"
+        );
+        assert!(!ods.degraded_boot, "degraded flag must not be set on reboot path");
+    }
+
+    #[test]
+    fn fsck_reboot_wins_over_abort() {
+        // FsckRequiresReboot must propagate even when decision is Abort(DegradedBoot).
+        let mut ods = OdsStatus::new();
+        let result = apply_bootloader_decision(make_abort(), fsck_reboot_err(), &mut ods);
+        assert!(
+            matches!(
+                result,
+                Err(InitramfsError::Filesystem(
+                    FilesystemError::FsckRequiresReboot { .. }
+                ))
+            ),
+            "expected FsckRequiresReboot, not DegradedBoot"
+        );
     }
 }
