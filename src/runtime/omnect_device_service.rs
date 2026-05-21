@@ -137,6 +137,8 @@ pub struct OdsStatus {
     pub factory_reset: Option<FactoryResetStatus>,
 
     /// Set when the bootloader environment was unavailable during boot.
+    /// Omitted from JSON when `false` to keep the happy-path payload small
+    /// and remain backward-compatible with ODS consumers that predate this field.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub degraded_boot: bool,
 }

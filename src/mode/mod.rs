@@ -41,6 +41,8 @@ pub enum BootMode {
 
 impl BootMode {
     /// Detect the boot mode from the bootloader environment.
+    ///
+    /// Returns `Normal` for both available and degraded (absent) bootloader states.
     pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
         Ok(Self::Normal)
     }

@@ -129,7 +129,7 @@ pub fn open_bootloader_env() -> Result<Box<dyn Bootloader>> {
     return Ok(Box::new(UBootBootloader::new()?));
 }
 
-/// The result of a bootloader availability check.
+/// Bootloader environment state: opened successfully, or unavailable with reason.
 pub enum BootloaderEnv {
     /// Bootloader environment opened successfully.
     Available(Box<dyn Bootloader>),
@@ -170,7 +170,7 @@ pub enum BootloaderDecision {
 
 /// Decide how to proceed based on the bootloader open result and the image type.
 ///
-/// - `Ok(bl)` → `Continue(Available(bl), false)` — normal boot, both image types.
+/// - `Ok(bl)` → `Continue(Available(bl), false)` — successful open, both image types.
 /// - `Err(e)` + release-image → `Continue(Degraded(e), true)` — degraded boot continues.
 /// - `Err(e)` + debug-image → `Abort(DegradedBoot(e))` — enter debug shell immediately.
 pub fn classify_bootloader(

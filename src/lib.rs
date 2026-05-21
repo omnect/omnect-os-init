@@ -87,8 +87,8 @@ pub fn run_init() -> Result<()> {
     // Mount core partitions (rootfs + boot). Capture the result rather than
     // propagating immediately: if fsck on the boot partition requires a reboot,
     // ods_status already holds the diagnostic (fsck_and_record stores it before
-    // returning the error). We persist that data to the bootloader env before
-    // exiting, so we open the bootloader first and persist best-effort.
+    // returning the error). We open the bootloader next and persist fsck data
+    // when available; apply_bootloader_decision then enforces error precedence.
     let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
 
     // Best-effort: open the bootloader environment. The image type determines how
@@ -107,8 +107,9 @@ pub fn run_init() -> Result<()> {
     // in normal.rs after mount_remaining_partitions.
     persist_fsck_results(&ods_status, bootloader_env.available_mut(), rootfs);
     if bootloader_env.available_mut().is_some() {
-        // Records moved to bootloader env; clear to avoid
-        // double-serialization into the ODS runtime JSON.
+        // Records moved to bootloader env; clear to avoid double-serialization
+        // into the ODS runtime JSON. Not done in degraded mode — fsck results
+        // remain in the JSON so ODS and operators can still read them.
         ods_status.fsck.clear();
     }
 
