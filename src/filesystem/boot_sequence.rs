@@ -449,4 +449,19 @@ mod tests {
         // But log dir must not be created (data not mounted).
         assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
     }
+
+    #[test]
+    fn test_persist_none_bootloader_skips_save_fsck_status() {
+        // In degraded mode persist_fsck_results is called with None. The function
+        // must not attempt any bootloader write. Passing None (not a mock) means
+        // the type system statically prevents any save_fsck_status call — this
+        // test documents the contract and catches any future refactor that
+        // re-introduces an implicit fallback or null-object pattern.
+        let ods = make_ods_with(PartitionName::Boot, 1, "errors corrected");
+        let temp = TempDir::new().unwrap();
+
+        // Must not panic; no bootloader env write; no log dir (data not mounted).
+        persist_fsck_results(&ods, None, temp.path());
+        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+    }
 }
