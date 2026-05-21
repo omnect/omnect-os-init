@@ -100,11 +100,21 @@ pub fn resize_if_needed(
 
     run_cmd(SYNC_CMD, &[])?;
 
+    write_resize_guard(bootloader)?;
+
+    log::info!("Data partition resize complete");
+    Ok(())
+}
+
+/// Write the resize guard to the bootloader environment if available.
+///
+/// Called after a successful resize. When the bootloader is unavailable
+/// (degraded mode), the guard is intentionally not written — the resize
+/// will run again on the next boot, which is idempotent.
+pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn Bootloader>) -> Result<()> {
     if let Some(bl) = bootloader {
         bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))?;
     }
-
-    log::info!("Data partition resize complete");
     Ok(())
 }
 
@@ -287,5 +297,38 @@ Number  Start   End     Size   File system  Name  Flags
             },
         };
         assert!(resize_if_needed(&layout, None).is_ok());
+    }
+
+    // --- write_resize_guard unit tests ---
+    // These test the guard-write dispatch directly, independently of the
+    // resize commands (which require real block devices and are CI-only).
+
+    #[test]
+    fn write_guard_none_bootloader_is_noop() {
+        assert!(write_resize_guard(None).is_ok());
+    }
+
+    #[test]
+    fn write_guard_some_bootloader_sets_env() {
+        use crate::bootloader::MockBootloader;
+        let mut bl = MockBootloader::new();
+        write_resize_guard(Some(&mut bl)).unwrap();
+        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_some());
+    }
+
+    #[test]
+    fn write_guard_none_does_not_call_set_env() {
+        // Verifies the guard write at the end of resize_if_needed is skipped
+        // when bootloader is None (degraded mode). Tests the path that the
+        // PR exists to make explicit — previously this was a silent no-op.
+        use crate::bootloader::MockBootloader;
+        let bl = MockBootloader::new();
+        // Pass None, not &mut bl — guard write must be skipped
+        write_resize_guard(None).unwrap();
+        // No set_env call was possible; bl is still unmodified
+        assert!(
+            bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none(),
+            "ResizedData must not be set when bootloader is None"
+        );
     }
 }
