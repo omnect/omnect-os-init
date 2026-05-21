@@ -77,8 +77,8 @@ covered by unit and integration tests without invoking `run_init`:
 ```rust
 // src/bootloader/mod.rs
 pub enum BootloaderDecision {
-    /// Continue init with this bootloader env. The bool is true iff degraded.
-    Continue(BootloaderEnv, bool),
+    /// Continue init with this bootloader env.
+    Continue(BootloaderEnv),
     /// Abort init with this error (caller will hit handle_fatal_error).
     Abort(InitramfsError),
 }
@@ -90,8 +90,8 @@ pub fn classify_bootloader(
 ```
 
 Behaviour:
-- `Ok(bl)` → `Continue(Available(bl), false)`
-- `Err(e)` and `is_release_image` → `Continue(Degraded(e), true)`
+- `Ok(bl)` → `Continue(Available(bl))` — `env.is_degraded()` is `false`
+- `Err(e)` and `is_release_image` → `Continue(Degraded(e))` — `env.is_degraded()` is `true`
 - `Err(e)` and not `is_release_image` → `Abort(InitramfsError::DegradedBoot(e))`
 
 ### 3.4 Boot flow
@@ -100,10 +100,12 @@ Behaviour:
 run_init()
   open_bootloader_env()
   → classify_bootloader(result, cfg!(feature = "release-image"))
-      Continue(env, degraded) →
-        if degraded { ods_status.set_degraded_boot(); }
-        // existing path: persist fsck (if env.available_mut()), then core_result?,
-        // then preflight, mode dispatch, switch_root
+      Continue(env) →
+        apply_bootloader_decision(decision, core_result, ods_status, rootfs):
+          persist_fsck_results(env.available_mut())  // ← BEFORE core_result?
+          core_result?
+          if env.is_degraded() { ods_status.set_degraded_boot(); }
+        → preflight, mode dispatch, switch_root
       Abort(err) →
         return Err(err) → handle_fatal_error → spawn_debug_shell()
 ```
@@ -115,10 +117,11 @@ run_init()
 ```
 core_result = mount_core_partitions(...)
 match classify_bootloader(open_bootloader_env(), is_release) {
-    Continue(env, degraded) => {
-        if let Some(bl) = env.available_mut() { persist_fsck_results(...); }
+    Continue(env) => {
+        persist_fsck_results(env.available_mut(), ...);  // ← persist FIRST
+        if env.available_mut().is_some() { ods_status.fsck.clear(); }
         core_result?;                  // ← FsckRequiresReboot reboots here
-        if degraded { ods_status.set_degraded_boot(); }
+        if env.is_degraded() { ods_status.set_degraded_boot(); }
         // continue
     }
     Abort(err) => {
@@ -127,6 +130,11 @@ match classify_bootloader(open_bootloader_env(), is_release) {
     }
 }
 ```
+
+The persist-before-propagate ordering is critical on uboot: `UBootBootloader::new()`
+is infallible, so `env` is always `Available` — without persisting first the boot
+fsck diagnostic would be lost across the reboot. `apply_bootloader_decision` owns
+this contract (see `mount_core_partitions` docstring).
 
 This preserves the existing invariant that `FsckRequiresReboot` always
 triggers a reboot, even on a debug-image, regardless of bootloader state.
