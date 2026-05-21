@@ -321,21 +321,26 @@ pipeline (see §6.6).
 
 ### 6.5 Feature matrix
 
+`test-utils` must be included in every combination so that
+`tests/degraded_boot.rs` (which requires `MockBootloader`) is compiled
+and run. Without it, `cargo test` silently skips the integration test
+binary.
+
 ```
-cargo test --features grub,gpt
-cargo test --features grub,dos
-cargo test --features uboot,gpt
-cargo test --features uboot,dos
-cargo test --features grub,gpt,resize-data
-cargo test --features grub,dos,resize-data
-cargo test --features uboot,gpt,resize-data
-cargo test --features uboot,dos,resize-data
-cargo test --features grub,gpt,release-image
-cargo test --features grub,dos,release-image
-cargo test --features uboot,gpt,release-image
-cargo test --features uboot,dos,release-image
-cargo test --features grub,gpt,resize-data,release-image
-cargo test --features uboot,dos,resize-data,release-image
+cargo test --features grub,gpt,test-utils
+cargo test --features grub,dos,test-utils
+cargo test --features uboot,gpt,test-utils
+cargo test --features uboot,dos,test-utils
+cargo test --features grub,gpt,resize-data,test-utils
+cargo test --features grub,dos,resize-data,test-utils
+cargo test --features uboot,gpt,resize-data,test-utils
+cargo test --features uboot,dos,resize-data,test-utils
+cargo test --features grub,gpt,release-image,test-utils
+cargo test --features grub,dos,release-image,test-utils
+cargo test --features uboot,gpt,release-image,test-utils
+cargo test --features uboot,dos,release-image,test-utils
+cargo test --features grub,gpt,resize-data,release-image,test-utils
+cargo test --features uboot,dos,resize-data,release-image,test-utils
 ```
 
 ### 6.6 End-to-end (out of scope for this repo)
