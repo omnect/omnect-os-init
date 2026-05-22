@@ -62,7 +62,7 @@ fn apply_boot_env_decision(
             // so without this the diagnostic would be lost on FsckRequiresReboot).
             persist_fsck_results(ods_status, env.available_mut(), rootfs);
             if env.available_mut().is_some() {
-                // Records moved to bootloader env; clear to avoid double-serialization
+                // Records moved to boot env; clear to avoid double-serialization
                 // into the ODS runtime JSON. Not done in degraded mode — fsck results
                 // remain in the JSON so ODS and operators can still read them.
                 ods_status.fsck.clear();
