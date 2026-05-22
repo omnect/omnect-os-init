@@ -1,9 +1,9 @@
 //! Preflight step: data partition auto-resize
 //!
-//! On a live bootloader: checks the `omnect_resized_data` guard and, if
+//! With boot env available: checks the `omnect_resized_data` guard and, if
 //! absent, expands the data partition via `filesystem::resize_data`.
 //!
-//! On a degraded boot (bootloader unavailable): runs resize without the
+//! On a degraded boot (boot env unavailable): runs resize without the
 //! guard. Only reached on release-images; debug-images abort in lib.rs
 //! before preflight executes.
 
@@ -103,9 +103,9 @@ mod tests {
     #[test]
     fn degraded_env_with_data_layout_guard_not_written() {
         // Uses layout_with_data() + BootEnvState::Degraded. resize_if_needed
-        // is called with None bootloader (degraded arm). With a real device path
+        // is called with None boot_env (degraded arm). With a real device path
         // (/dev/sda8) the resize commands would fail — so this test asserts the
-        // error is a command failure (ResizeDataError), NOT a bootloader error,
+        // error is a command failure (ResizeDataError), NOT a boot env error,
         // which proves the guard-write code path was not reached.
         let layout = layout_with_data();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
@@ -118,7 +118,7 @@ mod tests {
         };
         let result = run(&mut ctx);
         // The resize commands fail (no real /dev/sda8) but the error must NOT
-        // be a bootloader error — confirming the guard-write path was bypassed.
+        // be a boot env error — confirming the guard-write path was bypassed.
         match result {
             Ok(()) => {} // unlikely in test env, but acceptable
             Err(crate::error::InitramfsError::ResizeData(_)) => {} // expected

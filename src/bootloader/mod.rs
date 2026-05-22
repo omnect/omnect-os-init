@@ -162,7 +162,7 @@ impl BootEnvState {
 
 /// The outcome of `classify_boot_env`.
 pub enum BootEnvDecision {
-    /// Continue init with this bootloader env.
+    /// Continue init with this boot env state.
     Continue(BootEnvState),
     /// Abort init with this error — caller passes it to `handle_fatal_error`.
     Abort(crate::error::InitramfsError),

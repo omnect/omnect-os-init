@@ -106,9 +106,9 @@ pub fn resize_if_needed(
     Ok(())
 }
 
-/// Write the resize guard to the bootloader environment if available.
+/// Write the resize guard to the boot environment if available.
 ///
-/// Called after a successful resize. When the bootloader is unavailable
+/// Called after a successful resize. When the boot env is unavailable
 /// (degraded mode), the guard is intentionally not written — the resize
 /// will run again on the next boot, which is idempotent.
 pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn BootEnv>) -> Result<()> {
