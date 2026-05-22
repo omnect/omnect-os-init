@@ -14,11 +14,11 @@ pub type Result<T> = std::result::Result<T, InitramfsError>;
 /// Top-level error type for the initramfs
 #[derive(Error, Debug)]
 pub enum InitramfsError {
-    #[error("Bootloader error: {0}")]
-    Bootloader(#[from] BootloaderError),
+    #[error("BootEnv error: {0}")]
+    Bootloader(#[from] BootEnvError),
 
     #[error("degraded boot: {0}")]
-    DegradedBoot(#[source] BootloaderError),
+    DegradedBoot(#[source] BootEnvError),
 
     #[error("Early init error: {0}")]
     EarlyInit(#[from] EarlyInitError),
@@ -55,8 +55,8 @@ pub enum EarlyInitError {
 
 /// Errors related to bootloader environment access
 #[derive(Error, Debug)]
-pub enum BootloaderError {
-    #[error("Bootloader environment file not found: {}", path.display())]
+pub enum BootEnvError {
+    #[error("BootEnv environment file not found: {}", path.display())]
     EnvFileNotFound { path: PathBuf },
 
     #[error("Command '{command}' failed: {reason}")]

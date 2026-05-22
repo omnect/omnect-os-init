@@ -7,13 +7,13 @@
 #[cfg(feature = "resize-data")]
 pub mod resize_data;
 
-use crate::{Result, bootloader::BootloaderEnv, partition::PartitionLayout};
+use crate::{Result, bootloader::BootEnvState, partition::PartitionLayout};
 
 /// Context passed to each preflight step.
 #[non_exhaustive]
 pub struct PreflightCtx<'l, 'b> {
     pub layout: &'l PartitionLayout,
-    pub bootloader: &'b mut BootloaderEnv,
+    pub boot_env: &'b mut BootEnvState,
 }
 
 /// Run all enabled preflight steps in order.

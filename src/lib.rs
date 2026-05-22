@@ -27,9 +27,9 @@ pub mod runtime;
 
 // Re-export main types for convenience
 #[cfg(any(test, feature = "test-utils"))]
-pub use crate::bootloader::MockBootloader;
+pub use crate::bootloader::MockBootEnv;
 pub use crate::bootloader::{
-    Bootloader, BootloaderDecision, BootloaderEnv, classify_bootloader, open_bootloader_env,
+    BootEnv, BootEnvDecision, BootEnvState, classify_boot_env, open_boot_env,
 };
 pub use crate::early_init::mount_essential_filesystems;
 pub use crate::error::{InitramfsError, Result};
@@ -51,13 +51,13 @@ const ROOTFS_DIR: &str = "/rootfs";
 /// prevent double-serialization into the ODS runtime JSON. In degraded mode the
 /// records are intentionally kept so ODS consumers can still read them.
 fn apply_bootloader_decision(
-    decision: BootloaderDecision,
+    decision: BootEnvDecision,
     core_result: Result<()>,
     ods_status: &mut OdsStatus,
     rootfs: &Path,
-) -> Result<BootloaderEnv> {
+) -> Result<BootEnvState> {
     match decision {
-        BootloaderDecision::Continue(mut env) => {
+        BootEnvDecision::Continue(mut env) => {
             // Persist before propagating core_result (uboot is always Available,
             // so without this the diagnostic would be lost on FsckRequiresReboot).
             persist_fsck_results(ods_status, env.available_mut(), rootfs);
@@ -68,13 +68,13 @@ fn apply_bootloader_decision(
                 ods_status.fsck.clear();
             }
             core_result?;
-            if let BootloaderEnv::Degraded(ref e) = env {
-                warn!("Bootloader environment unavailable: {e}; booting in degraded mode");
+            if let BootEnvState::Degraded(ref e) = env {
+                warn!("BootEnv environment unavailable: {e}; booting in degraded mode");
                 ods_status.set_degraded_boot();
             }
             Ok(env)
         }
-        BootloaderDecision::Abort(err) => {
+        BootEnvDecision::Abort(err) => {
             core_result?;
             Err(err)
         }
@@ -108,13 +108,13 @@ pub fn run_init() -> Result<()> {
     let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
 
     // Best-effort: open the bootloader environment. The image type determines how
-    // to proceed when it is unavailable — see classify_bootloader.
+    // to proceed when it is unavailable — see classify_boot_env.
     //
     // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition
-    // may not be mounted (GRUB), causing open_bootloader_env() to fail.
+    // may not be mounted (GRUB), causing open_boot_env() to fail.
     // apply_bootloader_decision always propagates core_result before DegradedBoot.
     let is_release = cfg!(feature = "release-image");
-    let decision = classify_bootloader(open_bootloader_env(), is_release);
+    let decision = classify_boot_env(open_boot_env(), is_release);
 
     let mut bootloader_env =
         apply_bootloader_decision(decision, core_result, &mut ods_status, rootfs)?;
@@ -122,14 +122,14 @@ pub fn run_init() -> Result<()> {
     {
         let ctx = preflight::PreflightCtx {
             layout: &layout,
-            bootloader: &mut bootloader_env,
+            boot_env: &mut bootloader_env,
         };
         preflight::run(ctx)?;
     }
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_env, ods_status);
 
-    match BootMode::detect(ctx.bootloader.available())? {
+    match BootMode::detect(ctx.boot_env.available())? {
         BootMode::Normal => mode::normal::run(ctx),
     }
 }
@@ -137,29 +137,27 @@ pub fn run_init() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::MockBootloader;
-    use crate::error::{BootloaderError, FilesystemError, InitramfsError};
+    use crate::bootloader::MockBootEnv;
+    use crate::error::{BootEnvError, FilesystemError, InitramfsError};
     use crate::filesystem::FsckExitCode;
     use std::path::PathBuf;
 
-    fn make_available() -> BootloaderDecision {
-        BootloaderDecision::Continue(BootloaderEnv::Available(Box::new(MockBootloader::new())))
+    fn make_available() -> BootEnvDecision {
+        BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())))
     }
 
-    fn make_degraded() -> BootloaderDecision {
-        BootloaderDecision::Continue(BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+    fn make_degraded() -> BootEnvDecision {
+        BootEnvDecision::Continue(BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "grub-editenv".into(),
             reason: "test".into(),
         }))
     }
 
-    fn make_abort() -> BootloaderDecision {
-        BootloaderDecision::Abort(InitramfsError::DegradedBoot(
-            BootloaderError::CommandFailed {
-                command: "grub-editenv".into(),
-                reason: "test".into(),
-            },
-        ))
+    fn make_abort() -> BootEnvDecision {
+        BootEnvDecision::Abort(InitramfsError::DegradedBoot(BootEnvError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "test".into(),
+        }))
     }
 
     fn fsck_reboot_err() -> Result<()> {
@@ -177,7 +175,7 @@ mod tests {
         let mut ods = OdsStatus::new();
         let result =
             apply_bootloader_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
-        assert!(matches!(result, Ok(BootloaderEnv::Available(_))));
+        assert!(matches!(result, Ok(BootEnvState::Available(_))));
         assert!(!ods.degraded_boot);
     }
 
@@ -186,7 +184,7 @@ mod tests {
         let mut ods = OdsStatus::new();
         let result =
             apply_bootloader_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
-        assert!(matches!(result, Ok(BootloaderEnv::Degraded(_))));
+        assert!(matches!(result, Ok(BootEnvState::Degraded(_))));
         assert!(ods.degraded_boot);
     }
 
@@ -234,7 +232,7 @@ mod tests {
 
     #[test]
     fn persist_runs_before_fsck_reboot_propagates() {
-        // Regression test for uboot: on uboot open_bootloader_env() is infallible,
+        // Regression test for uboot: on uboot open_boot_env() is infallible,
         // so env is Available. The fsck diagnostic in ods_status.fsck must be
         // persisted to the bootloader env *before* FsckRequiresReboot propagates,
         // or it is lost across the reboot (boot_sequence.rs:68-76 contract).
@@ -246,7 +244,7 @@ mod tests {
         );
 
         let decision =
-            BootloaderDecision::Continue(BootloaderEnv::Available(Box::new(MockBootloader::new())));
+            BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())));
         let result =
             apply_bootloader_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
 

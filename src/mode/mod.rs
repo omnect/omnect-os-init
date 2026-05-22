@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    Bootloader, BootloaderEnv, Result, config::Config, partition::PartitionLayout,
-    runtime::OdsStatus,
+    BootEnv, BootEnvState, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus,
 };
 
 pub mod normal;
@@ -12,7 +11,7 @@ pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
     pub(crate) layout: &'a PartitionLayout,
     pub(crate) rootfs: &'a Path,
-    pub(crate) bootloader: BootloaderEnv,
+    pub(crate) boot_env: BootEnvState,
     pub(crate) ods_status: OdsStatus,
 }
 
@@ -21,14 +20,14 @@ impl<'a> BootContext<'a> {
         config: &'a Config,
         layout: &'a PartitionLayout,
         rootfs: &'a Path,
-        bootloader: BootloaderEnv,
+        boot_env: BootEnvState,
         ods_status: OdsStatus,
     ) -> Self {
         Self {
             config,
             layout,
             rootfs,
-            bootloader,
+            boot_env,
             ods_status,
         }
     }
@@ -43,7 +42,7 @@ impl BootMode {
     /// Detect the boot mode from the bootloader environment.
     ///
     /// Returns `Normal` for both available and degraded (absent) bootloader states.
-    pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
+    pub fn detect(_bl: Option<&dyn BootEnv>) -> Result<Self> {
         Ok(Self::Normal)
     }
 }

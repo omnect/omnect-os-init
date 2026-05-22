@@ -7,14 +7,14 @@
 //! guard. Only reached on release-images; debug-images abort in lib.rs
 //! before preflight executes.
 
-use crate::bootloader::BootloaderEnvKey;
+use crate::bootloader::BootEnvKey;
 use crate::error::Result;
 use crate::preflight::PreflightCtx;
 
 pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
-    match ctx.bootloader.available_mut() {
+    match ctx.boot_env.available_mut() {
         Some(bl) => {
-            if bl.get_env(BootloaderEnvKey::ResizedData)?.is_some() {
+            if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
                 log::debug!("resize-data preflight: guard present; already resized");
                 return Ok(());
             }
@@ -30,8 +30,8 @@ pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootloaderEnv, BootloaderEnvKey, MockBootloader};
-    use crate::error::BootloaderError;
+    use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+    use crate::error::BootEnvError;
     use crate::partition::{PartitionLayout, RootDevice};
     use crate::preflight::PreflightCtx;
     use std::collections::HashMap;
@@ -69,12 +69,12 @@ mod tests {
         // layout_with_data: if the guard check is bypassed, resize_if_needed
         // will attempt to spawn sgdisk/parted (not in test env) and return Err.
         let layout = layout_with_data();
-        let bl: Box<dyn crate::bootloader::Bootloader> =
-            Box::new(MockBootloader::new().with_env(BootloaderEnvKey::ResizedData, "1"));
-        let mut env = BootloaderEnv::Available(bl);
+        let bl: Box<dyn crate::bootloader::BootEnv> =
+            Box::new(MockBootEnv::new().with_env(BootEnvKey::ResizedData, "1"));
+        let mut env = BootEnvState::Available(bl);
         let mut ctx = PreflightCtx {
             layout: &layout,
-            bootloader: &mut env,
+            boot_env: &mut env,
         };
         assert!(run(&mut ctx).is_ok());
     }
@@ -89,32 +89,32 @@ mod tests {
         // The guard-write skip behaviour for degraded mode is verified directly
         // in filesystem::resize_data::write_guard_none_does_not_call_set_env.
         let layout = empty_layout();
-        let mut env = BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+        let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "grub-editenv".into(),
             reason: "test".into(),
         });
         let mut ctx = PreflightCtx {
             layout: &layout,
-            bootloader: &mut env,
+            boot_env: &mut env,
         };
         assert!(run(&mut ctx).is_ok());
     }
 
     #[test]
     fn degraded_env_with_data_layout_guard_not_written() {
-        // Uses layout_with_data() + BootloaderEnv::Degraded. resize_if_needed
+        // Uses layout_with_data() + BootEnvState::Degraded. resize_if_needed
         // is called with None bootloader (degraded arm). With a real device path
         // (/dev/sda8) the resize commands would fail — so this test asserts the
         // error is a command failure (ResizeDataError), NOT a bootloader error,
         // which proves the guard-write code path was not reached.
         let layout = layout_with_data();
-        let mut env = BootloaderEnv::Degraded(BootloaderError::CommandFailed {
+        let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "grub-editenv".into(),
             reason: "test".into(),
         });
         let mut ctx = PreflightCtx {
             layout: &layout,
-            bootloader: &mut env,
+            boot_env: &mut env,
         };
         let result = run(&mut ctx);
         // The resize commands fail (no real /dev/sda8) but the error must NOT

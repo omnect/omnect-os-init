@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::bootloader::{Bootloader, BootloaderEnvKey};
+use crate::bootloader::{BootEnv, BootEnvKey};
 use crate::error::{ResizeDataError, Result};
 use crate::filesystem::{FsType, check_filesystem};
 use crate::partition::PartitionName;
@@ -30,7 +30,7 @@ type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
 pub fn resize_if_needed(
     layout: &crate::partition::PartitionLayout,
-    bootloader: Option<&mut dyn Bootloader>,
+    bootloader: Option<&mut dyn BootEnv>,
 ) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
@@ -111,9 +111,9 @@ pub fn resize_if_needed(
 /// Called after a successful resize. When the bootloader is unavailable
 /// (degraded mode), the guard is intentionally not written — the resize
 /// will run again on the next boot, which is idempotent.
-pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn Bootloader>) -> Result<()> {
+pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn BootEnv>) -> Result<()> {
     if let Some(bl) = bootloader
-        && let Err(e) = bl.set_env(BootloaderEnvKey::ResizedData, Some("1"))
+        && let Err(e) = bl.set_env(BootEnvKey::ResizedData, Some("1"))
     {
         log::warn!(
             "data partition resize completed but guard write failed: {e}; \
@@ -270,7 +270,7 @@ Number  Start   End     Size   File system  Name  Flags
 
     #[test]
     fn test_resize_skips_when_data_partition_absent() {
-        use crate::bootloader::MockBootloader;
+        use crate::bootloader::MockBootEnv;
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
 
@@ -282,10 +282,10 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        let mut bl: Box<dyn crate::bootloader::Bootloader> = Box::new(MockBootloader::new());
+        let mut bl: Box<dyn crate::bootloader::BootEnv> = Box::new(MockBootEnv::new());
 
         assert!(resize_if_needed(&layout, Some(bl.as_mut())).is_ok());
-        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_none());
+        assert!(bl.get_env(BootEnvKey::ResizedData).unwrap().is_none());
     }
 
     #[test]
@@ -315,9 +315,9 @@ Number  Start   End     Size   File system  Name  Flags
 
     #[test]
     fn write_guard_some_bootloader_sets_env() {
-        use crate::bootloader::MockBootloader;
-        let mut bl = MockBootloader::new();
+        use crate::bootloader::MockBootEnv;
+        let mut bl = MockBootEnv::new();
         write_resize_guard(Some(&mut bl)).unwrap();
-        assert!(bl.get_env(BootloaderEnvKey::ResizedData).unwrap().is_some());
+        assert!(bl.get_env(BootEnvKey::ResizedData).unwrap().is_some());
     }
 }

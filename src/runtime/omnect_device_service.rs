@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use nix::unistd::{Gid, Uid, chown};
 use serde::Serialize;
 
-use crate::bootloader::{Bootloader, BootloaderEnvKey};
+use crate::bootloader::{BootEnv, BootEnvKey};
 use crate::error::{InitramfsError, Result};
 use crate::partition::PartitionName;
 
@@ -28,7 +28,7 @@ const UPDATE_VALIDATE_FILE: &str = "omnect_validate_update";
 /// Failed update validation marker
 const UPDATE_VALIDATE_FAILED_FILE: &str = "omnect_validate_update_failed";
 
-/// Bootloader updated marker
+/// BootEnv updated marker
 const BOOTLOADER_UPDATED_FILE: &str = "omnect_bootloader_updated";
 
 /// Factory reset status file (in /tmp)
@@ -59,10 +59,10 @@ impl FilePermission {
     }
 }
 
-/// Bootloader env value meaning the flag is set / requested
+/// BootEnv env value meaning the flag is set / requested
 const BOOTLOADER_FLAG_SET: &str = "1";
 
-/// Bootloader env value meaning update validation previously failed
+/// BootEnv env value meaning update validation previously failed
 const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
 
 /// Outcome codes for a factory reset operation.
@@ -203,7 +203,7 @@ impl OdsStatus {
 /// - bootloader_updated: 600
 pub fn create_ods_runtime_files(
     status: &OdsStatus,
-    bootloader: Option<&dyn Bootloader>,
+    bootloader: Option<&dyn BootEnv>,
     rootfs_dir: &Path,
     ods_dir: &Path,
 ) -> Result<()> {
@@ -273,12 +273,12 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 /// trigger files it creates.
 fn handle_update_validation(
     ods_dir: &Path,
-    bootloader: &dyn Bootloader,
+    bootloader: &dyn BootEnv,
     uid: Uid,
     gid: Gid,
 ) -> Result<()> {
     let validate_update = bootloader
-        .get_env(BootloaderEnvKey::ValidateUpdate)
+        .get_env(BootEnvKey::ValidateUpdate)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_validate_update from bootloader: {e}"
@@ -322,7 +322,7 @@ fn handle_update_validation(
     }
 
     let bootloader_updated = bootloader
-        .get_env(BootloaderEnvKey::BootloaderUpdated)
+        .get_env(BootEnvKey::BootloaderUpdated)
         .map_err(|e| {
             InitramfsError::Io(std::io::Error::other(format!(
                 "failed to read omnect_bootloader_updated from bootloader: {e}"
@@ -342,7 +342,7 @@ fn handle_update_validation(
         })?;
         set_ownership(&marker_path, uid, gid)?;
         set_mode(&marker_path, FilePermission::FileRestricted)?;
-        log::info!("Bootloader update marker created");
+        log::info!("BootEnv update marker created");
     }
 
     Ok(())
@@ -615,8 +615,8 @@ mod tests {
     #[test]
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
+        let bl =
+            crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -630,7 +630,7 @@ mod tests {
         // Only "1" is a valid truthy value; "true" must not create the trigger file.
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::ValidateUpdate, "true");
+            .with_env(BootEnvKey::ValidateUpdate, "true");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -641,7 +641,7 @@ mod tests {
     fn test_handle_update_validation_failed() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::ValidateUpdate, "failed");
+            .with_env(BootEnvKey::ValidateUpdate, "failed");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -653,7 +653,7 @@ mod tests {
     fn test_handle_update_validation_unexpected_value_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::ValidateUpdate, "unexpected");
+            .with_env(BootEnvKey::ValidateUpdate, "unexpected");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -665,7 +665,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::BootloaderUpdated, "1");
+            .with_env(BootEnvKey::BootloaderUpdated, "1");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -676,7 +676,7 @@ mod tests {
     fn test_handle_update_validation_bootloader_updated_false_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::BootloaderUpdated, "0");
+            .with_env(BootEnvKey::BootloaderUpdated, "0");
 
         handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
 
@@ -737,8 +737,8 @@ mod tests {
         let mut status = OdsStatus::new();
         status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootloaderEnvKey::ValidateUpdate, "1");
+        let bl =
+            crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
         create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
 

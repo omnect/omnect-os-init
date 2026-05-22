@@ -5,8 +5,8 @@
 
 use std::process::Command;
 
-use crate::bootloader::{Bootloader, BootloaderEnvKey, Result};
-use crate::error::BootloaderError;
+use crate::bootloader::{BootEnv, BootEnvKey, Result};
+use crate::error::BootEnvError;
 
 /// Command to read U-Boot environment variables
 const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
@@ -17,15 +17,15 @@ const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 /// U-Boot bootloader implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
-/// Fsck status encoding is handled by the default `Bootloader` trait methods.
-pub struct UBootBootloader {
+/// Fsck status encoding is handled by the default `BootEnv` trait methods.
+pub struct UBootBootEnv {
     // No state needed - commands access environment directly
 }
 
-impl UBootBootloader {
+impl UBootBootEnv {
     /// Create a new U-Boot bootloader instance.
     ///
-    /// Returns `Result<Self>` for API symmetry with `GrubBootloader::new()`,
+    /// Returns `Result<Self>` for API symmetry with `GrubBootEnv::new()`,
     /// even though this constructor currently cannot fail.
     pub fn new() -> Result<Self> {
         Ok(Self {})
@@ -37,7 +37,7 @@ impl UBootBootloader {
             .arg("-n")
             .arg(var)
             .output()
-            .map_err(|e| BootloaderError::CommandFailed {
+            .map_err(|e| BootEnvError::CommandFailed {
                 command: FW_PRINTENV_CMD.to_string(),
                 reason: e.to_string(),
             })?;
@@ -49,7 +49,7 @@ impl UBootBootloader {
             Some(0) => {}
             Some(1) => return Ok(None),
             code => {
-                return Err(BootloaderError::CommandExitCode {
+                return Err(BootEnvError::CommandExitCode {
                     command: FW_PRINTENV_CMD.to_string(),
                     code,
                     stderr: String::from_utf8_lossy(&output.stderr).to_string(),
@@ -74,13 +74,13 @@ impl UBootBootloader {
             cmd.arg(v);
         }
 
-        let output = cmd.output().map_err(|e| BootloaderError::CommandFailed {
+        let output = cmd.output().map_err(|e| BootEnvError::CommandFailed {
             command: FW_SETENV_CMD.to_string(),
             reason: e.to_string(),
         })?;
 
         if !output.status.success() {
-            return Err(BootloaderError::CommandExitCode {
+            return Err(BootEnvError::CommandExitCode {
                 command: FW_SETENV_CMD.to_string(),
                 code: output.status.code(),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
@@ -91,12 +91,12 @@ impl UBootBootloader {
     }
 }
 
-impl Bootloader for UBootBootloader {
-    fn get_env(&self, key: BootloaderEnvKey) -> Result<Option<String>> {
+impl BootEnv for UBootBootEnv {
+    fn get_env(&self, key: BootEnvKey) -> Result<Option<String>> {
         self.run_fw_printenv(key.as_str().as_ref())
     }
 
-    fn set_env(&mut self, key: BootloaderEnvKey, value: Option<&str>) -> Result<()> {
+    fn set_env(&mut self, key: BootEnvKey, value: Option<&str>) -> Result<()> {
         self.run_fw_setenv(key.as_str().as_ref(), value)
     }
 }
