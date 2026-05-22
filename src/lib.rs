@@ -39,7 +39,7 @@ pub use crate::runtime::OdsStatus;
 /// Mount point for the real rootfs inside the initramfs.
 const ROOTFS_DIR: &str = "/rootfs";
 
-/// Apply a bootloader decision, enforcing the FsckRequiresReboot-wins invariant.
+/// Apply a boot env decision, enforcing the FsckRequiresReboot-wins invariant.
 ///
 /// Persists fsck results to the bootloader environment *before* propagating
 /// `core_result`, satisfying the contract documented in `mount_core_partitions`:
