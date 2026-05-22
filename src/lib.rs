@@ -173,8 +173,7 @@ mod tests {
     #[test]
     fn available_ok_core_returns_available_env() {
         let mut ods = OdsStatus::new();
-        let result =
-            apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
+        let result = apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Available(_))));
         assert!(!ods.degraded_boot);
     }
@@ -182,8 +181,7 @@ mod tests {
     #[test]
     fn degraded_ok_core_sets_degraded_flag() {
         let mut ods = OdsStatus::new();
-        let result =
-            apply_boot_env_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
+        let result = apply_boot_env_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Degraded(_))));
         assert!(ods.degraded_boot);
     }
