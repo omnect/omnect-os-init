@@ -72,7 +72,7 @@ pub fn fsck_and_record(
 /// In that case `ods_status` already holds the fsck diagnostic (recorded by
 /// `fsck_and_record`). The caller must persist `ods_status` to the bootloader
 /// environment before propagating this error, or the diagnostic is lost on
-/// the subsequent reboot. `apply_bootloader_decision` in `run_init` owns this
+/// the subsequent reboot. `apply_boot_env_decision` in `run_init` owns this
 /// contract: it calls `persist_fsck_results` before propagating `core_result`.
 pub fn mount_core_partitions(
     layout: &PartitionLayout,

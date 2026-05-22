@@ -50,7 +50,7 @@ const ROOTFS_DIR: &str = "/rootfs";
 /// After a successful persist the fsck records are cleared from `ods_status` to
 /// prevent double-serialization into the ODS runtime JSON. In degraded mode the
 /// records are intentionally kept so ODS consumers can still read them.
-fn apply_bootloader_decision(
+fn apply_boot_env_decision(
     decision: BootEnvDecision,
     core_result: Result<()>,
     ods_status: &mut OdsStatus,
@@ -102,7 +102,7 @@ pub fn run_init() -> Result<()> {
 
     // Mount core partitions (rootfs + boot). Capture the result rather than
     // propagating immediately: if fsck on the boot partition requires a reboot,
-    // ods_status already holds the diagnostic. apply_bootloader_decision persists
+    // ods_status already holds the diagnostic. apply_boot_env_decision persists
     // it to the bootloader env before propagating (satisfying the contract in
     // mount_core_partitions), then enforces FsckRequiresReboot-wins precedence.
     let core_result = mount_core_partitions(&layout, rootfs, &mut ods_status);
@@ -112,12 +112,12 @@ pub fn run_init() -> Result<()> {
     //
     // Note: if mount_core_partitions returned FsckRequiresReboot, the boot partition
     // may not be mounted (GRUB), causing open_boot_env() to fail.
-    // apply_bootloader_decision always propagates core_result before DegradedBoot.
+    // apply_boot_env_decision always propagates core_result before DegradedBoot.
     let is_release = cfg!(feature = "release-image");
     let decision = classify_boot_env(open_boot_env(), is_release);
 
     let mut bootloader_env =
-        apply_bootloader_decision(decision, core_result, &mut ods_status, rootfs)?;
+        apply_boot_env_decision(decision, core_result, &mut ods_status, rootfs)?;
 
     {
         let ctx = preflight::PreflightCtx {
@@ -174,7 +174,7 @@ mod tests {
     fn available_ok_core_returns_available_env() {
         let mut ods = OdsStatus::new();
         let result =
-            apply_bootloader_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
+            apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Available(_))));
         assert!(!ods.degraded_boot);
     }
@@ -183,7 +183,7 @@ mod tests {
     fn degraded_ok_core_sets_degraded_flag() {
         let mut ods = OdsStatus::new();
         let result =
-            apply_bootloader_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
+            apply_boot_env_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Degraded(_))));
         assert!(ods.degraded_boot);
     }
@@ -192,7 +192,7 @@ mod tests {
     fn fsck_reboot_wins_over_degraded_continue() {
         // FsckRequiresReboot must propagate even when bootloader is also unavailable.
         let mut ods = OdsStatus::new();
-        let result = apply_bootloader_decision(
+        let result = apply_boot_env_decision(
             make_degraded(),
             fsck_reboot_err(),
             &mut ods,
@@ -218,7 +218,7 @@ mod tests {
         // FsckRequiresReboot must propagate even when decision is Abort(DegradedBoot).
         let mut ods = OdsStatus::new();
         let result =
-            apply_bootloader_decision(make_abort(), fsck_reboot_err(), &mut ods, Path::new("/tmp"));
+            apply_boot_env_decision(make_abort(), fsck_reboot_err(), &mut ods, Path::new("/tmp"));
         assert!(
             matches!(
                 result,
@@ -246,7 +246,7 @@ mod tests {
         let decision =
             BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())));
         let result =
-            apply_bootloader_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
+            apply_boot_env_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
 
         assert!(
             matches!(
