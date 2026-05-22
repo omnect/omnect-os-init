@@ -1,4 +1,4 @@
-//! U-Boot bootloader implementation
+//! U-Boot boot environment implementation
 //!
 //! This module provides access to U-Boot bootloader environment variables
 //! using `fw_printenv` and `fw_setenv` commands.
@@ -14,7 +14,7 @@ const FW_PRINTENV_CMD: &str = "/bin/fw_printenv";
 /// Command to write U-Boot environment variables
 const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 
-/// U-Boot bootloader implementation
+/// U-Boot boot environment implementation
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
 /// Fsck status encoding is handled by the default `BootEnv` trait methods.
@@ -23,7 +23,7 @@ pub struct UBootBootEnv {
 }
 
 impl UBootBootEnv {
-    /// Create a new U-Boot bootloader instance.
+    /// Create a new U-Boot boot environment accessor.
     ///
     /// Returns `Result<Self>` for API symmetry with `GrubBootEnv::new()`,
     /// even though this constructor currently cannot fail.

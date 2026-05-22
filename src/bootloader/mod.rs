@@ -61,9 +61,9 @@ impl BootEnvKey {
     }
 }
 
-/// Trait for bootloader environment access
+/// Trait for boot environment access
 ///
-/// This trait abstracts the differences between GRUB and U-Boot bootloader
+/// This trait abstracts the differences between GRUB and U-Boot boot
 /// environment access, allowing the rest of the codebase to work with
 /// bootloader variables in a unified way.
 ///
@@ -143,7 +143,7 @@ impl BootEnvState {
         matches!(self, Self::Degraded(_))
     }
 
-    /// Returns a mutable reference to the bootloader if available.
+    /// Returns a mutable reference to the boot env accessor if available.
     pub fn available_mut(&mut self) -> Option<&mut dyn BootEnv> {
         match self {
             Self::Available(b) => Some(b.as_mut()),
@@ -151,7 +151,7 @@ impl BootEnvState {
         }
     }
 
-    /// Returns a shared reference to the bootloader if available.
+    /// Returns a shared reference to the boot env accessor if available.
     pub fn available(&self) -> Option<&dyn BootEnv> {
         match self {
             Self::Available(b) => Some(b.as_ref()),
@@ -184,13 +184,13 @@ pub fn classify_boot_env(
     }
 }
 
-/// Create a mock bootloader for testing
+/// Create a mock boot environment for testing
 #[cfg(any(test, feature = "test-utils"))]
 pub fn create_mock_bootloader() -> MockBootEnv {
     MockBootEnv::new()
 }
 
-/// Mock bootloader for testing
+/// Mock boot environment for testing
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Default)]
 pub struct MockBootEnv {

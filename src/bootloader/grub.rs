@@ -1,4 +1,4 @@
-//! GRUB bootloader implementation
+//! GRUB boot environment implementation
 //!
 //! This module provides access to GRUB bootloader environment variables
 //! using the `grub-editenv` command.
@@ -68,13 +68,13 @@ fn clear_fsck_file(partition: PartitionName) -> crate::bootloader::Result<()> {
     Ok(())
 }
 
-/// GRUB bootloader implementation
+/// GRUB boot environment implementation
 ///
 /// Uses `grub-editenv` to read/write environment variables from the grubenv file.
 pub struct GrubBootEnv;
 
 impl GrubBootEnv {
-    /// Create a new GRUB bootloader instance.
+    /// Create a new GRUB boot environment accessor.
     ///
     /// # Errors
     /// Returns an error if the grubenv file doesn't exist (indicates a corrupted
