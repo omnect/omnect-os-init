@@ -129,11 +129,11 @@ pub fn open_boot_env() -> Result<Box<dyn BootEnv>> {
     return Ok(Box::new(UBootBootEnv::new()?));
 }
 
-/// BootEnv environment state: opened successfully, or unavailable with reason.
+/// Boot environment state: opened successfully, or unavailable with reason.
 pub enum BootEnvState {
-    /// BootEnv environment opened successfully.
+    /// Boot environment opened successfully.
     Available(Box<dyn BootEnv>),
-    /// BootEnv environment could not be opened.
+    /// Boot environment could not be opened.
     Degraded(BootEnvError),
 }
 

@@ -69,7 +69,7 @@ fn apply_boot_env_decision(
             }
             core_result?;
             if let BootEnvState::Degraded(ref e) = env {
-                warn!("BootEnv environment unavailable: {e}; booting in degraded mode");
+                warn!("Boot environment unavailable: {e}; booting in degraded mode");
                 ods_status.set_degraded_boot();
             }
             Ok(env)

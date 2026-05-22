@@ -56,7 +56,7 @@ pub enum EarlyInitError {
 /// Errors related to bootloader environment access
 #[derive(Error, Debug)]
 pub enum BootEnvError {
-    #[error("BootEnv environment file not found: {}", path.display())]
+    #[error("Boot environment file not found: {}", path.display())]
     EnvFileNotFound { path: PathBuf },
 
     #[error("Command '{command}' failed: {reason}")]
