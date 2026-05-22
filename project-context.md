@@ -15,7 +15,7 @@ src/
 ├── error.rs                 # Error type hierarchy
 ├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
 ├── bootloader/
-│   ├── mod.rs               # Bootloader trait, BootloaderEnv, classify_bootloader()
+│   ├── mod.rs               # BootEnv trait, BootEnvState, classify_boot_env()
 │   ├── grub.rs              # GRUB implementation (grub-editenv)
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
 │   └── types.rs             # BootloaderType enum
@@ -84,7 +84,7 @@ src/
 | `persistent-var-log` | Persistent `/var/log` mount |
 | `release-image` | Release behaviour: loop on fatal error; continue booting in degraded mode |
 | `resize-data` | Expand data partition + filesystem to fill disk on first boot |
-| `test-utils` | Expose `MockBootloader` for integration tests — never enabled in production builds |
+| `test-utils` | Expose `MockBootEnv` for integration tests — never enabled in production builds |
 
 ## 5. Runtime Constraints
 - **Heap allocation is used freely** (`String`, `PathBuf`, `HashMap`); the OS image provides a standard allocator
@@ -98,8 +98,8 @@ src/
 
 ## 6. Key Patterns
 - **Error handling:** `thiserror` for typed errors, `Result<T>` everywhere
-- **Bootloader abstraction:** `dyn Bootloader` trait for GRUB/U-Boot
-- **Degraded boot:** `BootloaderEnv` is either `Available(Box<dyn Bootloader>)` or `Degraded(BootloaderError)`. `classify_bootloader()` decides which based on the open result and `is_release`. `apply_bootloader_decision()` enforces the invariant that `FsckRequiresReboot` always propagates before `DegradedBoot`.
+- **Bootloader abstraction:** `dyn BootEnv` trait for GRUB/U-Boot
+- **Degraded boot:** `BootEnvState` is either `Available(Box<dyn BootEnv>)` or `Degraded(BootEnvError)`. `classify_boot_env()` decides which based on the open result and `is_release`. `apply_bootloader_decision()` enforces the invariant that `FsckRequiresReboot` always propagates before `DegradedBoot`.
 - **Compression:** fsck exit code and full output stored in bootloader env as gzip+base64(`"exit_code\noutput"`); full output also written to `/data/var/log/fsck/<partition>.log`
 - **Idempotent mounts:** `is_mounted()` check before mounting
 - **No magic path strings:** All filesystem paths must be `const` values. Group related paths in a dedicated `pub mod mount_points` (or equivalent) rather than using inline string literals.
@@ -128,7 +128,7 @@ The following variants are planned:
 When implementing a new variant:
 1. Add the variant to `BootMode` and update `BootMode::detect()` to read the relevant bootloader env key. If the key is absent or the bootloader is unavailable, `detect()` must return `Normal` (degraded boot).
 2. Add typed payload structs as needed (define them in `src/mode/mod.rs` near the `BootMode` enum).
-3. Add `BootloaderEnvKey` entries for the detection keys.
+3. Add `BootEnvKey` entries for the detection keys.
 4. Add a handler module under `src/mode/` mirroring `src/mode/normal.rs`.
 5. Cover in tests: env-var present + live bootloader, env-var present + no bootloader (degraded fallback to `Normal`), env-var absent.
 

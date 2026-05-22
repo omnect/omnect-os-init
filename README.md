@@ -9,7 +9,7 @@ acting as `/init` in the initramfs. Runs as PID 1 before `switch_root`.
 
 Implemented functionality:
 
-- **Bootloader abstraction**: Unified `Bootloader` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
+- **Bootloader abstraction**: Unified `BootEnv` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
 - **Degraded boot mode**: When the bootloader environment is unavailable (corrupted env file, missing tool, I/O error), release images continue booting and flag `degraded_boot: true` in the ODS status JSON; debug images abort immediately and drop to a shell. `FsckRequiresReboot` always takes precedence over a concurrent bootloader failure.
 - **Configuration**: Parses `/proc/cmdline`; build-time constants from Yocto environment via `build.rs`
 - **Partition management**: Root device detection, partition layout (GPT/DOS), `/dev/omnect/*` symlinks
@@ -51,7 +51,7 @@ cargo build --release --features "grub,persistent-var-log"
 | `persistent-var-log` | Bind-mount `/var/log` to data partition | Implemented |
 | `release-image` | Release error handling: loop on fatal error; continue in degraded boot | Implemented |
 | `resize-data` | Data partition auto-resize on first boot | Implemented |
-| `test-utils` | Expose `MockBootloader` for integration tests (never enabled in production) | Test only |
+| `test-utils` | Expose `MockBootEnv` for integration tests (never enabled in production) | Test only |
 | `factory-reset` | Factory reset support | Planned |
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
