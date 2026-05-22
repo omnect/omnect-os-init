@@ -1,15 +1,15 @@
 //! Integration tests for degraded boot classification and OdsStatus JSON output.
 
-use omnect_os_init::bootloader::{BootloaderDecision, BootloaderEnv, classify_bootloader};
-use omnect_os_init::error::{BootloaderError, InitramfsError};
+use omnect_os_init::bootloader::{BootEnvDecision, BootEnvState, classify_boot_env};
+use omnect_os_init::error::{BootEnvError, InitramfsError};
 use omnect_os_init::runtime::OdsStatus;
 
-fn make_ok() -> Result<Box<dyn omnect_os_init::bootloader::Bootloader>, BootloaderError> {
-    Ok(Box::new(omnect_os_init::bootloader::MockBootloader::new()))
+fn make_ok() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvError> {
+    Ok(Box::new(omnect_os_init::bootloader::MockBootEnv::new()))
 }
 
-fn make_err() -> Result<Box<dyn omnect_os_init::bootloader::Bootloader>, BootloaderError> {
-    Err(BootloaderError::CommandFailed {
+fn make_err() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvError> {
+    Err(BootEnvError::CommandFailed {
         command: "grub-editenv".into(),
         reason: "test error".into(),
     })
@@ -18,11 +18,11 @@ fn make_err() -> Result<Box<dyn omnect_os_init::bootloader::Bootloader>, Bootloa
 #[test]
 fn ok_result_is_not_degraded_regardless_of_image_type() {
     for is_release in [true, false] {
-        let decision = classify_bootloader(make_ok(), is_release);
+        let decision = classify_boot_env(make_ok(), is_release);
         assert!(
             matches!(
                 decision,
-                BootloaderDecision::Continue(BootloaderEnv::Available(_))
+                BootEnvDecision::Continue(BootEnvState::Available(_))
             ),
             "is_release={is_release}: expected Available/not-degraded"
         );
@@ -31,10 +31,10 @@ fn ok_result_is_not_degraded_regardless_of_image_type() {
 
 #[test]
 fn err_release_image_is_degraded_continue() {
-    let decision = classify_bootloader(make_err(), true);
+    let decision = classify_boot_env(make_err(), true);
     // Use is_degraded() to give the method a regression test (M1/M9).
     match decision {
-        BootloaderDecision::Continue(ref env) => {
+        BootEnvDecision::Continue(ref env) => {
             assert!(env.is_degraded(), "release-image: expected Degraded env");
         }
         _ => panic!("release-image: expected Continue(Degraded)"),
@@ -43,15 +43,15 @@ fn err_release_image_is_degraded_continue() {
 
 #[test]
 fn err_debug_image_is_abort_with_cause() {
-    let decision = classify_bootloader(make_err(), false);
+    let decision = classify_boot_env(make_err(), false);
     // Verify not just the variant shape but also that the cause is the exact
-    // BootloaderError we injected, proving #[source] wiring is in place.
+    // BootEnvError we injected, proving #[source] wiring is in place.
     match decision {
-        BootloaderDecision::Abort(InitramfsError::DegradedBoot(ref cause)) => {
+        BootEnvDecision::Abort(InitramfsError::DegradedBoot(ref cause)) => {
             assert!(
                 matches!(
                     cause,
-                    BootloaderError::CommandFailed {
+                    BootEnvError::CommandFailed {
                         command,
                         ..
                     } if command == "grub-editenv"

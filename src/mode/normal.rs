@@ -25,7 +25,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
         config,
         layout,
         rootfs,
-        mut bootloader,
+        mut boot_env,
         mut ods_status,
     } = ctx;
 
@@ -33,7 +33,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     // Write fsck diagnostics regardless of bootloader availability so on-disk
     // log files (/data/var/log/fsck/) are produced even in degraded mode.
-    persist_fsck_results(&ods_status, bootloader.available_mut(), rootfs);
+    persist_fsck_results(&ods_status, boot_env.available_mut(), rootfs);
 
     mount_result?;
 
@@ -44,7 +44,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     create_ods_runtime_files(
         &ods_status,
-        bootloader.available(),
+        boot_env.available(),
         rootfs,
         Path::new(ODS_RUNTIME_DIR),
     )?;
