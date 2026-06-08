@@ -11,11 +11,11 @@
 ```
 src/
 ├── main.rs                  # Binary entry point
-├── lib.rs                   # Library exports + run_init() (unit-testable entry point)
+├── lib.rs                   # Library exports + run_init() + apply_boot_env_decision()
 ├── error.rs                 # Error type hierarchy
 ├── early_init.rs            # Mount /dev, /proc, /sys, /run before logging
 ├── bootloader/
-│   ├── mod.rs               # Bootloader trait + build-time selection (grub/uboot feature)
+│   ├── mod.rs               # BootEnv trait, BootEnvState, classify_boot_env()
 │   ├── grub.rs              # GRUB implementation (grub-editenv)
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
 │   └── types.rs             # BootloaderType enum
@@ -33,13 +33,15 @@ src/
 │   └── kmsg.rs              # /dev/kmsg writer with kernel log levels
 ├── mode/
 │   ├── mod.rs               # BootMode enum, BootContext, detect()
-│   ├── first_boot.rs        # FirstBoot handler: resize data partition then delegate to normal (feature = resize-data)
 │   └── normal.rs            # Normal boot handler (post-mount overlays → switch_root)
 ├── partition/
 │   ├── mod.rs               # Public API
 │   ├── device.rs            # Root device detection (GRUB: blkid/fsuuid, U-Boot: root=)
 │   ├── layout.rs            # GPT/DOS partition map builder
 │   └── symlinks.rs          # /dev/omnect/* symlink creation
+├── preflight/
+│   ├── mod.rs               # Preflight step runner
+│   └── resize_data.rs       # resize-data preflight: guard check + degraded-mode dispatch
 └── runtime/
     ├── mod.rs               # Public API
     ├── fs_link.rs           # fs-link symlink creation
@@ -52,16 +54,22 @@ src/
 - **Check:** `cargo check`
 - **Format:** `cargo fmt -- --check`
 - **Lint:** `cargo clippy --tests --features <grub|uboot> -- -D warnings -W clippy::items_after_statements -W clippy::items_after_test_module`
-- **Test:** Run all eight valid feature combinations:
+- **Test:** `test-utils` must be included to run the degraded-boot integration tests. Run all 14 valid feature combinations:
   ```
-  cargo test --features grub,gpt
-  cargo test --features grub,dos
-  cargo test --features uboot,gpt
-  cargo test --features uboot,dos
-  cargo test --features grub,gpt,resize-data
-  cargo test --features grub,dos,resize-data
-  cargo test --features uboot,gpt,resize-data
-  cargo test --features uboot,dos,resize-data
+  cargo test --features grub,gpt,test-utils
+  cargo test --features grub,dos,test-utils
+  cargo test --features uboot,gpt,test-utils
+  cargo test --features uboot,dos,test-utils
+  cargo test --features grub,gpt,resize-data,test-utils
+  cargo test --features grub,dos,resize-data,test-utils
+  cargo test --features uboot,gpt,resize-data,test-utils
+  cargo test --features uboot,dos,resize-data,test-utils
+  cargo test --features grub,gpt,release-image,test-utils
+  cargo test --features grub,dos,release-image,test-utils
+  cargo test --features uboot,gpt,release-image,test-utils
+  cargo test --features uboot,dos,release-image,test-utils
+  cargo test --features grub,gpt,resize-data,release-image,test-utils
+  cargo test --features uboot,gpt,resize-data,release-image,test-utils
   ```
 - **Audit:** `cargo audit`
 
@@ -74,20 +82,24 @@ src/
 | `gpt` | GPT partition table (primary partitions 1-7; mutually exclusive with `dos`) |
 | `dos` | DOS/MBR partition table (extended at slot 4, logical 5-8; mutually exclusive with `gpt`) |
 | `persistent-var-log` | Persistent `/var/log` mount |
-| `release-image` | Release behaviour: infinite loop on fatal error |
+| `release-image` | Release behaviour: loop on fatal error; continue booting in degraded mode |
 | `resize-data` | Expand data partition + filesystem to fill disk on first boot |
+| `test-utils` | Expose `MockBootEnv` for integration tests — never enabled in production builds |
 
 ## 5. Runtime Constraints
 - **Heap allocation is used freely** (`String`, `PathBuf`, `HashMap`); the OS image provides a standard allocator
 - **Read-only rootfs:** All state goes to `/data` or bootloader env
 - **Logging:** Available only after `/dev` is mounted
-- **Exit behavior:** 
-  - Release image: infinite loop on fatal error (prevent reboot loops)
-  - Debug image: spawn shell for debugging
+- **Exit behavior:**
+  - Release image + normal error: infinite loop (prevent reboot loops)
+  - Release image + degraded boot (bootloader unavailable): continue booting; set `degraded_boot: true` in ODS JSON
+  - Debug image + degraded boot: abort immediately before preflight; spawn debug shell
+  - `FsckRequiresReboot`: always triggers a reboot regardless of degraded state
 
 ## 6. Key Patterns
 - **Error handling:** `thiserror` for typed errors, `Result<T>` everywhere
-- **Bootloader abstraction:** `dyn Bootloader` trait for GRUB/U-Boot
+- **Bootloader abstraction:** `dyn BootEnv` trait for GRUB/U-Boot
+- **Degraded boot:** `BootEnvState` is either `Available(Box<dyn BootEnv>)` or `Degraded(BootEnvError)`. `classify_boot_env()` decides which based on the open result and `is_release`. `apply_boot_env_decision()` enforces the invariant that `FsckRequiresReboot` always propagates before `DegradedBoot`.
 - **Compression:** fsck exit code and full output stored in bootloader env as gzip+base64(`"exit_code\noutput"`); full output also written to `/data/var/log/fsck/<partition>.log`
 - **Idempotent mounts:** `is_mounted()` check before mounting
 - **No magic path strings:** All filesystem paths must be `const` values. Group related paths in a dedicated `pub mod mount_points` (or equivalent) rather than using inline string literals.
@@ -102,8 +114,12 @@ src/
 
 ### BootMode variants
 The `BootMode` enum (`src/mode/mod.rs`) has the following implemented variants:
-- `FirstBoot` (feature = `resize-data`) — expands data partition + filesystem to fill disk; detected when `omnect_resized_data` guard is absent and a live bootloader is available; delegates to `Normal` after resize
-- `Normal` — standard boot path
+- `Normal` — standard boot path; also used when the bootloader is unavailable (degraded boot)
+
+Data partition resize (feature = `resize-data`) is handled as a preflight step in
+`src/preflight/resize_data.rs`, not as a separate `BootMode` variant. It runs before
+`BootMode::detect()` and handles both the live-bootloader (guard check) and degraded-boot
+(no guard, resize runs every boot) cases.
 
 The following variants are planned:
 - `FactoryReset(FactoryResetConfig)` — wipes data partition, re-provisions device
@@ -112,7 +128,7 @@ The following variants are planned:
 When implementing a new variant:
 1. Add the variant to `BootMode` and update `BootMode::detect()` to read the relevant bootloader env key. If the key is absent or the bootloader is unavailable, `detect()` must return `Normal` (degraded boot).
 2. Add typed payload structs as needed (define them in `src/mode/mod.rs` near the `BootMode` enum).
-3. Add `BootloaderEnvKey` entries for the detection keys.
+3. Add `BootEnvKey` entries for the detection keys.
 4. Add a handler module under `src/mode/` mirroring `src/mode/normal.rs`.
 5. Cover in tests: env-var present + live bootloader, env-var present + no bootloader (degraded fallback to `Normal`), env-var absent.
 

@@ -1,17 +1,17 @@
 use std::path::Path;
 
-use crate::{Bootloader, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus};
+use crate::{
+    BootEnv, BootEnvState, Result, config::Config, partition::PartitionLayout, runtime::OdsStatus,
+};
 
 pub mod normal;
 
 /// Runtime context passed to the active boot-mode handler.
-///
-/// A handler implements one boot path (normal, factory-reset, …).
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
     pub(crate) layout: &'a PartitionLayout,
     pub(crate) rootfs: &'a Path,
-    pub(crate) bootloader: Option<Box<dyn Bootloader>>,
+    pub(crate) boot_env: BootEnvState,
     pub(crate) ods_status: OdsStatus,
 }
 
@@ -20,14 +20,14 @@ impl<'a> BootContext<'a> {
         config: &'a Config,
         layout: &'a PartitionLayout,
         rootfs: &'a Path,
-        bootloader: Option<Box<dyn Bootloader>>,
+        boot_env: BootEnvState,
         ods_status: OdsStatus,
     ) -> Self {
         Self {
             config,
             layout,
             rootfs,
-            bootloader,
+            boot_env,
             ods_status,
         }
     }
@@ -39,10 +39,10 @@ pub enum BootMode {
 }
 
 impl BootMode {
-    /// Detect the boot mode from bootloader environment variables.
+    /// Detect the boot mode from the boot environment.
     ///
-    /// Returns `Normal` when the bootloader is absent (degraded boot).
-    pub fn detect(_bl: Option<&dyn Bootloader>) -> Result<Self> {
+    /// Returns `Normal` for both available and degraded (absent) boot env states.
+    pub fn detect(_bl: Option<&dyn BootEnv>) -> Result<Self> {
         Ok(Self::Normal)
     }
 }

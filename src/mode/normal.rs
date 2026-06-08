@@ -25,20 +25,15 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
         config,
         layout,
         rootfs,
-        mut bootloader,
+        mut boot_env,
         mut ods_status,
     } = ctx;
 
-    // Capture the result so we can persist fsck diagnostics before propagating
-    // a mount failure.
     let mount_result = mount_remaining_partitions(layout, rootfs, &mut ods_status);
 
-    // Best-effort: persist any non-zero fsck results to the bootloader env and
-    // to /rootfs/mnt/data/var/log/fsck/ (visible as /data/var/log/fsck/ after
-    // switch_root; data may not be mounted if mount_result failed).
-    if let Some(ref mut bl) = bootloader {
-        persist_fsck_results(&ods_status, bl.as_mut(), rootfs);
-    }
+    // Write fsck diagnostics regardless of bootloader availability so on-disk
+    // log files (/data/var/log/fsck/) are produced even in degraded mode.
+    persist_fsck_results(&ods_status, boot_env.available_mut(), rootfs);
 
     mount_result?;
 
@@ -49,7 +44,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     create_ods_runtime_files(
         &ods_status,
-        bootloader.as_deref(),
+        boot_env.available(),
         rootfs,
         Path::new(ODS_RUNTIME_DIR),
     )?;

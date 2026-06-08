@@ -9,7 +9,8 @@ acting as `/init` in the initramfs. Runs as PID 1 before `switch_root`.
 
 Implemented functionality:
 
-- **Bootloader abstraction**: Unified `Bootloader` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
+- **Bootloader abstraction**: Unified `BootEnv` trait for GRUB (`grub-editenv`) and U-Boot (`fw_printenv`/`fw_setenv`); fsck output persisted across reboots as gzip+base64 in the bootloader env (encoded via busybox `gzip`/`base64` — no crate dependencies)
+- **Degraded boot mode**: When the bootloader environment is unavailable (corrupted env file, missing tool, I/O error), release images continue booting and flag `degraded_boot: true` in the ODS status JSON; debug images abort immediately and drop to a shell. `FsckRequiresReboot` always takes precedence over a concurrent bootloader failure.
 - **Configuration**: Parses `/proc/cmdline`; build-time constants from Yocto environment via `build.rs`
 - **Partition management**: Root device detection, partition layout (GPT/DOS), `/dev/omnect/*` symlinks
 - **Filesystem operations**: fsck, mount manager (RAII), overlayfs for `/etc` and `/home`, bind mounts
@@ -48,12 +49,13 @@ cargo build --release --features "grub,persistent-var-log"
 | `gpt` | GPT partition table layout | Implemented |
 | `dos` | DOS/MBR partition table layout | Implemented |
 | `persistent-var-log` | Bind-mount `/var/log` to data partition | Implemented |
-| `release-image` | Release error handling (loop on fatal error) | Implemented |
+| `release-image` | Release error handling: loop on fatal error; continue in degraded boot | Implemented |
+| `resize-data` | Data partition auto-resize on first boot | Implemented |
+| `test-utils` | Expose `MockBootEnv` for integration tests (never enabled in production) | Test only |
 | `factory-reset` | Factory reset support | Planned |
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
 | `flash-mode-3` | HTTP/HTTPS flashing | Planned |
-| `resize-data` | Data partition auto-resize on first boot | Implemented |
 
 > **Note:** `grub` and `uboot` are mutually exclusive. Exactly one must be set at build time.
 > The Yocto recipe selects the correct feature via `CARGO_FEATURES` based on `MACHINE_FEATURES`.
@@ -62,19 +64,30 @@ cargo build --release --features "grub,persistent-var-log"
 
 ```bash
 # All four valid base combinations (bootloader × partition table)
-cargo test --features grub,gpt   # x86-64 targets, GPT
-cargo test --features grub,dos   # x86-64 targets, DOS/MBR
-cargo test --features uboot,gpt  # ARM targets, GPT
-cargo test --features uboot,dos  # ARM targets, DOS/MBR
+# test-utils is required to include the degraded_boot integration tests
+cargo test --features grub,gpt,test-utils
+cargo test --features grub,dos,test-utils
+cargo test --features uboot,gpt,test-utils
+cargo test --features uboot,dos,test-utils
 
 # With resize-data feature
-cargo test --features grub,gpt,resize-data
-cargo test --features grub,dos,resize-data
-cargo test --features uboot,gpt,resize-data
-cargo test --features uboot,dos,resize-data
+cargo test --features grub,gpt,resize-data,test-utils
+cargo test --features grub,dos,resize-data,test-utils
+cargo test --features uboot,gpt,resize-data,test-utils
+cargo test --features uboot,dos,resize-data,test-utils
+
+# With release-image feature
+cargo test --features grub,gpt,release-image,test-utils
+cargo test --features grub,dos,release-image,test-utils
+cargo test --features uboot,gpt,release-image,test-utils
+cargo test --features uboot,dos,release-image,test-utils
+
+# With both resize-data and release-image
+cargo test --features grub,gpt,resize-data,release-image,test-utils
+cargo test --features uboot,gpt,resize-data,release-image,test-utils
 
 # Verbose output
-cargo test --features grub,gpt -- --nocapture
+cargo test --features grub,gpt,test-utils -- --nocapture
 ```
 
 ## License
