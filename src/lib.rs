@@ -58,10 +58,8 @@ fn apply_boot_env_decision(
 ) -> Result<BootEnvState> {
     match decision {
         BootEnvDecision::Continue(mut env) => {
-            // Persist before propagating core_result. On GRUB the boot partition
-            // is not mounted when fsck runs, so the env is Degraded and this is a
-            // no-op. On U-Boot the env is always Available, so without this the
-            // diagnostic would be lost on FsckRequiresReboot.
+            // Must precede core_result? — otherwise a FsckRequiresReboot error
+            // propagates before the diagnostic is written to the boot env.
             persist_fsck_results(ods_status, env.available_mut(), rootfs);
             if env.available_mut().is_some() {
                 // Records moved to boot env; clear to avoid double-serialization
