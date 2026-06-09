@@ -7,12 +7,13 @@ use std::process;
 use std::thread;
 use std::time::Duration;
 
-use log::{error, warn};
+use log::error;
 
 use omnect_os_init::{
-    error::{FilesystemError, InitramfsError},
+    error::InitramfsError,
     logging::{KmsgLogger, log_fatal},
     mount_essential_filesystems,
+    recovery::{Action, decide},
 };
 
 /// Sleep duration for fatal error loop (seconds)
@@ -21,14 +22,21 @@ const BASH_CMD: &str = "/bin/bash";
 const SH_CMD: &str = "/bin/sh";
 
 fn main() {
-    // Mount essential filesystems first (/dev, /proc, /sys, /run)
+    // Compile-time image-type discriminator. Read on line 1 so even the
+    // earliest failures (mount_essential_filesystems, logger init) respect
+    // the release/debug split. Spec invariant 1 (§2.6): release never shells.
+    let is_release_image = cfg!(feature = "release-image");
+
+    // Mount essential filesystems first (/dev, /proc, /sys, /run). On
+    // failure: release halts; debug spawns the emergency shell.
     if let Err(e) = mount_essential_filesystems() {
         eprintln!("FATAL: Failed to mount essential filesystems: {}", e);
-        spawn_emergency_shell();
+        if is_release_image {
+            halt_with_message(&format!("Failed to mount essential filesystems: {e}"));
+        } else {
+            spawn_emergency_shell();
+        }
     }
-
-    // Release vs. debug mode is a build-time property via the `release-image` feature.
-    let is_release_image = cfg!(feature = "release-image");
 
     // Initialize logging — fatal if /dev/kmsg cannot be opened or logger already set.
     // log_fatal() opens /dev/kmsg directly so the message reaches the kernel ring buffer
@@ -54,35 +62,64 @@ fn main() {
     }
 }
 
-/// Handle fatal errors based on image type
+/// Handle a fatal error per the recovery policy.
+///
+/// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md §2-§3
 fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
-    // fsck exit code 2 means fsck explicitly requests a reboot before mounting.
-    if matches!(
-        error,
-        InitramfsError::Filesystem(FilesystemError::FsckRequiresReboot { .. })
-    ) {
-        error!("fsck requires reboot: {}", error);
-        let _ = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT);
-        // reboot(2) should not return; loop as a last resort
-        loop {
-            thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
-        }
-    }
+    let class = error.recovery_class();
+    let update_pending = omnect_os_init::read_update_pending();
+    let action = decide(class, is_release, update_pending);
 
-    if is_release {
-        // Release image: loop forever to prevent reboot loops
-        loop {
-            error!("FATAL: {}", error);
-            thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+    log_fatal(&format!(
+        "fatal error (class={class:?}, update_pending={update_pending}, action={action:?}): {error}"
+    ));
+
+    match action {
+        Action::Reboot => {
+            let Err(e) = nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT);
+            log_fatal(&format!("reboot(2) failed: {e}; halting"));
+            // reboot(2) should not return on success; if it does, fall back to halt.
+            halt_with_message(&format!("reboot(2) returned unexpectedly after {action:?}"));
         }
-    } else {
-        // Debug image: spawn shell
-        warn!("Debug mode: spawning shell due to error: {}", error);
-        spawn_debug_shell();
+        Action::Halt => {
+            halt_with_message(&format!("FATAL: {error}"));
+        }
+        Action::Shell => {
+            spawn_debug_shell();
+        }
+        Action::Continue => {
+            // Defensive: ContinueDegraded errors should be absorbed by the
+            // caller and never reach the fatal path. If we get here, something
+            // failed to suppress the error — treat as Fatal so the device
+            // doesn't fall off the policy.
+            log_fatal(&format!(
+                "BUG: ContinueDegraded reached handle_fatal_error for: {error}"
+            ));
+            if is_release {
+                halt_with_message(&format!("FATAL (defensive): {error}"));
+            } else {
+                spawn_debug_shell();
+            }
+        }
     }
 }
 
-/// Spawn emergency shell (before logging available)
+/// Halt forever with a fixed message written to /dev/kmsg each cycle.
+///
+/// Used by release images on any Fatal error path. Writes directly to
+/// /dev/kmsg via `log_fatal` rather than through the `log` facade so a
+/// failure of the kmsg logger itself does not silence the message.
+fn halt_with_message(message: &str) -> ! {
+    loop {
+        log_fatal(message);
+        thread::sleep(Duration::from_secs(FATAL_ERROR_SLEEP_SECS));
+    }
+}
+
+/// Emergency shell invoked before the kmsg logger is initialized.
+///
+/// `log::*` macros are not yet usable here — only `eprintln!` is safe.
+/// Respawns on exit so PID 1 never returns to the kernel.
 fn spawn_emergency_shell() -> ! {
     // PID 1 must never exit. Respawn the shell so the operator can retry.
     // Use eprintln! — the kmsg logger may not be initialised yet at this point.
@@ -99,7 +136,10 @@ fn spawn_emergency_shell() -> ! {
     }
 }
 
-/// Spawn debug shell for debugging
+/// Debug shell invoked after a fatal error on a non-release image.
+///
+/// Respawns on exit (PID 1 must never return to the kernel) and falls
+/// back to `sh` when `bash` is unavailable.
 fn spawn_debug_shell() -> ! {
     // PID 1 must never exit — the kernel would panic. Respawn the shell
     // in a loop so the operator can re-enter after an accidental exit.
