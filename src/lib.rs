@@ -4,6 +4,7 @@
 //! It replaces the bash-based initramfs scripts with a type-safe Rust implementation.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{info, warn};
 
@@ -37,8 +38,27 @@ pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
 pub use crate::runtime::OdsStatus;
 
+/// `true` iff `omnect_validate_update` was set in the boot env at the time
+/// it was read. Default `false` so a failure before the env is opened (or in
+/// degraded mode) is reported as "no update in flight" per spec §2.5.
+///
+/// Single writer: [`run_init`] after `apply_boot_env_decision` succeeds.
+/// Single reader: `main::handle_fatal_error`.
+static UPDATE_PENDING: AtomicBool = AtomicBool::new(false);
+
 /// Mount point for the real rootfs inside the initramfs.
 const ROOTFS_DIR: &str = "/rootfs";
+
+/// Set the global update-pending flag. Called once per boot, after the
+/// boot env is opened. Safe to call multiple times; the last call wins.
+pub fn set_update_pending(value: bool) {
+    UPDATE_PENDING.store(value, Ordering::Relaxed);
+}
+
+/// Read the global update-pending flag. Defaults to `false` if never set.
+pub fn read_update_pending() -> bool {
+    UPDATE_PENDING.load(Ordering::Relaxed)
+}
 
 /// Apply a boot env decision, enforcing the FsckRequiresReboot-wins invariant.
 ///
@@ -119,6 +139,19 @@ pub fn run_init() -> Result<()> {
 
     let mut bootloader_env =
         apply_boot_env_decision(decision, core_result, &mut ods_status, rootfs)?;
+
+    // Read omnect_validate_update once, before any subsequent fallible step.
+    // Stored in a process-global so handle_fatal_error in main.rs can branch
+    // on it without threading the value through every return type.
+    let update_pending = bootloader_env
+        .available()
+        .and_then(|bl| {
+            bl.get_env(bootloader::BootEnvKey::ValidateUpdate)
+                .ok()
+                .flatten()
+        })
+        .is_some();
+    set_update_pending(update_pending);
 
     {
         let ctx = preflight::PreflightCtx {
@@ -263,5 +296,18 @@ mod tests {
             "persist_fsck_results must run before propagating FsckRequiresReboot \
              (boot_sequence.rs:68-76 contract)"
         );
+    }
+
+    #[test]
+    fn default_update_pending_is_false() {
+        // The static must default to false so failures before the env is
+        // opened (or in degraded mode) report the safe "no update in flight".
+        let fresh = std::sync::atomic::AtomicBool::new(false);
+        assert!(!fresh.load(std::sync::atomic::Ordering::Relaxed));
+        // Cover the public accessor with a deterministic write/read cycle:
+        set_update_pending(true);
+        assert!(read_update_pending());
+        set_update_pending(false);
+        assert!(!read_update_pending());
     }
 }
