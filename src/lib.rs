@@ -112,8 +112,8 @@ fn apply_boot_env_decision(
             }
             core_result?;
             if let BootEnvState::Degraded(ref e) = env {
-                warn!("Boot environment unavailable: {e}; booting in degraded mode");
-                ods_status.set_degraded_boot();
+                warn!("Boot env unavailable: {e}; booting in degraded mode");
+                ods_status.set_degraded_boot(e.to_string());
             }
             Ok(env)
         }
@@ -223,7 +223,7 @@ mod tests {
         let mut ods = OdsStatus::new();
         let result = apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Available(_))));
-        assert!(!ods.degraded_boot);
+        assert!(ods.degraded_boot.is_none());
     }
 
     #[test]
@@ -231,7 +231,14 @@ mod tests {
         let mut ods = OdsStatus::new();
         let result = apply_boot_env_decision(make_degraded(), Ok(()), &mut ods, Path::new("/tmp"));
         assert!(matches!(result, Ok(BootEnvState::Degraded(_))));
-        assert!(ods.degraded_boot);
+        let degraded = ods
+            .degraded_boot
+            .as_ref()
+            .expect("degraded_boot must be Some after Degraded continue");
+        assert!(
+            !degraded.reason.is_empty(),
+            "reason must contain the BootEnvError Display"
+        );
     }
 
     #[test]
@@ -254,7 +261,7 @@ mod tests {
             "expected FsckRequiresReboot, not DegradedBoot"
         );
         assert!(
-            !ods.degraded_boot,
+            ods.degraded_boot.is_none(),
             "degraded flag must not be set on reboot path"
         );
     }
@@ -273,6 +280,10 @@ mod tests {
                 ))
             ),
             "expected FsckRequiresReboot, not DegradedBoot"
+        );
+        assert!(
+            ods.degraded_boot.is_none(),
+            "degraded flag must not be set on reboot path"
         );
     }
 

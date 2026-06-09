@@ -136,11 +136,11 @@ pub struct OdsStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub factory_reset: Option<FactoryResetStatus>,
 
-    /// Set when the bootloader environment was unavailable during boot.
-    /// Omitted from JSON when `false` to keep the happy-path payload small
-    /// and remain backward-compatible with ODS consumers that predate this field.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub degraded_boot: bool,
+    /// Set when the boot env was unavailable during boot. `None` on the
+    /// happy path; `Some(DegradedBootStatus { reason })` only when
+    /// apply_boot_env_decision saw BootEnvState::Degraded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded_boot: Option<DegradedBootStatus>,
 }
 
 /// Fsck status for a single partition
@@ -150,6 +150,20 @@ pub struct FsckStatus {
     pub code: i32,
     /// Output from fsck (may be compressed in bootloader)
     pub output: String,
+}
+
+/// Indicator surfaced to ODS when the boot env was unavailable on this boot.
+///
+/// `None` means boot env was available (or this is a debug image that
+/// aborted on env-unavailable rather than continuing). `Some(...)` only on
+/// release images that classified env-unavailable as Continue(Degraded).
+/// The boot env was unavailable during this boot. Carries the Display of the
+/// `BootEnvError` returned by `open_boot_env()` for operator diagnosis.
+#[derive(Debug, Clone, Serialize)]
+pub struct DegradedBootStatus {
+    /// One-line human-readable detail — the Display of the BootEnvError
+    /// returned by open_boot_env().
+    pub reason: String,
 }
 
 /// Factory reset execution status
@@ -184,9 +198,10 @@ impl OdsStatus {
         self.factory_reset = Some(status);
     }
 
-    /// Mark this boot as degraded (bootloader environment unavailable).
-    pub fn set_degraded_boot(&mut self) {
-        self.degraded_boot = true;
+    /// Mark this boot as degraded (boot env unavailable). `reason` is the
+    /// Display of the BootEnvError returned by open_boot_env().
+    pub fn set_degraded_boot(&mut self, reason: String) {
+        self.degraded_boot = Some(DegradedBootStatus { reason });
     }
 }
 
@@ -769,20 +784,24 @@ mod tests {
     }
 
     #[test]
-    fn degraded_boot_serializes_only_when_true() {
+    fn degraded_boot_serializes_only_when_set() {
         let status_normal = OdsStatus::new();
         let json_normal = serde_json::to_string(&status_normal).unwrap();
         assert!(
             !json_normal.contains("degraded_boot"),
-            "degraded_boot must be absent when false; got: {json_normal}"
+            "degraded_boot must be absent when None; got: {json_normal}"
         );
 
         let mut status_degraded = OdsStatus::new();
-        status_degraded.set_degraded_boot();
+        status_degraded.set_degraded_boot("grubenv missing".to_string());
         let json_degraded = serde_json::to_string(&status_degraded).unwrap();
         assert!(
-            json_degraded.contains("\"degraded_boot\":true"),
-            "degraded_boot must be present and true; got: {json_degraded}"
+            json_degraded.contains("\"degraded_boot\""),
+            "degraded_boot must be present when Some; got: {json_degraded}"
+        );
+        assert!(
+            json_degraded.contains("\"reason\":\"grubenv missing\""),
+            "reason must be present; got: {json_degraded}"
         );
     }
 }
