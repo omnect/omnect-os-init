@@ -58,7 +58,12 @@ impl InitramfsError {
             Self::Filesystem(FilesystemError::FsckRequiresReboot { .. }) => {
                 RecoveryClass::RebootToApply
             }
-            Self::Filesystem(_) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::MountFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::UnmountFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::FsckFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::OverlayFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::FormatFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::Io(_)) => RecoveryClass::Fatal,
             Self::Logging(_) => RecoveryClass::Fatal,
             Self::Config(_) => RecoveryClass::Fatal,
             #[cfg(feature = "resize-data")]
@@ -313,9 +318,7 @@ mod recovery_class_tests {
     #[cfg(feature = "resize-data")]
     #[test]
     fn resize_data_is_continue_degraded() {
-        // ResizeData is classified ContinueDegraded because a resize failure is
-        // non-fatal by policy. handle_fatal_error in main.rs currently treats
-        // Continue defensively as Fatal until the preflight wrapper absorbs it.
+        // ResizeData is classified ContinueDegraded: a resize failure is non-fatal by policy.
         let err = InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(
             std::path::PathBuf::from("/dev/sda"),
         ));
