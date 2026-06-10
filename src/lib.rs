@@ -346,14 +346,8 @@ mod tests {
 
     #[test]
     fn update_pending_false_when_get_env_errors() {
-        // MockBootEnv returns Ok for known keys; simulate an error by querying a
-        // key that the mock maps to an Err via a custom mock. Since MockBootEnv
-        // does not produce Err on get_env, we exercise the Degraded branch as the
-        // nearest equivalent: env unavailable ⇒ false.
-        let env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "fw_printenv".into(),
-            reason: "io error".into(),
-        });
+        let bl = MockBootEnv::new().with_get_env_error();
+        let env = BootEnvState::Available(Box::new(bl));
         assert!(!update_pending_from_env(&env));
     }
 }
