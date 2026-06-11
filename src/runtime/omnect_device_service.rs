@@ -141,6 +141,12 @@ pub struct OdsStatus {
     /// than receiving an opaque signal. `None` on the happy path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
+
+    /// Carries the resize-data failure cause when resize did not complete on
+    /// this boot, so ODS consumers can diagnose and notify the cloud. `None`
+    /// on the happy path (resize succeeded or guard already present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resize_data: Option<ResizeStatus>,
 }
 
 /// Fsck status for a single partition
@@ -160,6 +166,33 @@ pub struct FsckStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct DegradedBootStatus {
     /// The `Display` of the underlying `BootEnvError`.
+    pub reason: String,
+}
+
+/// Why resize-data did not complete on this boot.
+///
+/// Serialized as snake_case so ODS and cloud consumers can match exact strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeOutcome {
+    /// Data partition fsck reported uncorrected errors before resize.
+    SkippedFsck,
+    /// An external tool (parted / sgdisk / resize2fs / sync) failed.
+    ToolError,
+    /// Layout problem (missing data partition, non-UTF-8 path, …) —
+    /// the preflight could not run at all.
+    InvalidLayout,
+}
+
+/// Reason resize-data did not complete on this boot.
+///
+/// Present only when resize was attempted and could not finish.
+/// `None` means resize succeeded or the guard was already present.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResizeStatus {
+    /// Why resize did not complete.
+    pub outcome: ResizeOutcome,
+    /// The `Display` of the underlying error — one line for operator diagnosis.
     pub reason: String,
 }
 
@@ -199,6 +232,11 @@ impl OdsStatus {
     /// of the `BootEnvError` returned by `open_boot_env()`.
     pub fn set_degraded_boot(&mut self, reason: String) {
         self.degraded_boot = Some(DegradedBootStatus { reason });
+    }
+
+    /// Record a resize-data failure indicator for ODS.
+    pub fn set_resize_status(&mut self, status: ResizeStatus) {
+        self.resize_data = Some(status);
     }
 }
 
@@ -796,5 +834,50 @@ mod tests {
             json_degraded.contains("\"degraded_boot\":{\"reason\":\"grubenv missing\"}"),
             "degraded_boot must be a nested object with reason; got: {json_degraded}"
         );
+    }
+
+    #[test]
+    fn resize_status_absent_on_clean_run() {
+        let status = OdsStatus::new();
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(
+            !json.contains("resize_data"),
+            "resize_data must be absent when None; got: {json}"
+        );
+    }
+
+    #[test]
+    fn resize_status_present_with_outcome_and_reason() {
+        let mut status = OdsStatus::new();
+        status.set_resize_status(ResizeStatus {
+            outcome: ResizeOutcome::SkippedFsck,
+            reason: "data partition fsck reported uncorrected errors".to_string(),
+        });
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(
+            json.contains("\"resize_data\""),
+            "resize_data must be present when Some; got: {json}"
+        );
+        assert!(
+            json.contains("\"outcome\":\"skipped_fsck\""),
+            "outcome must serialize as snake_case; got: {json}"
+        );
+        assert!(
+            json.contains("\"reason\""),
+            "reason must be present; got: {json}"
+        );
+    }
+
+    #[test]
+    fn resize_outcome_variants_serialize_snake_case() {
+        let cases: &[(ResizeOutcome, &str)] = &[
+            (ResizeOutcome::SkippedFsck, "\"skipped_fsck\""),
+            (ResizeOutcome::ToolError, "\"tool_error\""),
+            (ResizeOutcome::InvalidLayout, "\"invalid_layout\""),
+        ];
+        for (variant, expected) in cases {
+            let s = serde_json::to_string(variant).unwrap();
+            assert_eq!(&s, expected, "{variant:?} must serialize as {expected}");
+        }
     }
 }
