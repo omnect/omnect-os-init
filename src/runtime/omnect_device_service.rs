@@ -136,9 +136,9 @@ pub struct OdsStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub factory_reset: Option<FactoryResetStatus>,
 
-    /// Set when the boot env was unavailable during boot. `None` on the
-    /// happy path; `Some(DegradedBootStatus { reason })` only when
-    /// apply_boot_env_decision saw BootEnvState::Degraded.
+    /// Carries the boot-env error cause when the env was unavailable on this
+    /// boot, so ODS consumers can diagnose which tool or file failed rather
+    /// than receiving an opaque signal. `None` on the happy path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
 }
@@ -152,17 +152,14 @@ pub struct FsckStatus {
     pub output: String,
 }
 
-/// Indicator surfaced to ODS when the boot env was unavailable on this boot.
+/// Reason the boot env was unavailable on this boot.
 ///
-/// `None` means boot env was available (or this is a debug image that
-/// aborted on env-unavailable rather than continuing). `Some(...)` only on
-/// release images that classified env-unavailable as Continue(Degraded).
-/// The boot env was unavailable during this boot. Carries the Display of the
-/// `BootEnvError` returned by `open_boot_env()` for operator diagnosis.
+/// Present only on release images where env-unavailable is treated as a
+/// degraded-continue rather than a fatal abort. Debug images abort immediately,
+/// so this struct is never populated there.
 #[derive(Debug, Clone, Serialize)]
 pub struct DegradedBootStatus {
-    /// One-line human-readable detail — the Display of the BootEnvError
-    /// returned by open_boot_env().
+    /// The `Display` of the underlying `BootEnvError`.
     pub reason: String,
 }
 
@@ -198,8 +195,8 @@ impl OdsStatus {
         self.factory_reset = Some(status);
     }
 
-    /// Mark this boot as degraded (boot env unavailable). `reason` is the
-    /// Display of the BootEnvError returned by open_boot_env().
+    /// Stores the boot-env error cause for ODS. `reason` is the `Display`
+    /// of the `BootEnvError` returned by `open_boot_env()`.
     pub fn set_degraded_boot(&mut self, reason: String) {
         self.degraded_boot = Some(DegradedBootStatus { reason });
     }
