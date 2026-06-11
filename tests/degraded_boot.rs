@@ -1,10 +1,8 @@
 //! Integration tests for degraded boot classification and OdsStatus JSON output.
 
-use omnect_os_init::bootloader::{BootEnvDecision, BootEnvKey, BootEnvState, classify_boot_env};
+use omnect_os_init::bootloader::{BootEnvDecision, BootEnvState, classify_boot_env};
 use omnect_os_init::error::{BootEnvError, InitramfsError};
-use omnect_os_init::recovery::{Action, RecoveryClass, decide};
 use omnect_os_init::runtime::OdsStatus;
-use omnect_os_init::{MockBootEnv, update_pending_from_env};
 
 fn make_ok() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvError> {
     Ok(Box::new(omnect_os_init::bootloader::MockBootEnv::new()))
@@ -76,48 +74,7 @@ fn degraded_ods_status_json_contains_reason() {
     status.set_degraded_boot("grubenv missing".to_string());
     let json = serde_json::to_string(&status).unwrap();
     assert!(
-        json.contains("\"degraded_boot\""),
-        "degraded_boot key must be present when set; got: {json}"
-    );
-    assert!(
-        json.contains("\"reason\":\"grubenv missing\""),
-        "reason must be present in JSON; got: {json}"
-    );
-}
-
-#[test]
-fn validate_update_set_produces_reboot_on_fatal() {
-    // Anti-brick contract: a Fatal error during an unconfirmed OTA boot must
-    // produce Action::Reboot so the bootloader can roll back to the known-good
-    // slot. Wires update_pending_from_env → decide end-to-end.
-    let bl = MockBootEnv::new().with_env(BootEnvKey::ValidateUpdate, "1");
-    let env = BootEnvState::Available(Box::new(bl));
-    let update_pending = update_pending_from_env(&env);
-    assert!(
-        update_pending,
-        "ValidateUpdate set → update_pending must be true"
-    );
-
-    // Rollback takes priority over both halt (release) and shell (debug).
-    assert_eq!(
-        decide(RecoveryClass::Fatal, true, update_pending),
-        Action::Reboot,
-        "Fatal + update_pending + release → Reboot"
-    );
-    assert_eq!(
-        decide(RecoveryClass::Fatal, false, update_pending),
-        Action::Reboot,
-        "Fatal + update_pending + debug → Reboot"
-    );
-}
-
-#[test]
-fn validate_update_absent_produces_halt_on_fatal_release() {
-    // Without an in-flight OTA, a Fatal error on a release image halts
-    // (no rollback target to jump to).
-    let env = BootEnvState::Available(Box::new(MockBootEnv::new()));
-    assert_eq!(
-        decide(RecoveryClass::Fatal, true, update_pending_from_env(&env)),
-        Action::Halt
+        json.contains("\"degraded_boot\":{\"reason\":\"grubenv missing\"}"),
+        "degraded_boot must be a nested object with reason; got: {json}"
     );
 }

@@ -65,7 +65,7 @@ pub fn read_update_pending() -> bool {
 /// is set; all other cases (degraded env, read error, key absent) return `false`
 /// per spec §2.5 so failures before the env is opened are treated as
 /// "no update in flight".
-pub fn update_pending_from_env(env: &BootEnvState) -> bool {
+fn update_pending_from_env(env: &BootEnvState) -> bool {
     env.available()
         .and_then(
             |bl| match bl.get_env(bootloader::BootEnvKey::ValidateUpdate) {
@@ -235,9 +235,9 @@ mod tests {
             .degraded_boot
             .as_ref()
             .expect("degraded_boot must be Some after Degraded continue");
-        assert!(
-            !degraded.reason.is_empty(),
-            "reason must contain the BootEnvError Display"
+        assert_eq!(
+            degraded.reason, "Command 'grub-editenv' failed: test",
+            "reason must be the Display of the injected BootEnvError"
         );
     }
 

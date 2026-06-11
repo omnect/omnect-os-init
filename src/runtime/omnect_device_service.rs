@@ -793,12 +793,8 @@ mod tests {
         status_degraded.set_degraded_boot("grubenv missing".to_string());
         let json_degraded = serde_json::to_string(&status_degraded).unwrap();
         assert!(
-            json_degraded.contains("\"degraded_boot\""),
-            "degraded_boot must be present when Some; got: {json_degraded}"
-        );
-        assert!(
-            json_degraded.contains("\"reason\":\"grubenv missing\""),
-            "reason must be present; got: {json_degraded}"
+            json_degraded.contains("\"degraded_boot\":{\"reason\":\"grubenv missing\"}"),
+            "degraded_boot must be a nested object with reason; got: {json_degraded}"
         );
     }
 }
