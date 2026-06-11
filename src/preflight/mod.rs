@@ -7,13 +7,14 @@
 #[cfg(feature = "resize-data")]
 pub mod resize_data;
 
-use crate::{Result, bootloader::BootEnvState, partition::PartitionLayout};
+use crate::{Result, bootloader::BootEnvState, partition::PartitionLayout, runtime::OdsStatus};
 
 /// Context passed to each preflight step.
 #[non_exhaustive]
-pub struct PreflightCtx<'l, 'b> {
+pub struct PreflightCtx<'l, 'b, 's> {
     pub layout: &'l PartitionLayout,
     pub boot_env: &'b mut BootEnvState,
+    pub ods_status: &'s mut OdsStatus,
 }
 
 /// Run all enabled preflight steps in order.
@@ -21,7 +22,7 @@ pub struct PreflightCtx<'l, 'b> {
 /// Steps are independent and idempotent. Order is intentional: resize-data
 /// must run before any partition is mounted read-write.
 #[cfg_attr(not(feature = "resize-data"), allow(unused_variables, unused_mut))]
-pub fn run(mut ctx: PreflightCtx<'_, '_>) -> Result<()> {
+pub fn run(mut ctx: PreflightCtx<'_, '_, '_>) -> Result<()> {
     #[cfg(feature = "resize-data")]
     resize_data::run(&mut ctx)?;
     Ok(())

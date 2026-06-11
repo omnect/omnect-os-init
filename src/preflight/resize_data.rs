@@ -11,7 +11,7 @@ use crate::bootloader::BootEnvKey;
 use crate::error::Result;
 use crate::preflight::PreflightCtx;
 
-pub fn run(ctx: &mut PreflightCtx<'_, '_>) -> Result<()> {
+pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
     match ctx.boot_env.available_mut() {
         Some(bl) => {
             if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
@@ -34,6 +34,7 @@ mod tests {
     use crate::error::BootEnvError;
     use crate::partition::{PartitionLayout, RootDevice};
     use crate::preflight::PreflightCtx;
+    use crate::runtime::OdsStatus;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -72,9 +73,11 @@ mod tests {
         let bl: Box<dyn crate::bootloader::BootEnv> =
             Box::new(MockBootEnv::new().with_env(BootEnvKey::ResizedData, "1"));
         let mut env = BootEnvState::Available(bl);
+        let mut ods = OdsStatus::new();
         let mut ctx = PreflightCtx {
             layout: &layout,
             boot_env: &mut env,
+            ods_status: &mut ods,
         };
         assert!(run(&mut ctx).is_ok());
     }
@@ -93,9 +96,11 @@ mod tests {
             command: "grub-editenv".into(),
             reason: "test".into(),
         });
+        let mut ods = OdsStatus::new();
         let mut ctx = PreflightCtx {
             layout: &layout,
             boot_env: &mut env,
+            ods_status: &mut ods,
         };
         assert!(run(&mut ctx).is_ok());
     }
@@ -112,9 +117,11 @@ mod tests {
             command: "grub-editenv".into(),
             reason: "test".into(),
         });
+        let mut ods = OdsStatus::new();
         let mut ctx = PreflightCtx {
             layout: &layout,
             boot_env: &mut env,
+            ods_status: &mut ods,
         };
         let result = run(&mut ctx);
         // The resize commands fail (no real /dev/sda8) but the error must NOT

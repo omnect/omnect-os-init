@@ -171,6 +171,7 @@ pub fn run_init() -> Result<()> {
         let ctx = preflight::PreflightCtx {
             layout: &layout,
             boot_env: &mut bootloader_env,
+            ods_status: &mut ods_status,
         };
         preflight::run(ctx)?;
     }
