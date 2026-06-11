@@ -10,7 +10,7 @@ fn make_ok() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvErro
 
 fn make_err() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvError> {
     Err(BootEnvError::CommandFailed {
-        command: "grub-editenv".into(),
+        command: "boot-env-tool".into(),
         reason: "test error".into(),
     })
 }
@@ -54,7 +54,7 @@ fn err_debug_image_is_abort_with_cause() {
                     BootEnvError::CommandFailed {
                         command,
                         ..
-                    } if command == "grub-editenv"
+                    } if command == "boot-env-tool"
                 ),
                 "expected cause CommandFailed(grub-editenv), got: {cause:?}"
             );

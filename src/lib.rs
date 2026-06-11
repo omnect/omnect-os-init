@@ -196,14 +196,14 @@ mod tests {
 
     fn make_degraded() -> BootEnvDecision {
         BootEnvDecision::Continue(BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         }))
     }
 
     fn make_abort() -> BootEnvDecision {
         BootEnvDecision::Abort(InitramfsError::DegradedBoot(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         }))
     }
@@ -236,7 +236,7 @@ mod tests {
             .as_ref()
             .expect("degraded_boot must be Some after Degraded continue");
         assert_eq!(
-            degraded.reason, "Command 'grub-editenv' failed: test",
+            degraded.reason, "Command 'boot-env-tool' failed: test",
             "reason must be the Display of the injected BootEnvError"
         );
     }
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn update_pending_false_when_degraded() {
         let env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "not found".into(),
         });
         assert!(!update_pending_from_env(&env));
