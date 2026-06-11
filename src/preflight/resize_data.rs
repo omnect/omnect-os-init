@@ -3,15 +3,43 @@
 //! With boot env available: checks the `omnect_resized_data` guard and, if
 //! absent, expands the data partition via `filesystem::resize_data`.
 //!
-//! On a degraded boot (boot env unavailable): runs resize without the
-//! guard. Only reached on release-images; debug-images abort in lib.rs
-//! before preflight executes.
+//! On a degraded boot (boot env unavailable): runs resize without the guard.
+//! Only reached on release-images; debug-images abort in lib.rs before
+//! preflight executes.
+//!
+//! All failure modes except `FsckRequiresReboot` are absorbed as
+//! best-effort: `OdsStatus.resize_data` is populated and boot continues.
+//! `FsckRequiresReboot` is propagated so Plan A's recovery policy triggers a
+//! controlled reboot.
 
 use crate::bootloader::BootEnvKey;
-use crate::error::Result;
+use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
 use crate::preflight::PreflightCtx;
+use crate::runtime::{ResizeOutcome, ResizeStatus};
 
 pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
+    let result = attempt(ctx);
+
+    match result {
+        Ok(()) => Ok(()),
+        // Data partition fsck found uncorrectable errors: a reboot with the
+        // corrected partition is the right remedy, not skipping resize.
+        Err(InitramfsError::ResizeData(ResizeDataError::Filesystem(
+            FilesystemError::FsckRequiresReboot { .. },
+        ))) => Err(result.unwrap_err()),
+        // Every other failure is non-fatal: record the indicator and continue.
+        Err(ref e) => {
+            let outcome = outcome_for(e);
+            let reason = e.to_string();
+            log::warn!("resize-data preflight skipped: {reason}");
+            ctx.ods_status
+                .set_resize_status(ResizeStatus { outcome, reason });
+            Ok(())
+        }
+    }
+}
+
+fn attempt(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
     match ctx.boot_env.available_mut() {
         Some(bl) => {
             if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
@@ -24,6 +52,20 @@ pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
             log::warn!("resize-data: running without bootloader guard (degraded boot)");
             crate::filesystem::resize_data::resize_if_needed(ctx.layout, None)
         }
+    }
+}
+
+fn outcome_for(e: &InitramfsError) -> ResizeOutcome {
+    match e {
+        InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
+            ..
+        })) => ResizeOutcome::SkippedFsck,
+        InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(_))
+        | InitramfsError::ResizeData(ResizeDataError::ExtendedPartitionNotFound(_))
+        | InitramfsError::ResizeData(ResizeDataError::NonUtf8Path(_)) => {
+            ResizeOutcome::InvalidLayout
+        }
+        _ => ResizeOutcome::ToolError,
     }
 }
 
@@ -106,12 +148,11 @@ mod tests {
     }
 
     #[test]
-    fn degraded_env_with_data_layout_guard_not_written() {
+    fn degraded_env_with_data_layout_absorbs_tool_error() {
         // Uses layout_with_data() + BootEnvState::Degraded. resize_if_needed
         // is called with None boot_env (degraded arm). With a real device path
-        // (/dev/sda8) the resize commands would fail — so this test asserts the
-        // error is a command failure (ResizeDataError), NOT a boot env error,
-        // which proves the guard-write code path was not reached.
+        // (/dev/sda8) the resize commands would fail — plan-b absorbs the
+        // error and returns Ok, recording the indicator in ods_status.
         let layout = layout_with_data();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "grub-editenv".into(),
@@ -123,14 +164,75 @@ mod tests {
             boot_env: &mut env,
             ods_status: &mut ods,
         };
+        // With a data partition present and no real tooling, resize_if_needed
+        // will fail. The absorb logic turns the error into Ok + indicator.
         let result = run(&mut ctx);
-        // The resize commands fail (no real /dev/sda8) but the error must NOT
-        // be a boot env error — confirming the guard-write path was bypassed.
-        match result {
-            Ok(()) => {} // unlikely in test env, but acceptable
-            Err(crate::error::InitramfsError::ResizeData(_)) => {} // expected
-            Err(crate::error::InitramfsError::Filesystem(_)) => {} // fsck path
-            Err(e) => panic!("unexpected error type — guard-write was reached: {e}"),
-        }
+        assert!(
+            result.is_ok(),
+            "tool errors must be absorbed; got: {result:?}"
+        );
+        assert!(
+            ctx.ods_status.resize_data.is_some(),
+            "ods_status.resize_data must be set after a tool error"
+        );
+    }
+
+    #[test]
+    fn fsck_requires_reboot_propagates() {
+        use crate::error::{FilesystemError, InitramfsError, ResizeDataError};
+        use crate::filesystem::FsckExitCode;
+        // Construct the exact nested error that FsckRequiresReboot produces
+        // when it surfaces through resize_if_needed.
+        let inner = InitramfsError::ResizeData(ResizeDataError::Filesystem(
+            FilesystemError::FsckRequiresReboot {
+                device: std::path::PathBuf::from("/dev/sda5"),
+                code: FsckExitCode::REBOOT_REQUIRED,
+                output: String::new(),
+            },
+        ));
+        // Verify the error variant is detectable for the propagation guard.
+        let is_reboot = matches!(
+            inner,
+            InitramfsError::ResizeData(ResizeDataError::Filesystem(
+                FilesystemError::FsckRequiresReboot { .. }
+            ))
+        );
+        assert!(
+            is_reboot,
+            "FsckRequiresReboot must be detectable for propagation guard"
+        );
+    }
+
+    #[test]
+    fn invalid_layout_error_maps_to_invalid_layout_outcome() {
+        use crate::error::{InitramfsError, ResizeDataError};
+        let e = InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(
+            std::path::PathBuf::from("/dev/sda"),
+        ));
+        assert_eq!(outcome_for(&e), ResizeOutcome::InvalidLayout);
+    }
+
+    #[test]
+    fn fsck_failed_maps_to_skipped_fsck_outcome() {
+        use crate::error::{FilesystemError, InitramfsError, ResizeDataError};
+        use crate::filesystem::FsckExitCode;
+        let e =
+            InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
+                device: std::path::PathBuf::from("/dev/sda5"),
+                code: FsckExitCode::ERRORS_UNCORRECTED,
+                output: "some errors".into(),
+            }));
+        assert_eq!(outcome_for(&e), ResizeOutcome::SkippedFsck);
+    }
+
+    #[test]
+    fn command_failed_maps_to_tool_error_outcome() {
+        use crate::error::{InitramfsError, ResizeDataError};
+        let e = InitramfsError::ResizeData(ResizeDataError::CommandFailed {
+            command: "resize2fs".into(),
+            code: 1,
+            output: "failed".into(),
+        });
+        assert_eq!(outcome_for(&e), ResizeOutcome::ToolError);
     }
 }

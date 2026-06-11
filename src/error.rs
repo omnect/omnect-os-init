@@ -67,6 +67,10 @@ impl InitramfsError {
             Self::Logging(_) => RecoveryClass::Fatal,
             Self::Config(_) => RecoveryClass::Fatal,
             #[cfg(feature = "resize-data")]
+            Self::ResizeData(ResizeDataError::Filesystem(
+                FilesystemError::FsckRequiresReboot { .. },
+            )) => RecoveryClass::RebootToApply,
+            #[cfg(feature = "resize-data")]
             Self::ResizeData(_) => RecoveryClass::ContinueDegraded,
             Self::Io(_) => RecoveryClass::Fatal,
         }
@@ -318,10 +322,26 @@ mod recovery_class_tests {
     #[cfg(feature = "resize-data")]
     #[test]
     fn resize_data_is_continue_degraded() {
-        // ResizeData is classified ContinueDegraded: a resize failure is non-fatal by policy.
+        // Non-FsckRequiresReboot resize failures are non-fatal by policy.
         let err = InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(
             std::path::PathBuf::from("/dev/sda"),
         ));
         assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn resize_data_fsck_requires_reboot_is_reboot_to_apply() {
+        use crate::filesystem::FsckExitCode;
+        // FsckRequiresReboot nested in ResizeData propagates to a reboot, not
+        // a halt or a ContinueDegraded — matches the §3.1 behavior table.
+        let err = InitramfsError::ResizeData(ResizeDataError::Filesystem(
+            FilesystemError::FsckRequiresReboot {
+                device: std::path::PathBuf::from("/dev/sda5"),
+                code: FsckExitCode::REBOOT_REQUIRED,
+                output: String::new(),
+            },
+        ));
+        assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
     }
 }
