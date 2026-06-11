@@ -199,6 +199,8 @@ pub struct MockBootEnv {
     fsck: std::collections::HashMap<PartitionName, FsckRecord>,
     /// Keys passed to set_env, in call order. Used by tests to verify set_env was/wasn't called.
     pub set_env_calls: Vec<BootEnvKey>,
+    /// When true, `get_env` returns an error instead of looking up the key.
+    get_env_errors: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -211,11 +213,22 @@ impl MockBootEnv {
         self.env.insert(key.as_str().to_string(), value.to_string());
         self
     }
+
+    pub fn with_get_env_error(mut self) -> Self {
+        self.get_env_errors = true;
+        self
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
 impl BootEnv for MockBootEnv {
     fn get_env(&self, key: BootEnvKey) -> Result<Option<String>> {
+        if self.get_env_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected error".into(),
+            });
+        }
         Ok(self.env.get(key.as_str().as_ref()).cloned())
     }
 

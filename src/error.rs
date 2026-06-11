@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::filesystem::FsckExitCode;
+use crate::recovery::RecoveryClass;
 
 /// Result type alias for the initramfs
 pub type Result<T> = std::result::Result<T, InitramfsError>;
@@ -41,6 +42,35 @@ pub enum InitramfsError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl InitramfsError {
+    /// Classify the error for the recovery policy. The match is exhaustive
+    /// so a new variant fails to compile until classified.
+    ///
+    /// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md §2.1
+    pub fn recovery_class(&self) -> RecoveryClass {
+        match self {
+            Self::Bootloader(_) => RecoveryClass::Fatal,
+            Self::DegradedBoot(_) => RecoveryClass::Fatal,
+            Self::EarlyInit(_) => RecoveryClass::Fatal,
+            Self::Partition(_) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::FsckRequiresReboot { .. }) => {
+                RecoveryClass::RebootToApply
+            }
+            Self::Filesystem(FilesystemError::MountFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::UnmountFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::FsckFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::OverlayFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::FormatFailed { .. }) => RecoveryClass::Fatal,
+            Self::Filesystem(FilesystemError::Io(_)) => RecoveryClass::Fatal,
+            Self::Logging(_) => RecoveryClass::Fatal,
+            Self::Config(_) => RecoveryClass::Fatal,
+            #[cfg(feature = "resize-data")]
+            Self::ResizeData(_) => RecoveryClass::ContinueDegraded,
+            Self::Io(_) => RecoveryClass::Fatal,
+        }
+    }
 }
 
 /// Errors during early initialization (before logging is available)
@@ -194,4 +224,104 @@ pub enum LoggingError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+#[cfg(test)]
+mod recovery_class_tests {
+    use super::*;
+    use crate::filesystem::FsckExitCode;
+    use crate::recovery::RecoveryClass;
+
+    #[test]
+    fn fsck_requires_reboot_is_reboot_to_apply() {
+        let err = InitramfsError::Filesystem(FilesystemError::FsckRequiresReboot {
+            device: std::path::PathBuf::from("/dev/sda7"),
+            code: FsckExitCode::REBOOT_REQUIRED,
+            output: String::new(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
+    }
+
+    #[test]
+    fn fsck_failed_is_fatal() {
+        let err = InitramfsError::Filesystem(FilesystemError::FsckFailed {
+            device: std::path::PathBuf::from("/dev/sda7"),
+            code: FsckExitCode::ERRORS_UNCORRECTED,
+            output: String::new(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn mount_failed_is_fatal() {
+        let err = InitramfsError::Filesystem(FilesystemError::MountFailed {
+            src_path: std::path::PathBuf::from("/dev/sda2"),
+            target: std::path::PathBuf::from("/rootfs"),
+            reason: "test".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn degraded_boot_is_fatal() {
+        let err = InitramfsError::DegradedBoot(BootEnvError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "test".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn early_init_is_fatal() {
+        let err = InitramfsError::EarlyInit(EarlyInitError::MountFailed {
+            target: "/dev".into(),
+            reason: "test".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn config_is_fatal() {
+        let err = InitramfsError::Config(ConfigError::CmdlineReadFailed(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn bootloader_error_is_fatal() {
+        let err = InitramfsError::Bootloader(BootEnvError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "test".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn partition_error_is_fatal() {
+        let err = InitramfsError::Partition(PartitionError::DeviceDetection("test".into()));
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn logging_error_is_fatal() {
+        let err = InitramfsError::Logging(LoggingError::KmsgOpenFailed("test".into()));
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[test]
+    fn io_error_is_fatal() {
+        let err = InitramfsError::Io(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn resize_data_is_continue_degraded() {
+        // ResizeData is classified ContinueDegraded: a resize failure is non-fatal by policy.
+        let err = InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(
+            std::path::PathBuf::from("/dev/sda"),
+        ));
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
 }

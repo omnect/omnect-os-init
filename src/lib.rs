@@ -4,6 +4,7 @@
 //! It replaces the bash-based initramfs scripts with a type-safe Rust implementation.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{info, warn};
 
@@ -23,6 +24,7 @@ pub mod logging;
 pub mod mode;
 pub mod partition;
 pub mod preflight;
+pub mod recovery;
 pub mod runtime;
 
 // Re-export main types for convenience
@@ -36,8 +38,49 @@ pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
 pub use crate::runtime::OdsStatus;
 
+/// `true` iff `omnect_validate_update` was set in the boot env at the time
+/// it was read. Default `false` so a failure before the env is opened (or in
+/// degraded mode) is reported as "no update in flight" per spec §2.5.
+///
+/// Single writer: [`run_init`] after `apply_boot_env_decision` succeeds.
+/// Single reader: `main::handle_fatal_error`.
+static UPDATE_PENDING: AtomicBool = AtomicBool::new(false);
+
 /// Mount point for the real rootfs inside the initramfs.
 const ROOTFS_DIR: &str = "/rootfs";
+
+/// Set the global update-pending flag from the boot env value (see `UPDATE_PENDING`).
+pub fn set_update_pending(value: bool) {
+    UPDATE_PENDING.store(value, Ordering::Relaxed);
+}
+
+/// Read the global update-pending flag. Defaults to `false` if never set.
+pub fn read_update_pending() -> bool {
+    UPDATE_PENDING.load(Ordering::Relaxed)
+}
+
+/// Derive the update-pending flag from a boot environment.
+///
+/// Returns `true` only when the env is available *and* `omnect_validate_update`
+/// is set; all other cases (degraded env, read error, key absent) return `false`
+/// per spec §2.5 so failures before the env is opened are treated as
+/// "no update in flight".
+fn update_pending_from_env(env: &BootEnvState) -> bool {
+    env.available()
+        .and_then(
+            |bl| match bl.get_env(bootloader::BootEnvKey::ValidateUpdate) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        "reading omnect_validate_update failed; treating as not pending \
+                     (spec §2.5): {e}"
+                    );
+                    None
+                }
+            },
+        )
+        .is_some()
+}
 
 /// Apply a boot env decision, enforcing the FsckRequiresReboot-wins invariant.
 ///
@@ -118,6 +161,11 @@ pub fn run_init() -> Result<()> {
 
     let mut bootloader_env =
         apply_boot_env_decision(decision, core_result, &mut ods_status, rootfs)?;
+
+    // Read omnect_validate_update once, before any subsequent fallible step.
+    // Stored in a process-global so handle_fatal_error in main.rs can branch
+    // on it without threading the value through every return type.
+    set_update_pending(update_pending_from_env(&bootloader_env));
 
     {
         let ctx = preflight::PreflightCtx {
@@ -262,5 +310,44 @@ mod tests {
             "persist_fsck_results must run before propagating FsckRequiresReboot \
              (boot_sequence.rs:68-76 contract)"
         );
+    }
+
+    #[test]
+    fn update_pending_accessor_roundtrips() {
+        // Exercises the public set/read accessors. The chosen default (false) matters so
+        // failures before the env is opened report the safe "no update in flight".
+        set_update_pending(true);
+        assert!(read_update_pending());
+        set_update_pending(false);
+        assert!(!read_update_pending());
+    }
+
+    #[test]
+    fn update_pending_false_when_degraded() {
+        let env = BootEnvState::Degraded(BootEnvError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "not found".into(),
+        });
+        assert!(!update_pending_from_env(&env));
+    }
+
+    #[test]
+    fn update_pending_false_when_key_absent() {
+        let env = BootEnvState::Available(Box::new(MockBootEnv::new()));
+        assert!(!update_pending_from_env(&env));
+    }
+
+    #[test]
+    fn update_pending_true_when_key_set() {
+        let bl = MockBootEnv::new().with_env(crate::bootloader::BootEnvKey::ValidateUpdate, "1");
+        let env = BootEnvState::Available(Box::new(bl));
+        assert!(update_pending_from_env(&env));
+    }
+
+    #[test]
+    fn update_pending_false_when_get_env_errors() {
+        let bl = MockBootEnv::new().with_get_env_error();
+        let env = BootEnvState::Available(Box::new(bl));
+        assert!(!update_pending_from_env(&env));
     }
 }
