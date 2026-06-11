@@ -56,7 +56,7 @@ fn err_debug_image_is_abort_with_cause() {
                         ..
                     } if command == "boot-env-tool"
                 ),
-                "expected cause CommandFailed(grub-editenv), got: {cause:?}"
+                "expected cause CommandFailed(boot-env-tool), got: {cause:?}"
             );
         }
         _ => panic!("debug-image: expected Abort(DegradedBoot), got unexpected decision"),
