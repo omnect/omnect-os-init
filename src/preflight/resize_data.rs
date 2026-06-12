@@ -15,25 +15,28 @@
 use crate::bootloader::BootEnvKey;
 use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
 use crate::preflight::PreflightCtx;
-use crate::runtime::{ResizeOutcome, ResizeStatus};
+use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
 
 pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
-    let result = attempt(ctx);
+    handle_result(attempt(ctx), ctx.ods_status)
+}
 
+fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
     match result {
         Ok(()) => Ok(()),
         // Data partition fsck found uncorrectable errors: a reboot with the
         // corrected partition is the right remedy, not skipping resize.
-        Err(InitramfsError::ResizeData(ResizeDataError::Filesystem(
-            FilesystemError::FsckRequiresReboot { .. },
-        ))) => Err(result.unwrap_err()),
+        Err(
+            e @ InitramfsError::ResizeData(ResizeDataError::Filesystem(
+                FilesystemError::FsckRequiresReboot { .. },
+            )),
+        ) => Err(e),
         // Every other failure is non-fatal: record the indicator and continue.
         Err(ref e) => {
             let outcome = outcome_for(e);
             let reason = e.to_string();
             log::warn!("resize-data preflight skipped: {reason}");
-            ctx.ods_status
-                .set_resize_status(ResizeStatus { outcome, reason });
+            ods_status.set_resize_status(ResizeStatus { outcome, reason });
             Ok(())
         }
     }
@@ -65,6 +68,7 @@ fn outcome_for(e: &InitramfsError) -> ResizeOutcome {
         | InitramfsError::ResizeData(ResizeDataError::NonUtf8Path(_)) => {
             ResizeOutcome::InvalidLayout
         }
+        // CommandFailed and Io: external tool or I/O failure.
         _ => ResizeOutcome::ToolError,
     }
 }
@@ -122,6 +126,10 @@ mod tests {
             ods_status: &mut ods,
         };
         assert!(run(&mut ctx).is_ok());
+        assert!(
+            ods.resize_data.is_none(),
+            "guard-present path must not record a resize_data status"
+        );
     }
 
     #[test]
@@ -135,7 +143,7 @@ mod tests {
         // in filesystem::resize_data::write_guard_none_does_not_call_set_env.
         let layout = empty_layout();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         let mut ods = OdsStatus::new();
@@ -155,7 +163,7 @@ mod tests {
         // error and returns Ok, recording the indicator in ods_status.
         let layout = layout_with_data();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         let mut ods = OdsStatus::new();
@@ -178,28 +186,24 @@ mod tests {
     }
 
     #[test]
-    fn fsck_requires_reboot_propagates() {
+    fn fsck_requires_reboot_propagates_through_handle_result() {
         use crate::error::{FilesystemError, InitramfsError, ResizeDataError};
         use crate::filesystem::FsckExitCode;
-        // Construct the exact nested error that FsckRequiresReboot produces
-        // when it surfaces through resize_if_needed.
-        let inner = InitramfsError::ResizeData(ResizeDataError::Filesystem(
+        // Calls handle_result() directly so the test covers the run()-level
+        // decision logic without needing a real disk.
+        let err = InitramfsError::ResizeData(ResizeDataError::Filesystem(
             FilesystemError::FsckRequiresReboot {
                 device: std::path::PathBuf::from("/dev/sda5"),
                 code: FsckExitCode::REBOOT_REQUIRED,
                 output: String::new(),
             },
         ));
-        // Verify the error variant is detectable for the propagation guard.
-        let is_reboot = matches!(
-            inner,
-            InitramfsError::ResizeData(ResizeDataError::Filesystem(
-                FilesystemError::FsckRequiresReboot { .. }
-            ))
-        );
+        let mut ods = OdsStatus::new();
+        let result = handle_result(Err(err), &mut ods);
+        assert!(result.is_err(), "FsckRequiresReboot must propagate as Err");
         assert!(
-            is_reboot,
-            "FsckRequiresReboot must be detectable for propagation guard"
+            ods.resize_data.is_none(),
+            "FsckRequiresReboot must not record a resize_data indicator"
         );
     }
 
@@ -233,6 +237,15 @@ mod tests {
             code: 1,
             output: "failed".into(),
         });
+        assert_eq!(outcome_for(&e), ResizeOutcome::ToolError);
+    }
+
+    #[test]
+    fn io_error_maps_to_tool_error_outcome() {
+        use crate::error::{InitramfsError, ResizeDataError};
+        let e = InitramfsError::ResizeData(ResizeDataError::Io(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
         assert_eq!(outcome_for(&e), ResizeOutcome::ToolError);
     }
 }
