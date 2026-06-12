@@ -7,10 +7,11 @@
 //! Only reached on release-images; debug-images abort in lib.rs before
 //! preflight executes.
 //!
-//! All failure modes except `FsckRequiresReboot` are absorbed as
+//! All `ResizeData` failure modes except `FsckRequiresReboot` are absorbed as
 //! best-effort: `OdsStatus.resize_data` is populated and boot continues.
-//! `FsckRequiresReboot` is propagated so Plan A's recovery policy triggers a
-//! controlled reboot.
+//! `FsckRequiresReboot` is propagated so the recovery policy in `error.rs`
+//! triggers a controlled reboot. Non-resize errors (e.g. a transient
+//! `get_env` failure) are also propagated to preserve their recovery class.
 
 use crate::bootloader::BootEnvKey;
 use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
@@ -24,21 +25,23 @@ pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
 fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
     match result {
         Ok(()) => Ok(()),
-        // Data partition fsck found uncorrectable errors: a reboot with the
-        // corrected partition is the right remedy, not skipping resize.
+        // FsckRequiresReboot: a reboot to fix the partition is the correct remedy.
         Err(
             e @ InitramfsError::ResizeData(ResizeDataError::Filesystem(
                 FilesystemError::FsckRequiresReboot { .. },
             )),
         ) => Err(e),
-        // Every other failure is non-fatal: record the indicator and continue.
-        Err(ref e) => {
-            let outcome = outcome_for(e);
-            let reason = e.to_string();
+        // Absorb only ResizeData errors — non-resize errors (e.g. Bootloader
+        // from a transient get_env failure) propagate to preserve their
+        // recovery class.
+        Err(InitramfsError::ResizeData(inner)) => {
+            let reason = inner.to_string();
+            let outcome = outcome_for(&inner);
             log::warn!("resize-data preflight skipped: {reason}");
             ods_status.set_resize_status(ResizeStatus { outcome, reason });
             Ok(())
         }
+        Err(e) => Err(e),
     }
 }
 
@@ -58,18 +61,18 @@ fn attempt(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
     }
 }
 
-fn outcome_for(e: &InitramfsError) -> ResizeOutcome {
+fn outcome_for(e: &ResizeDataError) -> ResizeOutcome {
     match e {
-        InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
-            ..
-        })) => ResizeOutcome::SkippedFsck,
-        InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(_))
-        | InitramfsError::ResizeData(ResizeDataError::ExtendedPartitionNotFound(_))
-        | InitramfsError::ResizeData(ResizeDataError::NonUtf8Path(_)) => {
-            ResizeOutcome::InvalidLayout
+        ResizeDataError::Filesystem(FilesystemError::FsckFailed { .. }) => {
+            ResizeOutcome::SkippedFsck
         }
-        // CommandFailed and Io: external tool or I/O failure.
-        _ => ResizeOutcome::ToolError,
+        ResizeDataError::InvalidDevicePath(_)
+        | ResizeDataError::ExtendedPartitionNotFound(_)
+        | ResizeDataError::NonUtf8Path(_) => ResizeOutcome::InvalidLayout,
+        ResizeDataError::CommandFailed { .. } | ResizeDataError::Io(_) => ResizeOutcome::ToolError,
+        // Any other FilesystemError (e.g. MountFailed) is a tool-level failure;
+        // FsckRequiresReboot never reaches here — propagated by handle_result.
+        ResizeDataError::Filesystem(_) => ResizeOutcome::ToolError,
     }
 }
 
@@ -208,44 +211,60 @@ mod tests {
     }
 
     #[test]
+    fn non_resize_data_error_propagates() {
+        use crate::error::{BootEnvError, InitramfsError};
+        // A transient get_env failure produces InitramfsError::Bootloader, which
+        // must propagate so its Fatal recovery class is preserved.
+        let err = InitramfsError::Bootloader(BootEnvError::CommandFailed {
+            command: "boot-env-tool".into(),
+            reason: "transient failure".into(),
+        });
+        let mut ods = OdsStatus::new();
+        let result = handle_result(Err(err), &mut ods);
+        assert!(
+            result.is_err(),
+            "non-ResizeData errors must propagate as Err"
+        );
+        assert!(
+            ods.resize_data.is_none(),
+            "non-ResizeData errors must not set a resize_data indicator"
+        );
+    }
+
+    #[test]
     fn invalid_layout_error_maps_to_invalid_layout_outcome() {
-        use crate::error::{InitramfsError, ResizeDataError};
-        let e = InitramfsError::ResizeData(ResizeDataError::InvalidDevicePath(
-            std::path::PathBuf::from("/dev/sda"),
-        ));
+        use crate::error::ResizeDataError;
+        let e = ResizeDataError::InvalidDevicePath(std::path::PathBuf::from("/dev/sda"));
         assert_eq!(outcome_for(&e), ResizeOutcome::InvalidLayout);
     }
 
     #[test]
     fn fsck_failed_maps_to_skipped_fsck_outcome() {
-        use crate::error::{FilesystemError, InitramfsError, ResizeDataError};
+        use crate::error::{FilesystemError, ResizeDataError};
         use crate::filesystem::FsckExitCode;
-        let e =
-            InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
-                device: std::path::PathBuf::from("/dev/sda5"),
-                code: FsckExitCode::ERRORS_UNCORRECTED,
-                output: "some errors".into(),
-            }));
+        let e = ResizeDataError::Filesystem(FilesystemError::FsckFailed {
+            device: std::path::PathBuf::from("/dev/sda5"),
+            code: FsckExitCode::ERRORS_UNCORRECTED,
+            output: "some errors".into(),
+        });
         assert_eq!(outcome_for(&e), ResizeOutcome::SkippedFsck);
     }
 
     #[test]
     fn command_failed_maps_to_tool_error_outcome() {
-        use crate::error::{InitramfsError, ResizeDataError};
-        let e = InitramfsError::ResizeData(ResizeDataError::CommandFailed {
+        use crate::error::ResizeDataError;
+        let e = ResizeDataError::CommandFailed {
             command: "resize2fs".into(),
             code: 1,
             output: "failed".into(),
-        });
+        };
         assert_eq!(outcome_for(&e), ResizeOutcome::ToolError);
     }
 
     #[test]
     fn io_error_maps_to_tool_error_outcome() {
-        use crate::error::{InitramfsError, ResizeDataError};
-        let e = InitramfsError::ResizeData(ResizeDataError::Io(std::io::Error::from(
-            std::io::ErrorKind::PermissionDenied,
-        )));
+        use crate::error::ResizeDataError;
+        let e = ResizeDataError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
         assert_eq!(outcome_for(&e), ResizeOutcome::ToolError);
     }
 }
