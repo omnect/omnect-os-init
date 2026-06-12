@@ -10,7 +10,7 @@ fn make_ok() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvErro
 
 fn make_err() -> Result<Box<dyn omnect_os_init::bootloader::BootEnv>, BootEnvError> {
     Err(BootEnvError::CommandFailed {
-        command: "grub-editenv".into(),
+        command: "boot-env-tool".into(),
         reason: "test error".into(),
     })
 }
@@ -54,9 +54,9 @@ fn err_debug_image_is_abort_with_cause() {
                     BootEnvError::CommandFailed {
                         command,
                         ..
-                    } if command == "grub-editenv"
+                    } if command == "boot-env-tool"
                 ),
-                "expected cause CommandFailed(grub-editenv), got: {cause:?}"
+                "expected cause CommandFailed(boot-env-tool), got: {cause:?}"
             );
         }
         _ => panic!("debug-image: expected Abort(DegradedBoot), got unexpected decision"),
@@ -64,17 +64,17 @@ fn err_debug_image_is_abort_with_cause() {
 }
 
 #[test]
-fn degraded_ods_status_json_contains_flag() {
+fn degraded_ods_status_json_contains_reason() {
     let mut status = OdsStatus::new();
     assert!(
         !serde_json::to_string(&status)
             .unwrap()
             .contains("degraded_boot")
     );
-    status.set_degraded_boot();
+    status.set_degraded_boot("grubenv missing".to_string());
     let json = serde_json::to_string(&status).unwrap();
     assert!(
-        json.contains("\"degraded_boot\":true"),
-        "expected degraded_boot:true in JSON, got: {json}"
+        json.contains("\"degraded_boot\":{\"reason\":\"grubenv missing\"}"),
+        "degraded_boot must be a nested object with reason; got: {json}"
     );
 }
