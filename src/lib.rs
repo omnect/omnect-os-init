@@ -20,10 +20,10 @@ pub mod config;
 pub mod early_init;
 pub mod error;
 pub mod filesystem;
+pub mod init_setup;
 pub mod logging;
 pub mod mode;
 pub mod partition;
-pub mod preflight;
 pub mod recovery;
 pub mod runtime;
 
@@ -168,12 +168,12 @@ pub fn run_init() -> Result<()> {
     set_update_pending(update_pending_from_env(&bootloader_env));
 
     {
-        let ctx = preflight::PreflightCtx {
+        let ctx = init_setup::InitSetupCtx {
             layout: &layout,
             boot_env: &mut bootloader_env,
             ods_status: &mut ods_status,
         };
-        preflight::run(ctx)?;
+        init_setup::run(ctx)?;
     }
 
     let ctx = BootContext::new(&config, &layout, rootfs, bootloader_env, ods_status);

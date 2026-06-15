@@ -1,7 +1,7 @@
 //! Data partition auto-resize
 //!
 //! Expands the data partition and its ext4 filesystem to fill available disk
-//! space on first boot. Called from the preflight phase when the resize guard
+//! space on first boot. Called from the init setup phase when the resize guard
 //! is absent.
 
 use std::path::Path;

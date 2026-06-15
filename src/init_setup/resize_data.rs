@@ -1,11 +1,11 @@
-//! Preflight step: data partition auto-resize
+//! Init setup step: data partition auto-resize
 //!
 //! With boot env available: checks the `omnect_resized_data` guard and, if
 //! absent, expands the data partition via `filesystem::resize_data`.
 //!
 //! On a degraded boot (boot env unavailable): runs resize without the guard.
 //! Only reached on release-images; debug-images abort in lib.rs before
-//! preflight executes.
+//! init setup executes.
 //!
 //! All `ResizeData` failure modes except `FsckRequiresReboot` are absorbed as
 //! best-effort: `OdsStatus.resize_data` is populated and boot continues.
@@ -15,10 +15,10 @@
 
 use crate::bootloader::BootEnvKey;
 use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
-use crate::preflight::PreflightCtx;
+use crate::init_setup::InitSetupCtx;
 use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
 
-pub fn run(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
+pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
     handle_result(attempt(ctx), ctx.ods_status)
 }
 
@@ -37,7 +37,7 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
         Err(InitramfsError::ResizeData(inner)) => {
             let reason = inner.to_string();
             let outcome = outcome_for(&inner);
-            log::warn!("resize-data preflight skipped: {reason}");
+            log::warn!("resize-data init setup skipped: {reason}");
             ods_status.set_resize_status(ResizeStatus { outcome, reason });
             Ok(())
         }
@@ -45,11 +45,11 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
     }
 }
 
-fn attempt(ctx: &mut PreflightCtx<'_, '_, '_>) -> Result<()> {
+fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
     match ctx.boot_env.available_mut() {
         Some(bl) => {
             if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
-                log::debug!("resize-data preflight: guard present; already resized");
+                log::debug!("resize-data init setup: guard present; already resized");
                 return Ok(());
             }
             crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl))
@@ -81,8 +81,8 @@ mod tests {
     use super::*;
     use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
     use crate::error::BootEnvError;
+    use crate::init_setup::InitSetupCtx;
     use crate::partition::{PartitionLayout, RootDevice};
-    use crate::preflight::PreflightCtx;
     use crate::runtime::OdsStatus;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -123,7 +123,7 @@ mod tests {
             Box::new(MockBootEnv::new().with_env(BootEnvKey::ResizedData, "1"));
         let mut env = BootEnvState::Available(bl);
         let mut ods = OdsStatus::new();
-        let mut ctx = PreflightCtx {
+        let mut ctx = InitSetupCtx {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
@@ -150,7 +150,7 @@ mod tests {
             reason: "test".into(),
         });
         let mut ods = OdsStatus::new();
-        let mut ctx = PreflightCtx {
+        let mut ctx = InitSetupCtx {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
@@ -170,7 +170,7 @@ mod tests {
             reason: "test".into(),
         });
         let mut ods = OdsStatus::new();
-        let mut ctx = PreflightCtx {
+        let mut ctx = InitSetupCtx {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,

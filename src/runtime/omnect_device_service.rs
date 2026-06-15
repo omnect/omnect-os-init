@@ -180,7 +180,7 @@ pub enum ResizeOutcome {
     /// An external tool (parted / sgdisk / resize2fs / sync) failed.
     ToolError,
     /// Layout problem (missing data partition, non-UTF-8 path, …) —
-    /// the preflight could not run at all.
+    /// the init setup step could not run at all.
     InvalidLayout,
 }
 
