@@ -1,7 +1,7 @@
 //! Data partition auto-resize
 //!
 //! Expands the data partition and its ext4 filesystem to fill available disk
-//! space on first boot. Called from the preflight phase when the resize guard
+//! space on first boot. Called from the init setup phase when the resize guard
 //! is absent.
 
 use std::path::Path;
@@ -88,10 +88,11 @@ pub fn resize_if_needed(
     )?;
 
     // Run fsck on the (unmounted) data partition before expanding the filesystem.
-    // If this returns FsckRequiresReboot, the error propagates without persisting
-    // to ods_status. This is intentional: the data partition is fscked again in
-    // mount_remaining_partitions on the next boot, so the diagnostic is not lost.
-    check_filesystem(&data_dev, FsType::Ext4)?;
+    // FsckFailed is absorbed by handle_result (SkippedFsck outcome); boot continues.
+    // FsckRequiresReboot propagates through handle_result to trigger a controlled reboot.
+    // Both require the error to be shaped as ResizeData(Filesystem(...)), achieved here
+    // by mapping through ResizeDataError before the ? lifts to InitramfsError.
+    check_filesystem(&data_dev, FsType::Ext4).map_err(ResizeDataError::from)?;
 
     let data_dev_str = data_dev
         .to_str()
