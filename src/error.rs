@@ -331,6 +331,21 @@ mod recovery_class_tests {
 
     #[cfg(feature = "resize-data")]
     #[test]
+    fn resize_data_fsck_failed_is_continue_degraded() {
+        use crate::filesystem::FsckExitCode;
+        // FsckFailed nested in ResizeData must be absorbed (ContinueDegraded),
+        // not Fatal — this is the headline fix for the device brick on first boot.
+        let err =
+            InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
+                device: std::path::PathBuf::from("/dev/sda5"),
+                code: FsckExitCode::ERRORS_UNCORRECTED,
+                output: "errors".into(),
+            }));
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
     fn resize_data_fsck_requires_reboot_is_reboot_to_apply() {
         use crate::filesystem::FsckExitCode;
         // FsckRequiresReboot nested in ResizeData propagates to a reboot, not
