@@ -207,6 +207,8 @@ pub struct MockBootEnv {
     pub set_env_calls: Vec<BootEnvKey>,
     /// When true, `get_env` returns an error instead of looking up the key.
     get_env_errors: bool,
+    /// When true, `set_env` returns an error instead of setting the key.
+    set_env_errors: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -224,6 +226,11 @@ impl MockBootEnv {
         self.get_env_errors = true;
         self
     }
+
+    pub fn with_set_env_error(mut self) -> Self {
+        self.set_env_errors = true;
+        self
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -239,6 +246,12 @@ impl BootEnv for MockBootEnv {
     }
 
     fn set_env(&mut self, key: BootEnvKey, value: Option<&str>) -> Result<()> {
+        if self.set_env_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected set_env error".into(),
+            });
+        }
         self.set_env_calls.push(key);
         match value {
             Some(v) => {

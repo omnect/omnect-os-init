@@ -103,4 +103,13 @@ mod marker_writer_tests {
         // Must not panic; nothing to assert beyond completion.
         write_first_boot_marker(true, &mut env);
     }
+
+    #[test]
+    fn logs_warn_and_does_not_abort_when_set_env_fails() {
+        // Exercises the log::warn! path: write failure must not abort the boot.
+        let mock = MockBootEnv::new().with_set_env_error();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        // Must not panic or return an error.
+        write_first_boot_marker(true, &mut env);
+    }
 }
