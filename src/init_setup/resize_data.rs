@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_guard_present() {
+    fn skips_when_first_boot_marker_present() {
         // layout_with_data: if the guard check is bypassed, resize_if_needed
         // will attempt to spawn sgdisk/parted (not in test env) and return Err.
         let layout = layout_with_data();
@@ -136,14 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn degraded_env_skips_guard_write() {
+    fn degraded_env_runs_resize_without_guard() {
         // Uses empty_layout: resize_if_needed returns Ok immediately (no data
         // partition), so no real sgdisk/parted is invoked. The purpose of this
         // test is to verify the Degraded arm is dispatched correctly — not to
         // test the resize commands themselves (those are CI/Concourse-only).
-        //
-        // The guard-write skip behaviour for degraded mode is verified directly
-        // in filesystem::resize_data::write_guard_none_does_not_call_set_env.
         let layout = empty_layout();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "boot-env-tool".into(),
