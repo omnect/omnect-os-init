@@ -412,7 +412,7 @@ mod first_boot_detection_tests {
         // Degraded default per spec §4: don't trigger first-boot side
         // effects (cloud registration etc.) under uncertainty.
         let env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         assert!(!compute_first_boot(&env));

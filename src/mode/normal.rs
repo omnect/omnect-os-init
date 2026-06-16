@@ -97,7 +97,7 @@ mod marker_writer_tests {
     #[test]
     fn no_op_on_degraded_env() {
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         // Must not panic; nothing to assert beyond completion.
