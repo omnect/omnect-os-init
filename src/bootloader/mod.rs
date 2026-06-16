@@ -299,7 +299,7 @@ mod tests {
 
         fn err_bootloader() -> std::result::Result<Box<dyn BootEnv>, BootEnvError> {
             Err(BootEnvError::CommandFailed {
-                command: "grub-editenv".into(),
+                command: "boot-env-tool".into(),
                 reason: "not found".into(),
             })
         }
