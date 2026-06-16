@@ -1,6 +1,6 @@
 //! Init setup step: data partition auto-resize
 //!
-//! With boot env available: checks the `omnect_resized_data` guard and, if
+//! With boot env available: checks the `omnect_first_boot_done` marker and, if
 //! absent, expands the data partition via `filesystem::resize_data`.
 //!
 //! On a degraded boot (boot env unavailable): runs resize without the guard.
@@ -48,8 +48,8 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
 fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
     match ctx.boot_env.available_mut() {
         Some(bl) => {
-            if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
-                log::debug!("resize-data init setup: guard present; already resized");
+            if bl.get_env(BootEnvKey::FirstBootDone)?.is_some() {
+                log::debug!("resize-data init setup: first-boot marker present; skipping resize");
                 return Ok(());
             }
             crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl))
@@ -120,7 +120,7 @@ mod tests {
         // will attempt to spawn sgdisk/parted (not in test env) and return Err.
         let layout = layout_with_data();
         let bl: Box<dyn crate::bootloader::BootEnv> =
-            Box::new(MockBootEnv::new().with_env(BootEnvKey::ResizedData, "1"));
+            Box::new(MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "1"));
         let mut env = BootEnvState::Available(bl);
         let mut ods = OdsStatus::new();
         let mut ctx = InitSetupCtx {
