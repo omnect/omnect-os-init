@@ -142,6 +142,11 @@ pub struct OdsStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
 
+    /// `true` iff this boot is the first boot since flashing (i.e. the
+    /// `omnect_first_boot_done` marker was absent at run_init time).
+    /// Always serialized — absence of the key would itself be a bug.
+    pub first_boot: bool,
+
     /// Carries the resize-data failure cause when resize did not complete on
     /// this boot, so ODS consumers can diagnose and notify the cloud. `None`
     /// on the happy path (resize succeeded or guard already present).
@@ -879,5 +884,25 @@ mod tests {
             let s = serde_json::to_string(variant).unwrap();
             assert_eq!(&s, expected, "{variant:?} must serialize as {expected}");
         }
+    }
+
+    #[test]
+    fn first_boot_always_serialized() {
+        // Plain bool, always in the JSON. Absence of the key would itself
+        // be diagnostic of a bug — see spec §7.
+        let s = OdsStatus::new();
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(
+            j.contains("\"first_boot\":false"),
+            "default first_boot must be false and serialized; got: {j}"
+        );
+
+        let mut s = OdsStatus::new();
+        s.first_boot = true;
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(
+            j.contains("\"first_boot\":true"),
+            "first_boot=true must be serialized; got: {j}"
+        );
     }
 }
