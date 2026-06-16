@@ -46,6 +46,11 @@ pub enum BootEnvKey {
     /// `omnect_resized_data` — set to `"1"` after data partition has been resized.
     #[cfg(feature = "resize-data")]
     ResizedData,
+    /// `omnect_first_boot_done` — set to `"1"` after the first successful
+    /// `run_init`. Unified first-boot sentinel read by both the
+    /// resize-data init setup (§6.1) and the first-boot detection in
+    /// `run_init` (§3).
+    FirstBootDone,
 }
 
 impl BootEnvKey {
@@ -57,6 +62,7 @@ impl BootEnvKey {
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             #[cfg(feature = "resize-data")]
             Self::ResizedData => Cow::Borrowed("omnect_resized_data"),
+            Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
         }
     }
 }
@@ -385,5 +391,15 @@ mod tests {
 
         bl.clear_fsck_status(PartitionName::Boot).unwrap();
         assert_eq!(bl.get_fsck_status(PartitionName::Boot).unwrap(), None);
+    }
+
+    #[test]
+    fn first_boot_done_key_string() {
+        // Pin the wire string. ODS / cloud / external tools may match on it
+        // so changing it would be a wire-format break.
+        assert_eq!(
+            BootEnvKey::FirstBootDone.as_str().as_ref(),
+            "omnect_first_boot_done"
+        );
     }
 }
