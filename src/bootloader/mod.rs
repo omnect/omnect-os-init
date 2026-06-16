@@ -43,9 +43,6 @@ pub enum BootEnvKey {
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
     FsckStatus(PartitionName),
-    /// `omnect_resized_data` — set to `"1"` after data partition has been resized.
-    #[cfg(feature = "resize-data")]
-    ResizedData,
     /// `omnect_first_boot_done` — set to `"1"` after the first successful
     /// `run_init`. Unified first-boot sentinel read by both the
     /// resize-data init setup (§6.1) and the first-boot detection in
@@ -60,8 +57,6 @@ impl BootEnvKey {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
-            #[cfg(feature = "resize-data")]
-            Self::ResizedData => Cow::Borrowed("omnect_resized_data"),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
         }
     }
