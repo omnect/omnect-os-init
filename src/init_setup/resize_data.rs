@@ -51,7 +51,7 @@ fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
     // (Bootloader → Fatal) while compute_first_boot already rode through it.
     let first_boot = ctx.ods_status.first_boot;
     match ctx.boot_env.available_mut() {
-        Some(bl) => {
+        Some(_) => {
             if !first_boot {
                 log::debug!("resize-data init setup: not first boot; skipping resize");
                 return Ok(());
