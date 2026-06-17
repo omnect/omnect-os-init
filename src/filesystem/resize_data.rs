@@ -7,7 +7,6 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::bootloader::BootEnv;
 use crate::error::{ResizeDataError, Result};
 use crate::filesystem::{FsType, check_filesystem};
 use crate::partition::PartitionName;
@@ -28,10 +27,7 @@ const RESIZE2FS_FORCE: &str = "-f";
 
 type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
-pub fn resize_if_needed(
-    layout: &crate::partition::PartitionLayout,
-    _bootloader: Option<&mut dyn BootEnv>,
-) -> Result<()> {
+pub fn resize_if_needed(layout: &crate::partition::PartitionLayout) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
         None => {
@@ -252,7 +248,6 @@ Number  Start   End     Size   File system  Name  Flags
 
     #[test]
     fn test_resize_skips_when_data_partition_absent() {
-        use crate::bootloader::MockBootEnv;
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
 
@@ -264,13 +259,11 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        let mut bl: Box<dyn crate::bootloader::BootEnv> = Box::new(MockBootEnv::new());
-
-        assert!(resize_if_needed(&layout, Some(bl.as_mut())).is_ok());
+        assert!(resize_if_needed(&layout).is_ok());
     }
 
     #[test]
-    fn resize_with_none_bootloader_skips_guard_set() {
+    fn resize_with_no_data_partition_returns_ok() {
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
 
@@ -282,6 +275,6 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        assert!(resize_if_needed(&layout, None).is_ok());
+        assert!(resize_if_needed(&layout).is_ok());
     }
 }

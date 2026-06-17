@@ -44,9 +44,8 @@ pub enum BootEnvKey {
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
     FsckStatus(PartitionName),
     /// `omnect_first_boot_done` — set to `"1"` after the first successful
-    /// `run_init`. Unified first-boot sentinel read by both the
-    /// resize-data init setup (§6.1) and the first-boot detection in
-    /// `run_init` (§3).
+    /// `run_init`. Unified first-boot sentinel; read by the resize-data init
+    /// setup step and the first-boot detection in `run_init`.
     FirstBootDone,
 }
 

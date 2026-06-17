@@ -1,11 +1,12 @@
 //! Init setup step: data partition auto-resize
 //!
-//! With boot env available: checks the `omnect_first_boot_done` marker and, if
-//! absent, expands the data partition via `filesystem::resize_data`.
+//! Runs on the first boot (when `OdsStatus.first_boot` is `true`), expanding
+//! the data partition via `filesystem::resize_data`.
 //!
-//! On a degraded boot (boot env unavailable): runs resize without the guard.
-//! Only reached on release-images; debug-images abort in lib.rs before
-//! init setup executes.
+//! On a degraded boot (boot env unavailable): runs resize regardless, since
+//! the first-boot flag defaults to `false` and the degraded arm runs
+//! unconditionally. Only reached on release-images; debug-images abort in
+//! lib.rs before init setup executes.
 //!
 //! All `ResizeData` failure modes except `FsckRequiresReboot` are absorbed as
 //! best-effort: `OdsStatus.resize_data` is populated and boot continues.
@@ -13,7 +14,6 @@
 //! triggers a controlled reboot. Non-resize errors (e.g. a transient
 //! `get_env` failure) are also propagated to preserve their recovery class.
 
-use crate::bootloader::BootEnvKey;
 use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
 use crate::init_setup::InitSetupCtx;
 use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
@@ -46,17 +46,21 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
 }
 
 fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
+    // Use the already-computed flag rather than re-reading the boot env.
+    // A redundant get_env call here could brick on a transient error
+    // (Bootloader → Fatal) while compute_first_boot already rode through it.
+    let first_boot = ctx.ods_status.first_boot;
     match ctx.boot_env.available_mut() {
         Some(bl) => {
-            if bl.get_env(BootEnvKey::FirstBootDone)?.is_some() {
-                log::debug!("resize-data init setup: first-boot marker present; skipping resize");
+            if !first_boot {
+                log::debug!("resize-data init setup: not first boot; skipping resize");
                 return Ok(());
             }
-            crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl))
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout)
         }
         None => {
             log::warn!("resize-data: running without bootloader guard (degraded boot)");
-            crate::filesystem::resize_data::resize_if_needed(ctx.layout, None)
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout)
         }
     }
 }
@@ -79,7 +83,7 @@ fn outcome_for(e: &ResizeDataError) -> ResizeOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+    use crate::bootloader::{BootEnvState, MockBootEnv};
     use crate::error::BootEnvError;
     use crate::init_setup::InitSetupCtx;
     use crate::partition::{PartitionLayout, RootDevice};
@@ -115,14 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_first_boot_marker_present() {
-        // layout_with_data: if the guard check is bypassed, resize_if_needed
+    fn skips_when_not_first_boot() {
+        // layout_with_data: if the skip check is bypassed, resize_if_needed
         // will attempt to spawn sgdisk/parted (not in test env) and return Err.
         let layout = layout_with_data();
-        let bl: Box<dyn crate::bootloader::BootEnv> =
-            Box::new(MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "1"));
-        let mut env = BootEnvState::Available(bl);
+        let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
         let mut ods = OdsStatus::new();
+        ods.first_boot = false; // not first boot → skip resize
         let mut ctx = InitSetupCtx {
             layout: &layout,
             boot_env: &mut env,
@@ -131,7 +134,7 @@ mod tests {
         assert!(run(&mut ctx).is_ok());
         assert!(
             ods.resize_data.is_none(),
-            "guard-present path must not record a resize_data status"
+            "non-first-boot path must not record a resize_data status"
         );
     }
 
