@@ -38,7 +38,7 @@ pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
 pub use crate::runtime::OdsStatus;
 
-/// `true` iff `omnect_validate_update` was set in the boot env at the time
+/// `true` if `omnect_validate_update` was set in the boot env at the time
 /// it was read. Default `false` so a failure before the env is opened (or in
 /// degraded mode) is reported as "no update in flight" per spec §2.5.
 ///
@@ -80,6 +80,25 @@ fn update_pending_from_env(env: &BootEnvState) -> bool {
             },
         )
         .is_some()
+}
+
+/// Compute the first-boot flag from the opened boot env.
+///
+/// Returns `true` if `BootEnvKey::FirstBootDone` is absent from the env.
+/// Errors from `get_env` and the degraded-env state both default to `false`
+/// to avoid triggering first-boot side effects under uncertainty.
+fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {
+    match env.available() {
+        Some(bl) => match bl.get_env(bootloader::BootEnvKey::FirstBootDone) {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(e) => {
+                warn!("first-boot: get_env failed: {e}; treating as not-first-boot");
+                false
+            }
+        },
+        None => false,
+    }
 }
 
 /// Apply a boot env decision, enforcing the FsckRequiresReboot-wins invariant.
@@ -161,6 +180,11 @@ pub fn run_init() -> Result<()> {
 
     let mut bootloader_env =
         apply_boot_env_decision(decision, core_result, &mut ods_status, rootfs)?;
+
+    ods_status.first_boot = compute_first_boot(&bootloader_env);
+    if ods_status.first_boot {
+        info!("first-boot detected (omnect_first_boot_done absent)");
+    }
 
     // Read omnect_validate_update once, before any subsequent fallible step.
     // Stored in a process-global so handle_fatal_error in main.rs can branch
@@ -361,5 +385,45 @@ mod tests {
         let bl = MockBootEnv::new().with_get_env_error();
         let env = BootEnvState::Available(Box::new(bl));
         assert!(!update_pending_from_env(&env));
+    }
+}
+
+#[cfg(test)]
+mod first_boot_detection_tests {
+    use super::*;
+    use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+    use crate::error::BootEnvError;
+
+    #[test]
+    fn marker_absent_yields_first_boot_true() {
+        let env: BootEnvState = BootEnvState::Available(Box::new(MockBootEnv::new()));
+        assert!(compute_first_boot(&env));
+    }
+
+    #[test]
+    fn marker_present_yields_first_boot_false() {
+        let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "1");
+        let env: BootEnvState = BootEnvState::Available(Box::new(mock));
+        assert!(!compute_first_boot(&env));
+    }
+
+    #[test]
+    fn degraded_env_yields_first_boot_false() {
+        // Degraded default per spec §4: don't trigger first-boot side
+        // effects (cloud registration etc.) under uncertainty.
+        let env = BootEnvState::Degraded(BootEnvError::CommandFailed {
+            command: "boot-env-tool".into(),
+            reason: "test".into(),
+        });
+        assert!(!compute_first_boot(&env));
+    }
+
+    #[test]
+    fn get_env_error_yields_first_boot_false() {
+        // Conservative: I/O or parse errors must not trigger first-boot
+        // side effects (spec §4 — treat as not-first-boot under uncertainty).
+        let mock = MockBootEnv::new().with_get_env_error();
+        let env = BootEnvState::Available(Box::new(mock));
+        assert!(!compute_first_boot(&env));
     }
 }

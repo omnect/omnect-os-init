@@ -1,11 +1,12 @@
 //! Init setup step: data partition auto-resize
 //!
-//! With boot env available: checks the `omnect_resized_data` guard and, if
-//! absent, expands the data partition via `filesystem::resize_data`.
+//! Runs on the first boot (when `OdsStatus.first_boot` is `true`), expanding
+//! the data partition via `filesystem::resize_data`.
 //!
-//! On a degraded boot (boot env unavailable): runs resize without the guard.
-//! Only reached on release-images; debug-images abort in lib.rs before
-//! init setup executes.
+//! On a degraded boot (boot env unavailable): runs resize regardless, since
+//! the first-boot flag defaults to `false` and the degraded arm runs
+//! unconditionally. Only reached on release-images; debug-images abort in
+//! lib.rs before init setup executes.
 //!
 //! All `ResizeData` failure modes except `FsckRequiresReboot` are absorbed as
 //! best-effort: `OdsStatus.resize_data` is populated and boot continues.
@@ -13,7 +14,6 @@
 //! triggers a controlled reboot. Non-resize errors (e.g. a transient
 //! `get_env` failure) are also propagated to preserve their recovery class.
 
-use crate::bootloader::BootEnvKey;
 use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
 use crate::init_setup::InitSetupCtx;
 use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
@@ -46,17 +46,21 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
 }
 
 fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
+    // Use the already-computed flag rather than re-reading the boot env.
+    // A redundant get_env call here could brick on a transient error
+    // (Bootloader → Fatal) while compute_first_boot already rode through it.
+    let first_boot = ctx.ods_status.first_boot;
     match ctx.boot_env.available_mut() {
-        Some(bl) => {
-            if bl.get_env(BootEnvKey::ResizedData)?.is_some() {
-                log::debug!("resize-data init setup: guard present; already resized");
+        Some(_) => {
+            if !first_boot {
+                log::debug!("resize-data init setup: not first boot; skipping resize");
                 return Ok(());
             }
-            crate::filesystem::resize_data::resize_if_needed(ctx.layout, Some(bl))
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout)
         }
         None => {
             log::warn!("resize-data: running without bootloader guard (degraded boot)");
-            crate::filesystem::resize_data::resize_if_needed(ctx.layout, None)
+            crate::filesystem::resize_data::resize_if_needed(ctx.layout)
         }
     }
 }
@@ -79,7 +83,7 @@ fn outcome_for(e: &ResizeDataError) -> ResizeOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+    use crate::bootloader::{BootEnvState, MockBootEnv};
     use crate::error::BootEnvError;
     use crate::init_setup::InitSetupCtx;
     use crate::partition::{PartitionLayout, RootDevice};
@@ -115,14 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_guard_present() {
-        // layout_with_data: if the guard check is bypassed, resize_if_needed
+    fn skips_when_not_first_boot() {
+        // layout_with_data: if the skip check is bypassed, resize_if_needed
         // will attempt to spawn sgdisk/parted (not in test env) and return Err.
         let layout = layout_with_data();
-        let bl: Box<dyn crate::bootloader::BootEnv> =
-            Box::new(MockBootEnv::new().with_env(BootEnvKey::ResizedData, "1"));
-        let mut env = BootEnvState::Available(bl);
+        let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
         let mut ods = OdsStatus::new();
+        ods.first_boot = false; // not first boot → skip resize
         let mut ctx = InitSetupCtx {
             layout: &layout,
             boot_env: &mut env,
@@ -131,19 +134,42 @@ mod tests {
         assert!(run(&mut ctx).is_ok());
         assert!(
             ods.resize_data.is_none(),
-            "guard-present path must not record a resize_data status"
+            "non-first-boot path must not record a resize_data status"
         );
     }
 
     #[test]
-    fn degraded_env_skips_guard_write() {
+    fn first_boot_with_available_env_attempts_resize() {
+        // first_boot = true + Available env + data partition present.
+        // resize_if_needed will fail (no real tools in test env); the error is
+        // absorbed by handle_result and recorded in ods_status.resize_data.
+        // This confirms the Some(_) arm does NOT skip on first boot.
+        let layout = layout_with_data();
+        let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
+        let mut ods = OdsStatus::new();
+        ods.first_boot = true;
+        let mut ctx = InitSetupCtx {
+            layout: &layout,
+            boot_env: &mut env,
+            ods_status: &mut ods,
+        };
+        let result = run(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "tool errors must be absorbed; got: {result:?}"
+        );
+        assert!(
+            ctx.ods_status.resize_data.is_some(),
+            "ods_status.resize_data must be set after a tool error on first boot"
+        );
+    }
+
+    #[test]
+    fn degraded_env_runs_resize_without_guard() {
         // Uses empty_layout: resize_if_needed returns Ok immediately (no data
         // partition), so no real sgdisk/parted is invoked. The purpose of this
         // test is to verify the Degraded arm is dispatched correctly — not to
         // test the resize commands themselves (those are CI/Concourse-only).
-        //
-        // The guard-write skip behaviour for degraded mode is verified directly
-        // in filesystem::resize_data::write_guard_none_does_not_call_set_env.
         let layout = empty_layout();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "boot-env-tool".into(),

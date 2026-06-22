@@ -269,7 +269,7 @@ mod recovery_class_tests {
     #[test]
     fn degraded_boot_is_fatal() {
         let err = InitramfsError::DegradedBoot(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
@@ -295,7 +295,7 @@ mod recovery_class_tests {
     #[test]
     fn bootloader_error_is_fatal() {
         let err = InitramfsError::Bootloader(BootEnvError::CommandFailed {
-            command: "grub-editenv".into(),
+            command: "boot-env-tool".into(),
             reason: "test".into(),
         });
         assert_eq!(err.recovery_class(), RecoveryClass::Fatal);

@@ -43,9 +43,10 @@ pub enum BootEnvKey {
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
     FsckStatus(PartitionName),
-    /// `omnect_resized_data` — set to `"1"` after data partition has been resized.
-    #[cfg(feature = "resize-data")]
-    ResizedData,
+    /// `omnect_first_boot_done` — set to `"1"` after the first successful
+    /// `run_init`. Unified first-boot sentinel; read by the resize-data init
+    /// setup step and the first-boot detection in `run_init`.
+    FirstBootDone,
 }
 
 impl BootEnvKey {
@@ -55,8 +56,7 @@ impl BootEnvKey {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
-            #[cfg(feature = "resize-data")]
-            Self::ResizedData => Cow::Borrowed("omnect_resized_data"),
+            Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
         }
     }
 }
@@ -201,6 +201,8 @@ pub struct MockBootEnv {
     pub set_env_calls: Vec<BootEnvKey>,
     /// When true, `get_env` returns an error instead of looking up the key.
     get_env_errors: bool,
+    /// When true, `set_env` returns an error instead of setting the key.
+    set_env_errors: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -218,6 +220,11 @@ impl MockBootEnv {
         self.get_env_errors = true;
         self
     }
+
+    pub fn with_set_env_error(mut self) -> Self {
+        self.set_env_errors = true;
+        self
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -233,6 +240,12 @@ impl BootEnv for MockBootEnv {
     }
 
     fn set_env(&mut self, key: BootEnvKey, value: Option<&str>) -> Result<()> {
+        if self.set_env_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected set_env error".into(),
+            });
+        }
         self.set_env_calls.push(key);
         match value {
             Some(v) => {
@@ -285,7 +298,7 @@ mod tests {
 
         fn err_bootloader() -> std::result::Result<Box<dyn BootEnv>, BootEnvError> {
             Err(BootEnvError::CommandFailed {
-                command: "grub-editenv".into(),
+                command: "boot-env-tool".into(),
                 reason: "not found".into(),
             })
         }
@@ -385,5 +398,15 @@ mod tests {
 
         bl.clear_fsck_status(PartitionName::Boot).unwrap();
         assert_eq!(bl.get_fsck_status(PartitionName::Boot).unwrap(), None);
+    }
+
+    #[test]
+    fn first_boot_done_key_string() {
+        // Pin the wire string. ODS / cloud / external tools may match on it
+        // so changing it would be a wire-format break.
+        assert_eq!(
+            BootEnvKey::FirstBootDone.as_str().as_ref(),
+            "omnect_first_boot_done"
+        );
     }
 }

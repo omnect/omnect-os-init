@@ -1,13 +1,12 @@
 //! Data partition auto-resize
 //!
 //! Expands the data partition and its ext4 filesystem to fill available disk
-//! space on first boot. Called from the init setup phase when the resize guard
-//! is absent.
+//! space on first boot. Called from the init setup phase when the
+//! `omnect_first_boot_done` marker is absent.
 
 use std::path::Path;
 use std::process::Command;
 
-use crate::bootloader::{BootEnv, BootEnvKey};
 use crate::error::{ResizeDataError, Result};
 use crate::filesystem::{FsType, check_filesystem};
 use crate::partition::PartitionName;
@@ -28,10 +27,7 @@ const RESIZE2FS_FORCE: &str = "-f";
 
 type ResizeResult<T> = std::result::Result<T, ResizeDataError>;
 
-pub fn resize_if_needed(
-    layout: &crate::partition::PartitionLayout,
-    bootloader: Option<&mut dyn BootEnv>,
-) -> Result<()> {
+pub fn resize_if_needed(layout: &crate::partition::PartitionLayout) -> Result<()> {
     let data_dev = match layout.partitions.get(&PartitionName::Data) {
         Some(d) => d.clone(),
         None => {
@@ -101,26 +97,7 @@ pub fn resize_if_needed(
 
     run_cmd(SYNC_CMD, &[])?;
 
-    write_resize_guard(bootloader)?;
-
     log::info!("Data partition resize complete");
-    Ok(())
-}
-
-/// Write the resize guard to the boot environment if available.
-///
-/// Called after a successful resize. When the boot env is unavailable
-/// (degraded mode), the guard is intentionally not written — the resize
-/// will run again on the next boot, which is idempotent.
-pub(crate) fn write_resize_guard(bootloader: Option<&mut dyn BootEnv>) -> Result<()> {
-    if let Some(bl) = bootloader
-        && let Err(e) = bl.set_env(BootEnvKey::ResizedData, Some("1"))
-    {
-        log::warn!(
-            "data partition resize completed but guard write failed: {e}; \
-             resize will run again on next boot (idempotent)"
-        );
-    }
     Ok(())
 }
 
@@ -271,7 +248,6 @@ Number  Start   End     Size   File system  Name  Flags
 
     #[test]
     fn test_resize_skips_when_data_partition_absent() {
-        use crate::bootloader::MockBootEnv;
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
 
@@ -283,14 +259,11 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        let mut bl: Box<dyn crate::bootloader::BootEnv> = Box::new(MockBootEnv::new());
-
-        assert!(resize_if_needed(&layout, Some(bl.as_mut())).is_ok());
-        assert!(bl.get_env(BootEnvKey::ResizedData).unwrap().is_none());
+        assert!(resize_if_needed(&layout).is_ok());
     }
 
     #[test]
-    fn resize_with_none_bootloader_skips_guard_set() {
+    fn resize_with_no_data_partition_returns_ok() {
         use crate::partition::{PartitionLayout, RootDevice};
         use std::collections::HashMap;
 
@@ -302,23 +275,6 @@ Number  Start   End     Size   File system  Name  Flags
                 root_partition: std::path::PathBuf::from("/dev/sda2"),
             },
         };
-        assert!(resize_if_needed(&layout, None).is_ok());
-    }
-
-    // --- write_resize_guard unit tests ---
-    // These test the guard-write dispatch directly, independently of the
-    // resize commands (which require real block devices and are CI-only).
-
-    #[test]
-    fn write_guard_none_bootloader_is_noop() {
-        assert!(write_resize_guard(None).is_ok());
-    }
-
-    #[test]
-    fn write_guard_some_bootloader_sets_env() {
-        use crate::bootloader::MockBootEnv;
-        let mut bl = MockBootEnv::new();
-        write_resize_guard(Some(&mut bl)).unwrap();
-        assert!(bl.get_env(BootEnvKey::ResizedData).unwrap().is_some());
+        assert!(resize_if_needed(&layout).is_ok());
     }
 }
