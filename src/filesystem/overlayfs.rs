@@ -61,7 +61,10 @@ pub mod mount_points {
 /// - Upper layer: mnt/etc/upper (persistent changes)
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
-pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
+///
+/// On the first boot (`first_boot = true`) the factory /etc defaults are
+/// copied into the upper layer so the OS starts with a populated config.
+pub fn setup_etc_overlay(rootfs_dir: &Path, first_boot: bool) -> Result<()> {
     let etc_mount = rootfs_dir.join(mount_points::ETC_PARTITION);
     let factory_mount = rootfs_dir.join(mount_points::FACTORY_PARTITION);
 
@@ -71,23 +74,17 @@ pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
     let lower_dir = rootfs_dir.join(paths::ETC);
     let target = rootfs_dir.join(paths::ETC);
 
-    // Factory etc is only used for first-boot initialization
-    let factory_etc = factory_mount.join(paths::ETC);
-
-    // Ensure directories exist
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
-    // Check if this is first boot (upper is empty).
-    // TODO: expose is_first_boot as a global flag so downstream code (e.g. bootarg
-    // construction) can act on it without re-detecting the condition.
-    let is_first_boot = is_directory_empty(&upper_dir)?;
-
-    if is_first_boot {
-        log::info!("First boot detected - copying factory etc to upper layer");
+    // Copy factory /etc to the upper layer on first boot. Using the
+    // pre-computed flag avoids re-detecting first boot from upper-dir
+    // emptiness, which is unreliable after a mid-copy crash.
+    if first_boot {
+        let factory_etc = factory_mount.join(paths::ETC);
+        log::info!("First boot: copying factory etc to upper layer");
         copy_directory_contents(&factory_etc, &upper_dir)?;
     }
 
-    // Mount the overlay
     mount_overlay(&lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(
@@ -206,23 +203,7 @@ fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check if a directory is empty
-fn is_directory_empty(path: &Path) -> Result<bool> {
-    if !path.exists() {
-        return Ok(true);
-    }
-
-    let mut entries = fs::read_dir(path).map_err(|e| FilesystemError::OverlayFailed {
-        target: path.to_path_buf(),
-        reason: format!("Failed to read directory: {}", e),
-    })?;
-
-    Ok(entries.next().is_none())
-}
-
 /// Copy contents of one directory to another
-///
-/// Uses `cp -a` for proper attribute preservation.
 fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         log::warn!("Source directory does not exist: {}", src.display());
@@ -277,7 +258,6 @@ pub fn setup_raw_rootfs_mount(rootfs_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -298,25 +278,6 @@ mod tests {
         assert!(existing.exists());
         ensure_dir(existing).unwrap();
         assert!(existing.exists());
-    }
-
-    #[test]
-    fn test_is_directory_empty_true() {
-        let temp = TempDir::new().unwrap();
-        assert!(is_directory_empty(temp.path()).unwrap());
-    }
-
-    #[test]
-    fn test_is_directory_empty_false() {
-        let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("file.txt"), "content").unwrap();
-        assert!(!is_directory_empty(temp.path()).unwrap());
-    }
-
-    #[test]
-    fn test_is_directory_empty_nonexistent() {
-        let path = PathBuf::from("/nonexistent/path");
-        assert!(is_directory_empty(&path).unwrap());
     }
 
     #[test]
