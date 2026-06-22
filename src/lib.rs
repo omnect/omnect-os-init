@@ -38,7 +38,7 @@ pub use crate::error::{InitramfsError, Result};
 pub use crate::logging::KmsgLogger;
 pub use crate::runtime::OdsStatus;
 
-/// `true` iff `omnect_validate_update` was set in the boot env at the time
+/// `true` if `omnect_validate_update` was set in the boot env at the time
 /// it was read. Default `false` so a failure before the env is opened (or in
 /// degraded mode) is reported as "no update in flight" per spec §2.5.
 ///
@@ -84,7 +84,7 @@ fn update_pending_from_env(env: &BootEnvState) -> bool {
 
 /// Compute the first-boot flag from the opened boot env.
 ///
-/// Returns `true` iff `BootEnvKey::FirstBootDone` is absent from the env.
+/// Returns `true` if `BootEnvKey::FirstBootDone` is absent from the env.
 /// Errors from `get_env` and the degraded-env state both default to `false`
 /// to avoid triggering first-boot side effects under uncertainty.
 fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {

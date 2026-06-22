@@ -139,6 +139,32 @@ mod tests {
     }
 
     #[test]
+    fn first_boot_with_available_env_attempts_resize() {
+        // first_boot = true + Available env + data partition present.
+        // resize_if_needed will fail (no real tools in test env); the error is
+        // absorbed by handle_result and recorded in ods_status.resize_data.
+        // This confirms the Some(_) arm does NOT skip on first boot.
+        let layout = layout_with_data();
+        let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
+        let mut ods = OdsStatus::new();
+        ods.first_boot = true;
+        let mut ctx = InitSetupCtx {
+            layout: &layout,
+            boot_env: &mut env,
+            ods_status: &mut ods,
+        };
+        let result = run(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "tool errors must be absorbed; got: {result:?}"
+        );
+        assert!(
+            ctx.ods_status.resize_data.is_some(),
+            "ods_status.resize_data must be set after a tool error on first boot"
+        );
+    }
+
+    #[test]
     fn degraded_env_runs_resize_without_guard() {
         // Uses empty_layout: resize_if_needed returns Ok immediately (no data
         // partition), so no real sgdisk/parted is invoked. The purpose of this

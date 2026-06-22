@@ -34,7 +34,7 @@ pub enum Action {
 
 /// Decide the action for a recovery class and boot context.
 ///
-/// `update_pending` is `true` iff `omnect_validate_update` was set in the
+/// `update_pending` is `true` if `omnect_validate_update` was set in the
 /// boot env at the time it was opened. When the env is unreadable or the
 /// failure occurred before the env was opened, `update_pending` is `false`
 /// per spec §2.5.

@@ -142,7 +142,7 @@ pub struct OdsStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
 
-    /// `true` iff this boot is the first boot since flashing (i.e. the
+    /// `true` if this boot is the first boot since flashing (i.e. the
     /// `omnect_first_boot_done` marker was absent at run_init time).
     /// Always serialized — absence of the key would itself be a bug.
     pub first_boot: bool,
