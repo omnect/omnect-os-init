@@ -57,7 +57,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     mount_result?;
 
     setup_raw_rootfs_mount(rootfs)?;
-    setup_etc_overlay(rootfs, ods_status.first_boot)?;
+    setup_etc_overlay(rootfs)?;
     setup_data_overlay(rootfs)?;
     create_fs_links(rootfs)?;
 

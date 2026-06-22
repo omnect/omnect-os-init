@@ -62,9 +62,11 @@ pub mod mount_points {
 /// - Work dir: mnt/etc/work
 /// - Target: rootfs/etc
 ///
-/// On the first boot (`first_boot = true`) the factory /etc defaults are
-/// copied into the upper layer so the OS starts with a populated config.
-pub fn setup_etc_overlay(rootfs_dir: &Path, first_boot: bool) -> Result<()> {
+/// Factory /etc defaults are copied into the upper layer when the upper
+/// directory is empty. An empty upper dir indicates either a first boot
+/// or a factory reset (both cases require populating config from factory
+/// defaults).
+pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
     let etc_mount = rootfs_dir.join(mount_points::ETC_PARTITION);
     let factory_mount = rootfs_dir.join(mount_points::FACTORY_PARTITION);
 
@@ -76,12 +78,10 @@ pub fn setup_etc_overlay(rootfs_dir: &Path, first_boot: bool) -> Result<()> {
 
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
-    // Copy factory /etc to the upper layer on first boot. Using the
-    // pre-computed flag avoids re-detecting first boot from upper-dir
-    // emptiness, which is unreliable after a mid-copy crash.
-    if first_boot {
+    // Empty upper dir = first boot or factory reset: populate from factory defaults.
+    if is_upper_dir_empty(&upper_dir)? {
         let factory_etc = factory_mount.join(paths::ETC);
-        log::info!("First boot: copying factory etc to upper layer");
+        log::info!("First boot or factory reset: copying factory etc to upper layer");
         copy_directory_contents(&factory_etc, &upper_dir)?;
     }
 
@@ -203,6 +203,21 @@ fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Check whether the overlay upper directory is empty or absent.
+///
+/// Returns `true` on first boot (never written) and after factory reset
+/// (upper dir wiped). Both cases require populating from factory defaults.
+fn is_upper_dir_empty(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    let mut entries = fs::read_dir(path).map_err(|e| FilesystemError::OverlayFailed {
+        target: path.to_path_buf(),
+        reason: format!("Failed to read directory: {}", e),
+    })?;
+    Ok(entries.next().is_none())
+}
+
 /// Copy contents of one directory to another
 fn copy_directory_contents(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
@@ -278,6 +293,25 @@ mod tests {
         assert!(existing.exists());
         ensure_dir(existing).unwrap();
         assert!(existing.exists());
+    }
+
+    #[test]
+    fn upper_dir_empty_when_absent() {
+        use std::path::PathBuf;
+        assert!(is_upper_dir_empty(&PathBuf::from("/nonexistent/upper")).unwrap());
+    }
+
+    #[test]
+    fn upper_dir_empty_when_empty() {
+        let temp = TempDir::new().unwrap();
+        assert!(is_upper_dir_empty(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn upper_dir_not_empty_when_populated() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("somefile"), "content").unwrap();
+        assert!(!is_upper_dir_empty(temp.path()).unwrap());
     }
 
     #[test]
