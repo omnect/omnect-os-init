@@ -12,6 +12,16 @@ use crate::{
     runtime::{ODS_RUNTIME_DIR, create_fs_links, create_ods_runtime_files, switch_root},
 };
 
+#[cfg(feature = "resize-data")]
+fn resize_succeeded(ods_status: &crate::runtime::OdsStatus) -> bool {
+    ods_status.resize_data.is_none()
+}
+
+#[cfg(not(feature = "resize-data"))]
+fn resize_succeeded(_ods_status: &crate::runtime::OdsStatus) -> bool {
+    true
+}
+
 fn write_first_boot_marker(first_boot: bool, bootloader: &mut crate::bootloader::BootEnvState) {
     if first_boot
         && let Some(bl) = bootloader.available_mut()
@@ -60,7 +70,11 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     // Single write point for the unified first-boot sentinel. Best-effort:
     // failure is logged and does not abort the boot — the next boot retries.
-    write_first_boot_marker(ods_status.first_boot, &mut boot_env);
+    // Suppress the write when resize failed so the next boot retries resize.
+    write_first_boot_marker(
+        ods_status.first_boot && resize_succeeded(&ods_status),
+        &mut boot_env,
+    );
 
     info!("omnect-os-initramfs completed successfully");
 
@@ -111,5 +125,47 @@ mod marker_writer_tests {
         let mut env = BootEnvState::Available(Box::new(mock));
         // Must not panic or return an error.
         write_first_boot_marker(true, &mut env);
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn skips_marker_when_resize_failed() {
+        use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
+
+        let mock = MockBootEnv::new();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        ods.first_boot = true;
+        ods.set_resize_status(ResizeStatus {
+            outcome: ResizeOutcome::ToolError,
+            reason: "test failure".into(),
+        });
+
+        write_first_boot_marker(ods.first_boot && resize_succeeded(&ods), &mut env);
+        let bl = env.available().unwrap();
+        assert_eq!(
+            bl.get_env(BootEnvKey::FirstBootDone).unwrap(),
+            None,
+            "marker must not be written when resize failed"
+        );
+    }
+
+    #[cfg(feature = "resize-data")]
+    #[test]
+    fn writes_marker_when_resize_succeeded() {
+        use crate::runtime::OdsStatus;
+
+        let mock = MockBootEnv::new();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        ods.first_boot = true;
+
+        write_first_boot_marker(ods.first_boot && resize_succeeded(&ods), &mut env);
+        let bl = env.available().unwrap();
+        assert_eq!(
+            bl.get_env(BootEnvKey::FirstBootDone).unwrap(),
+            Some("1".to_string()),
+            "marker must be written when resize succeeded"
+        );
     }
 }
