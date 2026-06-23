@@ -24,6 +24,96 @@ Not yet implemented (planned):
 - Factory reset (backup, wipe, restore)
 - Flash modes (disk clone, network, HTTP/HTTPS)
 
+## Startup Flow
+
+The diagram traces every phase from PID 1 start to `switch_root`. The `release-image`
+feature flag determines the error-handling branch at each fatal failure point.
+
+```mermaid
+flowchart TD
+    START([PID 1 starts]) --> MOUNT_ESS["mount_essential_filesystems\n/dev · /proc · /sys · /run"]
+
+    MOUNT_ESS -->|OK| LOGGER["KmsgLogger::init()"]
+    MOUNT_ESS -->|Fail| EARLY_ERR{Image type?}
+    EARLY_ERR -->|release| HALT1(["🔴 eprintln loop — halt"])
+    EARLY_ERR -->|debug| ESHELL(["🐚 emergency sh — respawn"])
+
+    LOGGER -->|OK| CONFIG["Config::load()\n/proc/cmdline · os-release"]
+    LOGGER -->|Fail| FEB
+
+    CONFIG -->|OK| RDEV["detect_root_device()"]
+    CONFIG -->|Fail| FEB
+
+    RDEV -->|OK| LAYOUT["PartitionLayout::new()\ncreate_omnect_symlinks()"]
+    RDEV -->|Fail| FEB
+
+    LAYOUT -->|OK| CORE["mount_core_partitions()\nrootfs + boot + fsck"]
+    LAYOUT -->|Fail| FEB
+
+    CORE --> BENV["open_boot_env()"]
+
+    BENV --> CLASSIFY{"classify_boot_env"}
+    CLASSIFY -->|"OK → Available"| APPLY["apply_boot_env_decision()\ncore_result × env decision"]
+    CLASSIFY -->|"Fail + release → Degraded"| APPLY
+    CLASSIFY -->|"Fail + debug → Abort"| FEB
+
+    APPLY -->|"FsckRequiresReboot\nfsck result persisted first"| REBOOT(["🔁 Reboot"])
+    APPLY -->|Fatal| FEB
+    APPLY -->|"OK\nDegraded: ods.degraded_boot=true"| FBDETECT["compute_first_boot()\nset_update_pending()"]
+
+    FBDETECT --> ISETUP["init_setup::run()\nresize-data preflight\nif feature = resize-data"]
+    ISETUP -->|FsckRequiresReboot| REBOOT
+    ISETUP -->|"Other error\nContinueDegraded — warn"| BMODE["BootMode::detect() → Normal"]
+    ISETUP -->|OK| BMODE
+
+    BMODE --> MREM["mount_remaining_partitions()\ndata · factory · cert + fsck"]
+    MREM -->|"FsckRequiresReboot\nfsck result persisted first"| REBOOT
+    MREM -->|Fatal| FEB
+    MREM -->|OK| OVL["setup_raw_rootfs_mount()\nsetup_etc_overlay()\nsetup_data_overlay()"]
+
+    OVL -->|OK| LINKS["create_fs_links()\ncreate_ods_runtime_files()"]
+    OVL -->|Fail| FEB
+
+    LINKS -->|OK| FBM["write_first_boot_marker()\nif first_boot ∧ resize_ok ∧ env_available\nbest-effort — warn on fail"]
+    LINKS -->|Fail| FEB
+
+    FBM --> SR["switch_root → systemd"]
+    SR -->|OK| SUCCESS(["✅ systemd running"])
+    SR -->|Fail| FEB
+
+    FEB{"Fatal error handler\nupdate_pending?"}
+    FEB -->|yes| REBOOT
+    FEB -->|"no + release"| HALT2(["🔴 kmsg loop — halt forever"])
+    FEB -->|"no + debug"| DSHELL(["🐚 debug bash/sh — respawn"])
+
+    classDef success fill:#2d6a2d,color:#fff,stroke:#1a3d1a
+    classDef reboot fill:#1a4d7a,color:#fff,stroke:#0d2d4d
+    classDef halt fill:#7a1a1a,color:#fff,stroke:#4d0d0d
+    classDef shell fill:#7a4a1a,color:#fff,stroke:#4d2d0d
+
+    class SUCCESS success
+    class REBOOT reboot
+    class HALT1,HALT2 halt
+    class ESHELL,DSHELL shell
+```
+
+**Terminal states**
+
+| Symbol | Outcome | Trigger |
+|--------|---------|---------|
+| ✅ | `switch_root` — systemd takes over | Normal completion |
+| 🔁 | Reboot | `FsckRequiresReboot` (unconditional); or any fatal error while `omnect_validate_update` is set — triggers bootloader OTA rollback |
+| 🔴 | Halt (kmsg loop, infinite) | Fatal error · release image · no OTA in flight |
+| 🐚 | Debug shell (bash → sh fallback, respawning) | Fatal error · debug image · no OTA in flight |
+
+**Notes on `apply_boot_env_decision`**
+
+`mount_core_partitions` result is captured rather than propagated immediately so that
+fsck diagnostics can be persisted to the bootloader environment before any reboot.
+`apply_boot_env_decision` enforces the invariant that `FsckRequiresReboot` always wins
+over a concurrent `DegradedBoot` — the two failure modes can co-occur when GRUB's
+boot partition is unmountable.
+
 ## Building
 
 ```bash
