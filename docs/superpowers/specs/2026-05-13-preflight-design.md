@@ -1,7 +1,10 @@
 # Preflight: Separate One-Time Prep from Mode Dispatch
 
 **Date:** 2026-05-13
-**Status:** Draft
+**Status:** Partially superseded — the "resize failure is fatal" claim (verification table,
+line ~191) was reclassified to `ContinueDegraded` (non-fatal) in
+`2026-05-27-fsck-and-resize-design.md` and `2026-06-22-first-boot-retry-on-resize-failure.md`.
+The preflight separation design itself remains valid.
 **Supersedes:** `2026-05-12-first-boot-mode-design.md`
 
 ---
@@ -188,7 +191,7 @@ branch in `BootMode::detect()`.
 | Resize skipped when data partition missing | ✓ (filesystem layer) | ✓ (filesystem layer unchanged) |
 | Resize sets guard after success | ✓ | ✓ |
 | Resize runs after core mount, before data mount | ✓ | ✓ |
-| Resize failure is fatal | ✓ | ✓ |
+| Resize failure is fatal | ✓ | ✓ | ← **superseded**: reclassified to `ContinueDegraded` in `2026-05-27-fsck-and-resize-design.md` |
 | `normal::run` mounts remaining + overlays + ODS + switch_root | ✓ | ✓ |
 | Degraded boot when bootloader unavailable | ✓ | ✓ |
 

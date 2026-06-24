@@ -1,5 +1,10 @@
 # resize-data: Data Partition Auto-Resize
 
+**Status:** Partially superseded — the "resize failure is fatal" claim (§ Error Handling,
+line ~130) was reclassified to `ContinueDegraded` (non-fatal) in
+`2026-05-27-fsck-and-resize-design.md` and `2026-06-22-first-boot-retry-on-resize-failure.md`.
+The resize mechanism itself remains valid. Retained for design history.
+
 ## Problem
 
 When an omnect OS image is flashed to a disk larger than the image itself, the

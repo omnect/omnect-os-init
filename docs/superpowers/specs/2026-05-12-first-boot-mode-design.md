@@ -1,8 +1,12 @@
 # Design: BootMode::FirstBoot and resize-data relocation
 
 **Date:** 2026-05-12
-**Status:** Draft
+**Status:** Superseded by `2026-05-13-preflight-design.md`
 **Branch:** TBD (follows feat/resize-data)
+
+> **Note:** This design was superseded before implementation. `BootMode::FirstBoot` and
+> `mode::first_boot::run` were never shipped. Resize-data was implemented as a preflight
+> step instead — see `2026-05-13-preflight-design.md`. Retained for design history.
 
 ---
 
