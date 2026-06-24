@@ -53,21 +53,24 @@ flowchart TD
     CORE --> BENV["open_boot_env()"]
 
     BENV --> CLASSIFY{"classify_boot_env"}
-    CLASSIFY -->|"OK → Available"| APPLY["apply_boot_env_decision()\ncore_result × env decision"]
+    CLASSIFY -->|"OK → Available"| APPLY["apply_boot_env_decision()\ncore_result × env decision\npersist_fsck_results — always"]
     CLASSIFY -->|"Fail + release → Degraded"| APPLY
     CLASSIFY -->|"Fail + debug → Abort"| FEB
 
-    APPLY -->|"FsckRequiresReboot\nfsck result persisted first"| REBOOT(["🔁 Reboot"])
+    APPLY -->|"FsckRequiresReboot"| REBOOT(["🔁 Reboot"])
     APPLY -->|Fatal| FEB
     APPLY -->|"OK\nDegraded: ods.degraded_boot=true"| FBDETECT["compute_first_boot()\nset_update_pending()"]
 
     FBDETECT --> ISETUP["init_setup::run()\nresize-data preflight\nif feature = resize-data"]
     ISETUP -->|FsckRequiresReboot| REBOOT
-    ISETUP -->|"Other error\nContinueDegraded — warn"| BMODE["BootMode::detect() → Normal"]
+    ISETUP -->|"ResizeData error\nContinueDegraded — warn"| BMODE["BootMode::detect() → Normal"]
+    ISETUP -->|"Fatal (non-resize)"| FEB
     ISETUP -->|OK| BMODE
 
-    BMODE --> MREM["mount_remaining_partitions()\ndata · factory · cert + fsck"]
-    MREM -->|"FsckRequiresReboot\nfsck result persisted first"| REBOOT
+    BMODE -->|Fatal| FEB
+
+    BMODE --> MREM["mount_remaining_partitions()\ndata · factory · cert + fsck\npersist_fsck_results — always"]
+    MREM -->|"FsckRequiresReboot"| REBOOT
     MREM -->|Fatal| FEB
     MREM -->|OK| OVL["setup_raw_rootfs_mount()\nsetup_etc_overlay()\nsetup_data_overlay()"]
 
@@ -81,10 +84,11 @@ flowchart TD
     SR -->|OK| SUCCESS(["✅ systemd running"])
     SR -->|Fail| FEB
 
-    FEB{"Fatal error handler\nupdate_pending?"}
-    FEB -->|yes| REBOOT
-    FEB -->|"no + release"| HALT2(["🔴 kmsg loop — halt forever"])
-    FEB -->|"no + debug"| DSHELL(["🐚 debug bash/sh — respawn"])
+    FEB{"Error handler\nRecoveryClass?"}
+    FEB -->|"RebootToApply"| REBOOT
+    FEB -->|"Fatal + update_pending"| REBOOT
+    FEB -->|"Fatal + no update + release"| HALT2(["🔴 kmsg loop — halt forever"])
+    FEB -->|"Fatal + no update + debug"| DSHELL(["🐚 debug bash/sh — respawn"])
 
     classDef success fill:#2d6a2d,color:#fff,stroke:#1a3d1a
     classDef reboot fill:#1a4d7a,color:#fff,stroke:#0d2d4d
@@ -106,13 +110,26 @@ flowchart TD
 | 🔴 | Halt (kmsg loop, infinite) | Fatal error · release image · no OTA in flight |
 | 🐚 | Debug shell (bash → sh fallback, respawning) | Fatal error · debug image · no OTA in flight |
 
+**Notes on error handling**
+
+All errors from `run_init()` reach `handle_fatal_error` in `main.rs`, which dispatches on
+`RecoveryClass`:
+- `RebootToApply` (e.g. `FsckRequiresReboot`) → always Reboot, regardless of image type
+- `Fatal` + `omnect_validate_update` set → Reboot (bootloader OTA rollback)
+- `Fatal` + no OTA in flight + release → Halt (kmsg loop)
+- `Fatal` + no OTA in flight + debug → debug shell
+
+`FsckRequiresReboot` edges in the diagram flow through this handler — not via a separate
+mechanism.
+
 **Notes on `apply_boot_env_decision`**
 
 `mount_core_partitions` result is captured rather than propagated immediately so that
 fsck diagnostics can be persisted to the bootloader environment before any reboot.
 `apply_boot_env_decision` enforces the invariant that `FsckRequiresReboot` always wins
 over a concurrent `DegradedBoot` — the two failure modes can co-occur when GRUB's
-boot partition is unmountable.
+boot partition is unmountable. `persist_fsck_results` runs on every mount path,
+including degraded boot.
 
 ## Building
 
