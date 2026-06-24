@@ -57,12 +57,12 @@ flowchart TD
     CLASSIFY -->|"Fail + release → Degraded"| APPLY
     CLASSIFY -->|"Fail + debug → Abort"| FEB
 
-    APPLY -->|"FsckRequiresReboot"| REBOOT(["🔁 Reboot"])
+    APPLY -->|FsckRequiresReboot| FEB
     APPLY -->|Fatal| FEB
     APPLY -->|"OK\nDegraded: ods.degraded_boot=true"| FBDETECT["compute_first_boot()\nset_update_pending()"]
 
     FBDETECT --> ISETUP["init_setup::run()\nresize-data preflight\nif feature = resize-data"]
-    ISETUP -->|FsckRequiresReboot| REBOOT
+    ISETUP -->|FsckRequiresReboot| FEB
     ISETUP -->|"ResizeData error\nContinueDegraded — warn"| BMODE["BootMode::detect() → Normal"]
     ISETUP -->|"Fatal (non-resize)"| FEB
     ISETUP -->|OK| BMODE
@@ -70,7 +70,7 @@ flowchart TD
     BMODE -->|Fatal| FEB
 
     BMODE --> MREM["mount_remaining_partitions()\ndata · factory · cert + fsck\npersist_fsck_results — always"]
-    MREM -->|"FsckRequiresReboot"| REBOOT
+    MREM -->|FsckRequiresReboot| FEB
     MREM -->|Fatal| FEB
     MREM -->|OK| OVL["setup_raw_rootfs_mount()\nsetup_etc_overlay()\nsetup_data_overlay()"]
 
@@ -85,7 +85,7 @@ flowchart TD
     SR -->|Fail| FEB
 
     FEB{"Error handler\nRecoveryClass?"}
-    FEB -->|"RebootToApply"| REBOOT
+    FEB -->|"RebootToApply (e.g. FsckRequiresReboot)"| REBOOT(["🔁 Reboot"])
     FEB -->|"Fatal + update_pending"| REBOOT
     FEB -->|"Fatal + no update + release"| HALT2(["🔴 kmsg loop — halt forever"])
     FEB -->|"Fatal + no update + debug"| DSHELL(["🐚 debug bash/sh — respawn"])
