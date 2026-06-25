@@ -119,17 +119,15 @@ All errors from `run_init()` reach `handle_fatal_error` in `main.rs`, which disp
 - `Fatal` + no OTA in flight + release → Halt (kmsg loop)
 - `Fatal` + no OTA in flight + debug → debug shell
 
-`FsckRequiresReboot` edges in the diagram flow through this handler — not via a separate
-mechanism.
+`FsckRequiresReboot` edges in the diagram flow through this handler.
 
 **Notes on overlay, fs-link, and ODS setup (`OVL` / `LINKS` blocks)**
 
 These steps (`setup_raw_rootfs_mount`, `setup_etc_overlay`, `setup_data_overlay`,
-`create_fs_links`, `create_ods_runtime_files`) are ported from the legacy bash initramfs
-without a dedicated design document. The fatal-on-fail contract matches the legacy
-behaviour: every operation propagated a non-zero return code through the module exit hook,
-which halted the device (release) or dropped to a shell (debug). The Rust port preserves
-this behaviour and adds the OTA rollback path (`update_pending → Reboot`) via `FEB`.
+`create_fs_links`, `create_ods_runtime_files`) abort the boot on any failure: the error
+reaches `handle_fatal_error`, which halts the device on a release image, drops to a debug
+shell on a debug image, or reboots when an OTA update is in flight (`update_pending`).
+No dedicated design spec covers this region.
 
 **Notes on `apply_boot_env_decision`**
 
