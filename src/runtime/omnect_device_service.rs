@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nix::unistd::{Gid, Uid, chown};
 use serde::Serialize;
@@ -30,9 +30,6 @@ const UPDATE_VALIDATE_FAILED_FILE: &str = "omnect_validate_update_failed";
 
 /// BootEnv updated marker
 const BOOTLOADER_UPDATED_FILE: &str = "omnect_bootloader_updated";
-
-/// Factory reset status file (in /tmp)
-const FACTORY_RESET_STATUS_FILE: &str = "/tmp/factory-reset.json";
 
 /// Name of the omnect-device-service user and group in the rootfs
 const ODS_USER: &str = "omnect_device_service";
@@ -291,12 +288,6 @@ pub fn create_ods_runtime_files(
         );
     }
 
-    // Copy factory reset status if exists
-    if let Some(dst) = copy_factory_reset_status(ods_dir)? {
-        set_ownership(&dst, uid, gid)?;
-        set_mode(&dst, FilePermission::FileRestricted)?;
-    }
-
     log::info!("Created ODS runtime files in {}", ods_dir.display());
 
     Ok(())
@@ -401,29 +392,6 @@ fn handle_update_validation(
     }
 
     Ok(())
-}
-
-/// Copy factory reset status from /tmp if it exists.
-/// Returns the destination path if the file was copied.
-fn copy_factory_reset_status(ods_dir: &Path) -> Result<Option<PathBuf>> {
-    let src = PathBuf::from(FACTORY_RESET_STATUS_FILE);
-
-    if !src.exists() {
-        return Ok(None);
-    }
-
-    let dst = ods_dir.join("factory-reset.json");
-    fs::copy(&src, &dst).map_err(|e| {
-        InitramfsError::Io(std::io::Error::other(format!(
-            "Failed to copy {} to {}: {}",
-            src.display(),
-            dst.display(),
-            e
-        )))
-    })?;
-    log::debug!("Copied factory reset status to ODS dir");
-
-    Ok(Some(dst))
 }
 
 /// Look up the UID for a user in the rootfs /etc/passwd.
