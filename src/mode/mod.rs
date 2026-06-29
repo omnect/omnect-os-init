@@ -6,6 +6,9 @@ use crate::{
 
 pub mod normal;
 
+#[cfg(feature = "factory-reset")]
+pub mod factory_reset;
+
 /// Runtime context passed to the active boot-mode handler.
 pub struct BootContext<'a> {
     pub(crate) config: &'a Config,
