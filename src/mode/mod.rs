@@ -56,16 +56,12 @@ impl BootMode {
         #[cfg(feature = "factory-reset")]
         if let Some(bl) = _bl {
             match bl.get_env(BootEnvKey::FactoryReset) {
-                Ok(Some(json)) => {
-                    match factory_reset::config::FactoryResetConfig::parse(&json) {
-                        Ok(config) => return Ok(Self::FactoryReset(config)),
-                        Err(e) => {
-                            log::warn!(
-                                "factory-reset: invalid config JSON, booting normally: {e}"
-                            );
-                        }
+                Ok(Some(json)) => match factory_reset::config::FactoryResetConfig::parse(&json) {
+                    Ok(config) => return Ok(Self::FactoryReset(config)),
+                    Err(e) => {
+                        log::warn!("factory-reset: invalid config JSON, booting normally: {e}");
                     }
-                }
+                },
                 Ok(None) => {}
                 Err(e) => {
                     log::warn!("factory-reset: failed to read env, booting normally: {e}");
@@ -121,8 +117,7 @@ mod tests {
 
         #[test]
         fn detect_normal_when_key_present_invalid_json() {
-            let mock =
-                create_mock_bootloader().with_env(BootEnvKey::FactoryReset, "not-json");
+            let mock = create_mock_bootloader().with_env(BootEnvKey::FactoryReset, "not-json");
             let mode = BootMode::detect(Some(&mock)).unwrap();
             assert!(matches!(mode, BootMode::Normal));
         }

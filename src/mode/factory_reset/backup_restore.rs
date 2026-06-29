@@ -140,10 +140,10 @@ fn run_sync() -> Result<()> {
         .status()
         .map_err(|e| FactoryResetError::Io(std::io::Error::other(format!("sync failed: {e}"))))?;
     if !status.success() {
-        return Err(
-            FactoryResetError::Io(std::io::Error::other(format!("sync exited with {status}")))
-                .into(),
-        );
+        return Err(FactoryResetError::Io(std::io::Error::other(format!(
+            "sync exited with {status}"
+        )))
+        .into());
     }
     Ok(())
 }

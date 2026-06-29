@@ -133,9 +133,8 @@ mod tests {
 
     #[test]
     fn parse_with_preserve_keys() {
-        let cfg =
-            FactoryResetConfig::parse(r#"{"mode":2,"preserve":["applications","network"]}"#)
-                .unwrap();
+        let cfg = FactoryResetConfig::parse(r#"{"mode":2,"preserve":["applications","network"]}"#)
+            .unwrap();
         assert_eq!(cfg.mode, 2);
         assert_eq!(cfg.preserve, vec!["applications", "network"]);
     }

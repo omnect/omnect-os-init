@@ -420,10 +420,7 @@ mod tests {
     #[cfg(feature = "factory-reset")]
     #[test]
     fn factory_reset_key_as_str() {
-        assert_eq!(
-            BootEnvKey::FactoryReset.as_str().as_ref(),
-            "factory-reset"
-        );
+        assert_eq!(BootEnvKey::FactoryReset.as_str().as_ref(), "factory-reset");
     }
 
     #[cfg(feature = "factory-reset")]
