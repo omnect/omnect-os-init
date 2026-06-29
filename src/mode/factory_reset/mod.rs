@@ -32,6 +32,10 @@ const SUPPORTED_RESET_MODE: u32 = 1;
 /// Clears the trigger env var, runs the reset sequence, writes status to
 /// `ods_status`, and always delegates to Normal boot — never blocks the device.
 pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
+    // Spec §5: clear failure is non-fatal — log and continue with the reset.
+    // If set_env consistently fails the trigger persists and the reset will
+    // repeat on every boot until set_env succeeds. This is the accepted
+    // trade-off per the error-handling table in the design spec.
     if let Some(bl) = ctx.boot_env.available_mut()
         && let Err(e) = bl.set_env(BootEnvKey::FactoryReset, None)
     {
@@ -46,11 +50,13 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
                 InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_)) => {
                     FactoryResetStatusCode::Invalid
                 }
-                InitramfsError::FactoryReset(FactoryResetError::BackupFailed { .. })
-                | InitramfsError::FactoryReset(FactoryResetError::RestoreFailed { .. }) => {
-                    FactoryResetStatusCode::Error
+                InitramfsError::FactoryReset(FactoryResetError::MissingField(_)) => {
+                    FactoryResetStatusCode::ConfigError
                 }
-                _ => FactoryResetStatusCode::ConfigError,
+                // BackupFailed, ReformatFailed, MountError, Io → operational error.
+                // Note: RestoreFailed cannot arrive here — restore_all() accumulates
+                // per-path failures as RestoreResult::PartialFailure and always returns Ok.
+                _ => FactoryResetStatusCode::Error,
             };
             FactoryResetStatus {
                 status: code,
@@ -102,6 +108,10 @@ fn run_reset(
     reformat_ext4(data_dev, "data")?;
     reformat_ext4(etc_dev, "etc")?;
 
+    // Re-mount for restore. Factory (if present) is also re-mounted by
+    // factory_reset_mount; its contents are no longer needed at this point
+    // but the mount is harmless since factory is read-only and no preserve
+    // paths should point under its mount point.
     factory_reset_mount(layout, rootfs, &mut mounts)?;
 
     let restore_result = restore_all(rootfs, &preserve_list, &backup_dir).inspect_err(|_| {
