@@ -2,7 +2,7 @@ pub mod backup_restore;
 pub mod config;
 pub mod reformat;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use log::warn;
 
@@ -25,16 +25,17 @@ use crate::mode::factory_reset::{
 };
 
 const FACTORY_RESET_BACKUP_DIR: &str = "/tmp/factory_reset/backup";
+const SUPPORTED_RESET_MODE: u32 = 1;
 
 /// Entry point for factory-reset mode.
 ///
 /// Clears the trigger env var, runs the reset sequence, writes status to
 /// `ods_status`, and always delegates to Normal boot — never blocks the device.
 pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
-    if let Some(bl) = ctx.boot_env.available_mut() {
-        if let Err(e) = bl.set_env(BootEnvKey::FactoryReset, None) {
-            warn!("Failed to clear factory-reset bootloader var: {e}; proceeding anyway");
-        }
+    if let Some(bl) = ctx.boot_env.available_mut()
+        && let Err(e) = bl.set_env(BootEnvKey::FactoryReset, None)
+    {
+        warn!("Failed to clear factory-reset bootloader var: {e}; proceeding anyway");
     }
 
     let status = match run_reset(ctx.layout, ctx.rootfs, &config) {
@@ -68,10 +69,10 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
 /// or `Err` on hard failures (mount, backup, reformat).
 fn run_reset(
     layout: &PartitionLayout,
-    rootfs: &std::path::Path,
+    rootfs: &Path,
     config: &FactoryResetConfig,
 ) -> Result<FactoryResetStatus> {
-    if config.mode != 1 {
+    if config.mode != SUPPORTED_RESET_MODE {
         let msg = format!("factory reset mode {} is not supported", config.mode);
         warn!("{msg}");
         return Err(FactoryResetError::InvalidConfig(msg).into());
@@ -134,7 +135,7 @@ fn run_reset(
 /// Tracks each mount in `mounts` so `factory_reset_umount` can reverse them.
 fn factory_reset_mount(
     layout: &PartitionLayout,
-    rootfs: &std::path::Path,
+    rootfs: &Path,
     mounts: &mut Vec<PathBuf>,
 ) -> Result<()> {
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
@@ -195,11 +196,11 @@ fn factory_reset_mount(
 pub(crate) fn factory_reset_umount(mounts: &mut Vec<PathBuf>) -> Result<()> {
     let mut last_err: Option<InitramfsError> = None;
     for path in mounts.drain(..).rev() {
-        if is_path_mounted(&path).unwrap_or(false) {
-            if let Err(e) = umount(&path) {
-                warn!("Failed to unmount {}: {e}", path.display());
-                last_err = Some(e.into());
-            }
+        if is_path_mounted(&path).unwrap_or(false)
+            && let Err(e) = umount(&path)
+        {
+            warn!("Failed to unmount {}: {e}", path.display());
+            last_err = Some(e.into());
         }
     }
     if let Some(e) = last_err {
