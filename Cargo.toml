@@ -26,6 +26,7 @@ thiserror = { version = "2.0", default-features = false }
 default = ["core"]
 core = []
 dos = ["core"]            # DOS/MBR partition table (extended container at slot 4, logical partitions 5-8)
+factory-reset = ["core"]
 gpt = ["core"]            # GPT partition table (primary partitions 1-7)
 grub = ["core"]           # x86-64 EFI targets (GRUB bootloader)
 persistent-var-log = ["core"]

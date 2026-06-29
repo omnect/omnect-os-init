@@ -285,6 +285,14 @@ pub fn mount_bind_private(source: impl Into<PathBuf>, target: impl Into<PathBuf>
     Ok(())
 }
 
+/// Unmount the filesystem at `path`.
+pub fn umount(path: &Path) -> Result<()> {
+    nix::mount::umount(path).map_err(|e| FilesystemError::UnmountFailed {
+        target: path.to_path_buf(),
+        reason: e.to_string(),
+    })
+}
+
 /// Check if a path is mounted by reading /proc/mounts
 pub fn is_path_mounted(path: &Path) -> Result<bool> {
     let mounts =
