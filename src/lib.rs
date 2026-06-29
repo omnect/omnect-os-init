@@ -204,6 +204,8 @@ pub fn run_init() -> Result<()> {
 
     match BootMode::detect(ctx.boot_env.available())? {
         BootMode::Normal => mode::normal::run(ctx),
+        #[cfg(feature = "factory-reset")]
+        BootMode::FactoryReset(cfg) => mode::factory_reset::run(ctx, cfg),
     }
 }
 
