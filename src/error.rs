@@ -40,6 +40,10 @@ pub enum InitramfsError {
     #[error("Resize data error: {0}")]
     ResizeData(#[from] ResizeDataError),
 
+    #[cfg(feature = "factory-reset")]
+    #[error("Factory reset error: {0}")]
+    FactoryReset(#[from] FactoryResetError),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -72,6 +76,8 @@ impl InitramfsError {
             )) => RecoveryClass::RebootToApply,
             #[cfg(feature = "resize-data")]
             Self::ResizeData(_) => RecoveryClass::ContinueDegraded,
+            #[cfg(feature = "factory-reset")]
+            Self::FactoryReset(_) => RecoveryClass::ContinueDegraded,
             Self::Io(_) => RecoveryClass::Fatal,
         }
     }
@@ -230,6 +236,32 @@ pub enum LoggingError {
     Io(#[from] std::io::Error),
 }
 
+/// Errors during factory reset
+#[cfg(feature = "factory-reset")]
+#[derive(Error, Debug)]
+pub enum FactoryResetError {
+    #[error("Invalid factory-reset config: {0}")]
+    InvalidConfig(String),
+
+    #[error("Missing field in factory-reset config: {0}")]
+    MissingField(String),
+
+    #[error("Backup failed for {}: {reason}", path.display())]
+    BackupFailed { path: PathBuf, reason: String },
+
+    #[error("Restore failed for {}: {reason}", path.display())]
+    RestoreFailed { path: PathBuf, reason: String },
+
+    #[error("Reformat failed for {}: {reason}", device.display())]
+    ReformatFailed { device: PathBuf, reason: String },
+
+    #[error("Mount error: {0}")]
+    MountError(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[cfg(test)]
 mod recovery_class_tests {
     use super::*;
@@ -358,5 +390,24 @@ mod recovery_class_tests {
             },
         ));
         assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_error_is_continue_degraded() {
+        let err = InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(
+            "mode 99 not supported".into(),
+        ));
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_backup_error_is_continue_degraded() {
+        let err = InitramfsError::FactoryReset(FactoryResetError::BackupFailed {
+            path: std::path::PathBuf::from("/etc/hostname"),
+            reason: "cp failed".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
     }
 }
