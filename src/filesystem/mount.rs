@@ -26,6 +26,15 @@ mod flags {
     pub const NOEXEC: MsFlags = MsFlags::MS_NOEXEC;
 }
 
+/// vfat mount data for the boot partition.
+///
+/// Grants the disk group (gid=6) ownership with group-write permissions:
+/// - `gid=6`         — disk group owns the mount
+/// - `fmask=0002`    — files are group-writable (vs. default 0022)
+/// - `dmask=0002`    — directories are group-writable
+/// - `allow_utime=0020` — group members may update file timestamps
+const VFAT_BOOT_DATA: &str = "gid=6,fmask=0002,dmask=0002,allow_utime=0020";
+
 /// Filesystem type for mount and fsck operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsType {
@@ -100,11 +109,14 @@ impl MountOptions {
     }
 
     /// Create options for a FAT32 boot partition
+    ///
+    /// Mounts with group-6 (disk) ownership and group-writable permissions so
+    /// that the bootloader (GRUB/U-Boot) can write its environment file.
     pub fn vfat() -> Self {
         Self {
             fstype: Some(FsType::Vfat),
             flags: MsFlags::empty(),
-            data: None,
+            data: Some(VFAT_BOOT_DATA.to_string()),
         }
     }
 

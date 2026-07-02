@@ -12,7 +12,7 @@ use crate::bootloader::BootEnv;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
     FsType, FsckExitCode, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
-    mount, mount_points, mount_readwrite, mount_tmpfs,
+    mount, mount_points, mount_tmpfs,
 };
 use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
@@ -113,6 +113,8 @@ pub fn mount_core_partitions(
     // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
+    // Group-write options (gid=6, fmask/dmask=0002, allow_utime=0020) allow
+    // the disk group to update the bootloader environment file.
     if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
@@ -127,7 +129,7 @@ pub fn mount_core_partitions(
             }));
         }
         fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
-        mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
+        mount(MountPoint::new(boot_dev, &boot_mount, MountOptions::vfat()))?;
     }
 
     Ok(())
