@@ -109,13 +109,11 @@ flowchart TD
     classDef reboot fill:#1a4d7a,color:#fff,stroke:#0d2d4d
     classDef halt fill:#7a1a1a,color:#fff,stroke:#4d0d0d
     classDef shell fill:#7a4a1a,color:#fff,stroke:#4d2d0d
-    classDef factoryreset fill:#4a1a7a,color:#fff,stroke:#2d0d4d
 
     class SUCCESS success
     class REBOOT reboot
     class HALT1,HALT2 halt
     class ESHELL,DSHELL shell
-    class FCLEAR,FMOUNT,FBACKUP,FUMOUNT1,FFORMAT,FREMOUNT,FRESTORE,FUMOUNT2,FSTATUS factoryreset
 ```
 
 **Terminal states**
