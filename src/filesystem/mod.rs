@@ -18,8 +18,10 @@ pub use self::boot_sequence::{
 pub use self::fsck::{FsckExitCode, FsckResult, check_filesystem, check_filesystem_lenient};
 pub use self::mount::{
     FsType, MountOptions, MountPoint, is_path_mounted, mount, mount_bind, mount_bind_private,
-    mount_readwrite, mount_tmpfs, umount,
+    mount_tmpfs, umount,
 };
+#[cfg(feature = "factory-reset")]
+pub(crate) use self::overlayfs::CP_CMD;
 pub use self::overlayfs::{
     mount_points, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
 };

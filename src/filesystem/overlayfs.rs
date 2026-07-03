@@ -16,8 +16,10 @@ use crate::error::FilesystemError;
 use crate::filesystem::{
     FsType, MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private,
 };
-/// cp command for copying directory contents (preserves attributes via -a)
-const CP_CMD: &str = "/bin/cp";
+/// cp command for copying directory contents (preserves attributes via -a).
+/// Shared with `mode::factory_reset::backup_restore`, which also shells out to
+/// `cp -a` — re-exported via `filesystem::CP_CMD` rather than redeclared there.
+pub(crate) const CP_CMD: &str = "/bin/cp";
 
 /// The kernel ignores the mount source for overlayfs, but the mount syscall
 /// requires a non-empty string. Using the literal "overlay" is conventional

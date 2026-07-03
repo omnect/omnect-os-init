@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::{FactoryResetError, Result};
+use crate::filesystem::CP_CMD;
 
-const CP_CMD: &str = "/bin/cp";
 const SYNC_CMD: &str = "/bin/sync";
 
 /// Result of a restore pass over the full preserve list.

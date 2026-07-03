@@ -85,7 +85,9 @@ fn run_reset(
     }
 
     let mut mounts: Vec<PathBuf> = Vec::new();
-    factory_reset_mount(layout, rootfs, &mut mounts)?;
+    factory_reset_mount(layout, rootfs, &mut mounts, IncludeFactory::Yes).inspect_err(|_| {
+        let _ = factory_reset_umount(&mut mounts);
+    })?;
 
     let preserve_list = build_preserve_list(config, rootfs).inspect_err(|_| {
         let _ = factory_reset_umount(&mut mounts);
@@ -108,11 +110,13 @@ fn run_reset(
     reformat_ext4(data_dev, "data")?;
     reformat_ext4(etc_dev, "etc")?;
 
-    // Re-mount for restore. Factory (if present) is also re-mounted by
-    // factory_reset_mount; its contents are no longer needed at this point
-    // but the mount is harmless since factory is read-only and no preserve
-    // paths should point under its mount point.
-    factory_reset_mount(layout, rootfs, &mut mounts)?;
+    // Re-mount for restore: etc(rw) + data(rw) + overlays only. Factory is
+    // deliberately excluded (design spec §3.4 step 8) — its defaults were
+    // already applied to the etc upper layer during the first mount, and
+    // mode::normal::run mounts factory again afterward for the next boot.
+    factory_reset_mount(layout, rootfs, &mut mounts, IncludeFactory::No).inspect_err(|_| {
+        let _ = factory_reset_umount(&mut mounts);
+    })?;
 
     let restore_result = restore_all(rootfs, &preserve_list, &backup_dir).inspect_err(|_| {
         let _ = factory_reset_umount(&mut mounts);
@@ -140,49 +144,56 @@ fn run_reset(
     Ok(status)
 }
 
-/// Mount factory (ro, if present), etc (rw), data (rw) and set up overlays.
+/// Whether `factory_reset_mount` should also mount the (optional) factory
+/// partition. `No` is used for the restore-phase remount — see the call site
+/// in `run_reset`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IncludeFactory {
+    Yes,
+    No,
+}
+
+/// Mount factory (ro, if present and requested), etc (rw), data (rw) and set
+/// up overlays.
 ///
 /// Tracks each mount in `mounts` so `factory_reset_umount` can reverse them.
 fn factory_reset_mount(
     layout: &PartitionLayout,
     rootfs: &Path,
     mounts: &mut Vec<PathBuf>,
+    include_factory: IncludeFactory,
 ) -> Result<()> {
-    if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
-        let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
-        std::fs::create_dir_all(&factory_mount)?;
-        mount(MountPoint::new(
-            factory_dev,
-            &factory_mount,
+    if include_factory == IncludeFactory::Yes {
+        mount_partition(
+            layout,
+            PartitionName::Factory,
+            mount_points::FACTORY_PARTITION,
             MountOptions::ext4_readonly(),
-        ))
-        .map_err(|e| FactoryResetError::MountError(format!("factory: {e}")))?;
-        mounts.push(factory_mount);
+            "factory",
+            rootfs,
+            mounts,
+        )?;
     }
 
-    if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
-        let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        std::fs::create_dir_all(&etc_mount)?;
-        mount(MountPoint::new(
-            etc_dev,
-            &etc_mount,
-            MountOptions::ext4_readwrite(),
-        ))
-        .map_err(|e| FactoryResetError::MountError(format!("etc: {e}")))?;
-        mounts.push(etc_mount);
-    }
+    mount_partition(
+        layout,
+        PartitionName::Etc,
+        mount_points::ETC_PARTITION,
+        MountOptions::ext4_readwrite(),
+        "etc",
+        rootfs,
+        mounts,
+    )?;
 
-    if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
-        let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        std::fs::create_dir_all(&data_mount)?;
-        mount(MountPoint::new(
-            data_dev,
-            &data_mount,
-            MountOptions::ext4_readwrite(),
-        ))
-        .map_err(|e| FactoryResetError::MountError(format!("data: {e}")))?;
-        mounts.push(data_mount);
-    }
+    mount_partition(
+        layout,
+        PartitionName::Data,
+        mount_points::DATA_PARTITION,
+        MountOptions::ext4_readwrite(),
+        "data",
+        rootfs,
+        mounts,
+    )?;
 
     setup_etc_overlay(rootfs)
         .map_err(|e| FactoryResetError::MountError(format!("etc overlay: {e}")))?;
@@ -199,6 +210,31 @@ fn factory_reset_mount(
     Ok(())
 }
 
+/// Mount `partition` at `rootfs/mount_point`, if present in `layout`, and
+/// track it in `mounts` for later cleanup via `factory_reset_umount`.
+///
+/// A no-op when the partition is absent from the layout — matches the
+/// existing behavior of the per-partition blocks this replaces.
+fn mount_partition(
+    layout: &PartitionLayout,
+    partition: PartitionName,
+    mount_point: &str,
+    options: MountOptions,
+    label: &str,
+    rootfs: &Path,
+    mounts: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let Some(dev) = layout.partitions.get(&partition) else {
+        return Ok(());
+    };
+    let mount_path = rootfs.join(mount_point);
+    std::fs::create_dir_all(&mount_path)?;
+    mount(MountPoint::new(dev, &mount_path, options))
+        .map_err(|e| FactoryResetError::MountError(format!("{label}: {e}")))?;
+    mounts.push(mount_path);
+    Ok(())
+}
+
 /// Unmount all factory-reset mounts in reverse order.
 ///
 /// Continues on individual failures and returns the last error, if any, so
@@ -206,9 +242,17 @@ fn factory_reset_mount(
 pub(crate) fn factory_reset_umount(mounts: &mut Vec<PathBuf>) -> Result<()> {
     let mut last_err: Option<InitramfsError> = None;
     for path in mounts.drain(..).rev() {
-        if is_path_mounted(&path).unwrap_or(false)
-            && let Err(e) = umount(&path)
-        {
+        // is_path_mounted re-reads /proc/mounts; treat a read failure as
+        // "assume still mounted" rather than "not mounted" — a spurious skip
+        // here would leave a partition mounted under the imminent reformat.
+        let mounted = is_path_mounted(&path).unwrap_or_else(|e| {
+            warn!(
+                "Failed to check mount status for {}: {e}; attempting unmount anyway",
+                path.display()
+            );
+            true
+        });
+        if mounted && let Err(e) = umount(&path) {
             warn!("Failed to unmount {}: {e}", path.display());
             last_err = Some(e.into());
         }

@@ -27,6 +27,33 @@ impl FactoryResetConfig {
     }
 }
 
+/// Reject a preserve-list entry that is empty or contains a `..` component.
+///
+/// Preserve paths are joined onto `rootfs` unchecked in `backup_restore.rs`
+/// (`rootfs.join(path.trim_start_matches('/'))`). Entries come from
+/// `etc/omnect/factory-reset.json` and every `etc/omnect/factory-reset.d/*.json`
+/// file — the latter can be dropped by any installed application — so an
+/// unvalidated `..` component would let backup/restore read or write outside
+/// the rootfs tree, and an empty entry would resolve to rootfs itself.
+fn validate_preserve_path(path: &str) -> Result<()> {
+    if path.trim_start_matches('/').is_empty() {
+        return Err(FactoryResetError::InvalidConfig(
+            "preserve path must not be empty".to_string(),
+        )
+        .into());
+    }
+    let escapes_rootfs = Path::new(path.trim_start_matches('/'))
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
+    if escapes_rootfs {
+        return Err(FactoryResetError::InvalidConfig(format!(
+            "preserve path '{path}' contains '..' and would escape rootfs"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 pub fn build_preserve_list(config: &FactoryResetConfig, rootfs: &Path) -> Result<Vec<String>> {
     let mut list = vec![PRESERVE_LIST_MANDATORY.to_string()];
 
@@ -72,6 +99,7 @@ pub fn build_preserve_list(config: &FactoryResetConfig, rootfs: &Path) -> Result
             })?;
             for p in arr {
                 if let Some(s) = p.as_str() {
+                    validate_preserve_path(s)?;
                     list.push(s.to_string());
                 }
             }
@@ -109,6 +137,7 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
         if let Some(arr) = value.get(KEY_PATHS).and_then(|v| v.as_array()) {
             for p in arr {
                 if let Some(s) = p.as_str() {
+                    validate_preserve_path(s)?;
                     list.push(s.to_string());
                 }
             }
@@ -217,6 +246,64 @@ mod tests {
             preserve: vec!["network".into()],
         };
         assert!(build_preserve_list(&cfg, temp.path()).is_err());
+    }
+
+    #[test]
+    fn validate_preserve_path_rejects_empty_string() {
+        assert!(validate_preserve_path("").is_err());
+        assert!(validate_preserve_path("/").is_err());
+    }
+
+    #[test]
+    fn validate_preserve_path_rejects_parent_dir_traversal() {
+        assert!(validate_preserve_path("../../etc/shadow").is_err());
+        assert!(validate_preserve_path("/etc/../../shadow").is_err());
+    }
+
+    #[test]
+    fn validate_preserve_path_accepts_normal_paths() {
+        assert!(validate_preserve_path("/etc/hostname").is_ok());
+        assert!(validate_preserve_path("var/app").is_ok());
+    }
+
+    #[test]
+    fn build_preserve_list_custom_key_rejects_traversal() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("etc/omnect");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("factory-reset.json"),
+            r#"{"network":["../../etc/shadow"]}"#,
+        )
+        .unwrap();
+
+        let cfg = FactoryResetConfig {
+            mode: 1,
+            preserve: vec!["network".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_applications_rejects_traversal() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("etc/omnect/factory-reset.d");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("app.json"), r#"{"paths":["../outside"]}"#).unwrap();
+
+        let cfg = FactoryResetConfig {
+            mode: 1,
+            preserve: vec!["applications".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
+        ));
     }
 
     #[test]

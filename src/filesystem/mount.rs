@@ -26,14 +26,64 @@ mod flags {
     pub const NOEXEC: MsFlags = MsFlags::MS_NOEXEC;
 }
 
-/// vfat mount data for the boot partition.
+/// Name of the group that should own the boot partition mount.
+const DISK_GROUP_NAME: &str = "disk";
+
+/// Fallback GID for `DISK_GROUP_NAME` used when it cannot be resolved from
+/// the target rootfs's `/etc/group` (missing file, missing entry, or parse
+/// failure). Matches the group's conventional numeric ID on Linux systems —
+/// a group-write permission nicety must never block the boot-partition mount.
+const DEFAULT_DISK_GID: u32 = 6;
+
+/// Static portion of the vfat boot-partition mount options; `gid` is resolved
+/// per-boot via `lookup_disk_gid` and prepended by `vfat()`.
 ///
-/// Grants the disk group (gid=6) ownership with group-write permissions:
-/// - `gid=6`         — disk group owns the mount
 /// - `fmask=0002`    — files are group-writable (vs. default 0022)
 /// - `dmask=0002`    — directories are group-writable
 /// - `allow_utime=0020` — group members may update file timestamps
-const VFAT_BOOT_DATA: &str = "gid=6,fmask=0002,dmask=0002,allow_utime=0020";
+const VFAT_BOOT_OPTS: &str = "fmask=0002,dmask=0002,allow_utime=0020";
+
+/// Look up the numeric GID for `DISK_GROUP_NAME` in `<rootfs>/etc/group`.
+///
+/// Falls back to `DEFAULT_DISK_GID` (with a warning) on any error — a
+/// group-write permission nicety on the boot partition must never block the
+/// mount that GRUB/U-Boot need in order to persist their environment.
+fn lookup_disk_gid(rootfs: &Path) -> u32 {
+    let group_file = rootfs.join("etc/group");
+    let content = match std::fs::read_to_string(&group_file) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "Failed to read {} ({e}); using default '{DISK_GROUP_NAME}' gid {DEFAULT_DISK_GID}",
+                group_file.display()
+            );
+            return DEFAULT_DISK_GID;
+        }
+    };
+
+    for line in content.lines() {
+        let mut fields = line.splitn(4, ':');
+        if fields.next() != Some(DISK_GROUP_NAME) {
+            continue;
+        }
+        let _password = fields.next();
+        if let Some(gid_str) = fields.next() {
+            return gid_str.parse::<u32>().unwrap_or_else(|e| {
+                log::warn!(
+                    "Invalid gid for '{DISK_GROUP_NAME}' in {}: {e}; using default {DEFAULT_DISK_GID}",
+                    group_file.display()
+                );
+                DEFAULT_DISK_GID
+            });
+        }
+    }
+
+    log::warn!(
+        "'{DISK_GROUP_NAME}' group not found in {}; using default gid {DEFAULT_DISK_GID}",
+        group_file.display()
+    );
+    DEFAULT_DISK_GID
+}
 
 /// Filesystem type for mount and fsck operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,13 +160,17 @@ impl MountOptions {
 
     /// Create options for a FAT32 boot partition
     ///
-    /// Mounts with group-6 (disk) ownership and group-writable permissions so
-    /// that the bootloader (GRUB/U-Boot) can write its environment file.
-    pub fn vfat() -> Self {
+    /// Mounts with `disk`-group ownership and group-writable permissions so
+    /// that the bootloader (GRUB/U-Boot) can write its environment file. The
+    /// GID is resolved from `<rootfs>/etc/group` (already mounted by the time
+    /// this is called — see `mount_core_partitions`), falling back to
+    /// `DEFAULT_DISK_GID` if the lookup fails.
+    pub fn vfat(rootfs: &Path) -> Self {
+        let gid = lookup_disk_gid(rootfs);
         Self {
             fstype: Some(FsType::Vfat),
             flags: MsFlags::empty(),
-            data: Some(VFAT_BOOT_DATA.to_string()),
+            data: Some(format!("gid={gid},{VFAT_BOOT_OPTS}")),
         }
     }
 
@@ -234,23 +288,6 @@ pub fn mount(mp: MountPoint) -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Mount a filesystem read-write.
-pub fn mount_readwrite(
-    source: impl Into<PathBuf>,
-    target: impl Into<PathBuf>,
-    fstype: FsType,
-) -> Result<()> {
-    mount(MountPoint::new(
-        source,
-        target,
-        MountOptions {
-            fstype: Some(fstype),
-            flags: MsFlags::empty(),
-            data: None,
-        },
-    ))
 }
 
 /// Mount a tmpfs filesystem.
@@ -373,9 +410,48 @@ mod tests {
 
     #[test]
     fn test_mount_point_new() {
-        let mp = MountPoint::new("/dev/sda1", "/mnt/boot", MountOptions::vfat());
+        let mp = MountPoint::new(
+            "/dev/sda1",
+            "/mnt/boot",
+            MountOptions::vfat(Path::new("/nonexistent-rootfs-for-test")),
+        );
         assert_eq!(mp.source, PathBuf::from("/dev/sda1"));
         assert_eq!(mp.target, PathBuf::from("/mnt/boot"));
         assert_eq!(mp.options.fstype, Some(FsType::Vfat));
+    }
+
+    #[test]
+    fn lookup_disk_gid_falls_back_when_group_file_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert_eq!(lookup_disk_gid(temp.path()), DEFAULT_DISK_GID);
+    }
+
+    #[test]
+    fn lookup_disk_gid_falls_back_when_entry_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("etc")).unwrap();
+        std::fs::write(temp.path().join("etc/group"), "root:x:0:\n").unwrap();
+        assert_eq!(lookup_disk_gid(temp.path()), DEFAULT_DISK_GID);
+    }
+
+    #[test]
+    fn lookup_disk_gid_reads_configured_value() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("etc")).unwrap();
+        std::fs::write(temp.path().join("etc/group"), "root:x:0:\ndisk:x:42:root\n").unwrap();
+        assert_eq!(lookup_disk_gid(temp.path()), 42);
+    }
+
+    #[test]
+    fn vfat_options_embed_resolved_gid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("etc")).unwrap();
+        std::fs::write(temp.path().join("etc/group"), "disk:x:99:\n").unwrap();
+
+        let opts = MountOptions::vfat(temp.path());
+        assert_eq!(
+            opts.data,
+            Some("gid=99,fmask=0002,dmask=0002,allow_utime=0020".to_string())
+        );
     }
 }

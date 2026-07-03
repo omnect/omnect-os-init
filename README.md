@@ -18,10 +18,10 @@ Implemented functionality:
 - **ODS integration**: Runtime files for `omnect-device-service`
 - **fs-links**: Symlink creation from `etc/omnect/fs-link.json` and `etc/omnect/fs-link.d/`
 - **switch\_root**: MS_MOVE + chroot + exec systemd (`pivot_root(2)` is not used; ramfs does not support it)
+- **Factory reset (mode 1)**: Selective-preserve backup → reformat `data`/`etc` → restore, triggered by the `factory-reset` bootloader env key; errors are non-fatal and always fall through to Normal boot (feature `factory-reset`)
 
 Not yet implemented (planned):
 
-- Factory reset (backup, wipe, restore)
 - Flash modes (disk clone, network, HTTP/HTTPS)
 
 ## Startup Flow
@@ -63,13 +63,28 @@ flowchart TD
 
     FBDETECT --> ISETUP["init_setup::run()\nresize-data preflight\nif feature = resize-data"]
     ISETUP -->|FsckRequiresReboot| FEB
-    ISETUP -->|"ResizeData error\nContinueDegraded — warn"| BMODE["BootMode::detect() → Normal"]
+    ISETUP -->|"ResizeData error\nContinueDegraded — warn"| BMODE{"BootMode::detect()"}
     ISETUP -->|"Fatal (non-resize)"| FEB
     ISETUP -->|OK| BMODE
 
     BMODE -->|Fatal| FEB
 
-    BMODE --> MREM["mount_remaining_partitions()\ndata · factory · cert + fsck\npersist_fsck_results — always"]
+    BMODE -->|Normal| MREM["mount_remaining_partitions()\ndata · factory · cert + fsck\npersist_fsck_results — always"]
+    BMODE -->|"FactoryReset(config)\nfeature = factory-reset"| FRESET
+
+    subgraph FRESET["factory_reset::run() — always ContinueDegraded"]
+        direction TB
+        FCLEAR["clear factory-reset\nbootloader var (best-effort)"] --> FMOUNT["mount factory(ro) + etc(rw) + data(rw)\n+ overlays"]
+        FMOUNT --> FBACKUP["build_preserve_list()\nbackup_all() → /tmp/factory_reset/backup"]
+        FBACKUP --> FUMOUNT1["umount"]
+        FUMOUNT1 --> FFORMAT["reformat_ext4(data)\nreformat_ext4(etc)"]
+        FFORMAT --> FREMOUNT["re-mount etc(rw) + data(rw)\n+ overlays — no factory"]
+        FREMOUNT --> FRESTORE["restore_all()"]
+        FRESTORE --> FUMOUNT2["umount"]
+        FUMOUNT2 --> FSTATUS["ods_status.set_factory_reset(...)\nsuccess or error — never blocks boot"]
+    end
+    FRESET --> MREM
+
     MREM -->|FsckRequiresReboot| FEB
     MREM -->|Fatal| FEB
     MREM -->|OK| OVL["setup_raw_rootfs_mount()\nsetup_etc_overlay()\nsetup_data_overlay()"]
@@ -94,11 +109,13 @@ flowchart TD
     classDef reboot fill:#1a4d7a,color:#fff,stroke:#0d2d4d
     classDef halt fill:#7a1a1a,color:#fff,stroke:#4d0d0d
     classDef shell fill:#7a4a1a,color:#fff,stroke:#4d2d0d
+    classDef factoryreset fill:#4a1a7a,color:#fff,stroke:#2d0d4d
 
     class SUCCESS success
     class REBOOT reboot
     class HALT1,HALT2 halt
     class ESHELL,DSHELL shell
+    class FCLEAR,FMOUNT,FBACKUP,FUMOUNT1,FFORMAT,FREMOUNT,FRESTORE,FUMOUNT2,FSTATUS factoryreset
 ```
 
 **Terminal states**
@@ -138,6 +155,17 @@ over a concurrent `DegradedBoot` — the two failure modes can co-occur when GRU
 boot partition is unmountable. `persist_fsck_results` runs on every mount path,
 including degraded boot.
 
+**Notes on factory reset (`FRESET` block)**
+
+Enabled by the `factory-reset` feature. `BootMode::detect()` reads the `factory-reset`
+bootloader env key; a present, valid-JSON value dispatches to `mode::factory_reset::run()`
+instead of `mode::normal::run()`. The reset sequence (mount → backup → reformat →
+restore) always completes with a `FactoryResetStatus` recorded in the ODS status JSON —
+success or error — and then falls through into the same `mode::normal::run()` path a
+normal boot takes (`MREM` onward), so a failed or unsupported reset never blocks the
+device from booting: `FactoryResetError` is classified as `ContinueDegraded`.
+
+
 ## Building
 
 ```bash
@@ -166,7 +194,7 @@ cargo build --release --features "grub,persistent-var-log"
 | `release-image` | Release error handling: loop on fatal error; continue in degraded boot | Implemented |
 | `resize-data` | Data partition auto-resize on first boot | Implemented |
 | `test-utils` | Expose `MockBootEnv` for integration tests (never enabled in production) | Test only |
-| `factory-reset` | Factory reset support | Planned |
+| `factory-reset` | Factory reset support (mode 1: selective-preserve backup → reformat → restore) | Implemented |
 | `flash-mode-1` | Disk cloning | Planned |
 | `flash-mode-2` | Network flashing | Planned |
 | `flash-mode-3` | HTTP/HTTPS flashing | Planned |

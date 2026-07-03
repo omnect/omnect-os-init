@@ -129,7 +129,11 @@ pub fn mount_core_partitions(
             }));
         }
         fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
-        mount(MountPoint::new(boot_dev, &boot_mount, MountOptions::vfat()))?;
+        mount(MountPoint::new(
+            boot_dev,
+            &boot_mount,
+            MountOptions::vfat(rootfs),
+        ))?;
     }
 
     Ok(())
