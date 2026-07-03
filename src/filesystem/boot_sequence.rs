@@ -113,8 +113,8 @@ pub fn mount_core_partitions(
     // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
-    // Group-write options (gid=6, fmask/dmask=0002, allow_utime=0020) allow
-    // the disk group to update the bootloader environment file.
+    // Group-write options (gid = disk group, default 6; fmask/dmask=0002,
+    // allow_utime=0020) allow the disk group to update the bootloader environment file.
     if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
         let boot_mount = rootfs.join(mount_points::BOOT);
         if is_path_mounted(&boot_mount)? {
@@ -143,6 +143,13 @@ pub fn mount_core_partitions(
 ///
 /// Mounts factory, cert, etc, data, and var/volatile. Must be called after
 /// `mount_core_partitions` and after `open_boot_env`.
+///
+/// Each partition mount is idempotent — skipped with a log line if already
+/// mounted, matching the codebase's mount-idempotency convention (see
+/// `mount_core_partitions`'s boot-partition check). This guards against a
+/// mount leaked by an earlier failed step (e.g. an aborted factory reset)
+/// causing an EBUSY `MountFailed` here, which `recovery_class()` classifies
+/// as `Fatal` — turning a leaked mount into a halt.
 pub fn mount_remaining_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
@@ -150,49 +157,77 @@ pub fn mount_remaining_partitions(
 ) -> crate::error::Result<()> {
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
-        fsck_and_record(
-            factory_dev,
-            PartitionName::Factory,
-            ods_status,
-            FsType::Ext4,
-        )?;
-        mount(MountPoint::new(
-            factory_dev,
-            &factory_mount,
-            MountOptions::ext4_readonly().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&factory_mount)? {
+            log::warn!(
+                "factory already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                factory_mount.display()
+            );
+        } else {
+            fsck_and_record(
+                factory_dev,
+                PartitionName::Factory,
+                ods_status,
+                FsType::Ext4,
+            )?;
+            mount(MountPoint::new(
+                factory_dev,
+                &factory_mount,
+                MountOptions::ext4_readonly().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            cert_dev,
-            &cert_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&cert_mount)? {
+            log::warn!(
+                "cert already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                cert_mount.display()
+            );
+        } else {
+            fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                cert_dev,
+                &cert_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        fsck_and_record(etc_dev, PartitionName::Etc, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            etc_dev,
-            &etc_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&etc_mount)? {
+            log::warn!(
+                "etc already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                etc_mount.display()
+            );
+        } else {
+            fsck_and_record(etc_dev, PartitionName::Etc, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                etc_dev,
+                &etc_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            data_dev,
-            &data_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&data_mount)? {
+            log::warn!(
+                "data already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                data_mount.display()
+            );
+        } else {
+            fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                data_dev,
+                &data_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // /var/volatile provides a writable mount for volatile data under the read-only rootfs
