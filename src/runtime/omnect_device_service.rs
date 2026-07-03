@@ -212,6 +212,11 @@ pub struct FactoryResetStatus {
     /// Paths that were preserved
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
+    /// `true` once the destructive phase (partition reformat) began. On
+    /// `status: Error` this distinguishes a safe no-op abort (nothing touched)
+    /// from a failure after data was already wiped. Always serialized — absence
+    /// of the key would itself be a bug (mirrors `OdsStatus.first_boot`).
+    pub data_wiped: bool,
 }
 
 impl OdsStatus {
@@ -567,6 +572,7 @@ mod tests {
             error: None,
             context: Some("normal".to_string()),
             paths: vec!["/etc/hostname".to_string()],
+            data_wiped: true,
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -589,9 +595,31 @@ mod tests {
                 error: None,
                 context: None,
                 paths: vec![],
+                data_wiped: false,
             };
             let json: Value = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
             assert_eq!(json["status"], *expected, "variant {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn factory_reset_data_wiped_always_serialized() {
+        // Absence of the key would itself be a bug (mirrors first_boot_always_serialized) —
+        // ODS/cloud must be able to distinguish a safe pre-reformat abort (false) from a
+        // failure after data was already wiped (true).
+        for wiped in [false, true] {
+            let s = FactoryResetStatus {
+                status: FactoryResetStatusCode::Error,
+                error: Some("test".to_string()),
+                context: None,
+                paths: vec![],
+                data_wiped: wiped,
+            };
+            let json = serde_json::to_string(&s).unwrap();
+            assert!(
+                json.contains(&format!("\"data_wiped\":{wiped}")),
+                "data_wiped={wiped} must be serialized; got: {json}"
+            );
         }
     }
 

@@ -125,7 +125,14 @@ Inner `run_reset()`:
 5. `umount` all.
 6. `reformat_ext4(data_dev, "data")`.
 7. `reformat_ext4(etc_dev, "etc")`.
-8. Re-mount: etc (rw), data (rw) + overlays.
+8. Re-mount: factory (ro, if present), etc (rw), data (rw) + overlays. Factory must
+   be included here too — the reformat wiped etc's overlay upper dir, and
+   `setup_etc_overlay` needs factory mounted to reseed the now-empty upper dir with
+   factory `/etc` defaults before `restore_all` overlays the preserved paths on top.
+   (Earlier revision of this spec excluded factory here; that was an oversight —
+   omitting it leaves the upper dir permanently unseeded once any preserved path
+   populates it, since the empty-upper-dir seed check in `setup_etc_overlay` only
+   fires once.)
 9. `restore_all()` → `RestoreResult`.
 10. `umount` all.
 
@@ -213,7 +220,7 @@ BootMode::FactoryReset(config):
   5. umount
   6. reformat data partition (mkfs.ext4 + tune2fs)
   7. reformat etc partition  (mkfs.ext4 + tune2fs)
-  8. re-mount etc(rw) + data(rw) + overlays
+  8. re-mount factory(ro) + etc(rw) + data(rw) + overlays
   9. restore preserve_list from backup
   10. umount
   11. ods_status.set_factory_reset(FactoryResetStatus::success(...))
