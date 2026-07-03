@@ -82,9 +82,9 @@ pub fn build_preserve_list(config: &FactoryResetConfig, rootfs: &Path) -> Result
         if key == KEY_APPLICATIONS {
             collect_application_paths(rootfs, &mut list)?;
         } else {
-            let value = key_config.as_ref().unwrap_or_else(|| {
-                unreachable!("key_config must be Some for non-application keys")
-            });
+            let value = key_config
+                .as_ref()
+                .expect("key_config must be Some for non-application keys");
             let paths = value.get(key.as_str()).ok_or_else(|| {
                 FactoryResetError::MissingField(format!(
                     "{}: no '{key}' key",
@@ -98,10 +98,14 @@ pub fn build_preserve_list(config: &FactoryResetConfig, rootfs: &Path) -> Result
                 ))
             })?;
             for p in arr {
-                if let Some(s) = p.as_str() {
-                    validate_preserve_path(s)?;
-                    list.push(s.to_string());
-                }
+                let s = p.as_str().ok_or_else(|| {
+                    FactoryResetError::InvalidConfig(format!(
+                        "{}: value for key '{key}' must contain only strings",
+                        config_file.display()
+                    ))
+                })?;
+                validate_preserve_path(s)?;
+                list.push(s.to_string());
             }
         }
     }
@@ -120,7 +124,16 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
         FactoryResetError::InvalidConfig(format!("Failed to read {}: {e}", dir.display()))
     })?;
 
-    for entry in entries.flatten() {
+    // Not entries.flatten(): a per-entry read error (I/O error, race) must abort
+    // the reset, not silently drop an application's preserve list — a dropped
+    // list means its paths are wiped and restore_all still reports Success.
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            FactoryResetError::InvalidConfig(format!(
+                "Failed to read entry in {}: {e}",
+                dir.display()
+            ))
+        })?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
@@ -136,10 +149,14 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
 
         if let Some(arr) = value.get(KEY_PATHS).and_then(|v| v.as_array()) {
             for p in arr {
-                if let Some(s) = p.as_str() {
-                    validate_preserve_path(s)?;
-                    list.push(s.to_string());
-                }
+                let s = p.as_str().ok_or_else(|| {
+                    FactoryResetError::InvalidConfig(format!(
+                        "{}: '{KEY_PATHS}' array must contain only strings",
+                        path.display()
+                    ))
+                })?;
+                validate_preserve_path(s)?;
+                list.push(s.to_string());
             }
         }
     }
@@ -312,6 +329,48 @@ mod tests {
         let dir = temp.path().join("etc/omnect/factory-reset.d");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("app.json"), "not json").unwrap();
+
+        let cfg = FactoryResetConfig {
+            mode: 1,
+            preserve: vec!["applications".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_custom_key_non_string_element_is_hard_error() {
+        // A non-string array element must not be silently dropped — that would
+        // wipe the intended path while restore_all still reports Success.
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("etc/omnect");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("factory-reset.json"),
+            r#"{"network":["/etc/network/interfaces", 42]}"#,
+        )
+        .unwrap();
+
+        let cfg = FactoryResetConfig {
+            mode: 1,
+            preserve: vec!["network".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_applications_non_string_element_is_hard_error() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("etc/omnect/factory-reset.d");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("app.json"), r#"{"paths":["var/app", null]}"#).unwrap();
 
         let cfg = FactoryResetConfig {
             mode: 1,
