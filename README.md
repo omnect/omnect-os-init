@@ -70,7 +70,7 @@ flowchart TD
     BMODE -->|Fatal| FEB
 
     BMODE -->|Normal| MREM["mount_remaining_partitions()\ndata · factory · cert + fsck\npersist_fsck_results — always"]
-    BMODE -->|"FactoryReset(config)\nfeature = factory-reset"| FRESET
+    BMODE -->|"FactoryReset(config)\nfeature = factory-reset"| FCLEAR
 
     subgraph FRESET["factory_reset::run() — always ContinueDegraded"]
         direction TB
@@ -83,7 +83,7 @@ flowchart TD
         FRESTORE --> FUMOUNT2["umount"]
         FUMOUNT2 --> FSTATUS["ods_status.set_factory_reset(...)\nsuccess or error — never blocks boot"]
     end
-    FRESET --> MREM
+    FSTATUS --> MREM
 
     MREM -->|FsckRequiresReboot| FEB
     MREM -->|Fatal| FEB
