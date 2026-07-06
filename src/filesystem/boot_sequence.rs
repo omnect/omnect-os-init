@@ -142,14 +142,9 @@ pub fn mount_core_partitions(
 /// Mount the remaining partitions after the boot env is opened.
 ///
 /// Mounts factory, cert, etc, data, and var/volatile. Must be called after
-/// `mount_core_partitions` and after `open_boot_env`.
-///
-/// Each partition mount is idempotent — skipped with a log line if already
-/// mounted, matching the codebase's mount-idempotency convention (see
-/// `mount_core_partitions`'s boot-partition check). This guards against a
-/// mount leaked by an earlier failed step (e.g. an aborted factory reset)
-/// causing an EBUSY `MountFailed` here, which `recovery_class()` classifies
-/// as `Fatal` — turning a leaked mount into a halt.
+/// `mount_core_partitions` and after `open_boot_env`. Each mount is skipped
+/// with a warning if already mounted, guarding against a leaked mount (e.g.
+/// from an aborted factory reset) turning into a fatal `MountFailed`.
 pub fn mount_remaining_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
