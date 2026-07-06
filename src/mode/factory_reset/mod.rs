@@ -76,14 +76,10 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
     crate::mode::normal::run(ctx)
 }
 
-/// Inner reset sequence — returns the final status on success/partial-restore,
-/// or `Err` on hard failures that occur before the destructive phase begins
-/// (mount, config, backup) — nothing has been touched yet, so the caller's
-/// generic error-to-status mapping is accurate for these.
-///
-/// Failures at or after the first `reformat_ext4` call are resolved to a
-/// status internally (see `run_destructive_phase`) rather than propagated,
-/// so they are never confused with a safe pre-reformat abort.
+/// Inner reset sequence. Returns `Err` only for failures before the
+/// destructive phase begins (mount, config, backup); failures at or after
+/// the first `reformat_ext4` call are resolved to a status internally
+/// instead, so they're never mistaken for a safe pre-reformat abort.
 fn run_reset(
     layout: &PartitionLayout,
     rootfs: &Path,
@@ -147,12 +143,9 @@ fn run_destructive_phase(
     reformat_ext4(data_dev, DATA_PARTITION_LABEL)?;
     reformat_ext4(etc_dev, ETC_PARTITION_LABEL)?;
 
-    // Re-mount for restore, including factory: the reformat above wiped etc's
-    // overlay upper dir, so setup_etc_overlay (inside factory_reset_mount) finds
-    // it empty and needs factory mounted to reseed it with factory /etc defaults
-    // before restore_all overlays the preserved paths on top. Skipping factory
-    // here leaves the upper dir permanently unseeded once any preserved path
-    // populates it, since the empty-upper-dir seed check never fires again.
+    // Re-mount including factory so setup_etc_overlay reseeds etc's now-empty
+    // upper dir with factory defaults before restore_all overlays preserved
+    // paths on top — the seed check only fires while the upper dir is empty.
     factory_reset_mount(layout, rootfs, mounts).inspect_err(|_| {
         let _ = factory_reset_umount(mounts);
     })?;

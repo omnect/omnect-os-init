@@ -27,14 +27,8 @@ impl FactoryResetConfig {
     }
 }
 
-/// Reject a preserve-list entry that is empty or contains a `..` component.
-///
-/// Preserve paths are joined onto `rootfs` unchecked in `backup_restore.rs`
-/// (`rootfs.join(path.trim_start_matches('/'))`). Entries come from
-/// `etc/omnect/factory-reset.json` and every `etc/omnect/factory-reset.d/*.json`
-/// file — the latter can be dropped by any installed application — so an
-/// unvalidated `..` component would let backup/restore read or write outside
-/// the rootfs tree, and an empty entry would resolve to rootfs itself.
+/// Reject a preserve-list entry that is empty or contains a `..` component,
+/// which would otherwise let backup/restore escape the rootfs tree.
 fn validate_preserve_path(path: &str) -> Result<()> {
     if path.trim_start_matches('/').is_empty() {
         return Err(FactoryResetError::InvalidConfig(
