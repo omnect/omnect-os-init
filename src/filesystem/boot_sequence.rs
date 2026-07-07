@@ -4,7 +4,10 @@
 //! during initramfs startup. Kept in the library crate so they can be unit-tested
 //! with mock bootloaders and temporary directories.
 
-use std::{fs, path::Path};
+use std::fs;
+use std::path::Path;
+#[cfg(feature = "factory-reset")]
+use std::path::PathBuf;
 
 use nix::mount::MsFlags;
 
@@ -130,6 +133,38 @@ pub fn mount_core_partitions(
         mount(MountPoint::new(boot_dev, &boot_mount, MountOptions::vfat()))?;
     }
 
+    Ok(())
+}
+
+/// Describes one partition mount for `mount_tracked_partition`.
+#[cfg(feature = "factory-reset")]
+pub(crate) struct PartitionMountSpec<'a> {
+    pub partition: PartitionName,
+    pub mount_point: &'a str,
+    pub options: MountOptions,
+    pub fstype: FsType,
+}
+
+/// Mount `spec.partition` at `rootfs/spec.mount_point`, if present in
+/// `layout`: run fsck, mount it, and track the mount path in `mounts` for
+/// later cleanup via `unmount_tracked`.
+///
+/// A no-op when the partition is absent from the layout.
+#[cfg(feature = "factory-reset")]
+pub(crate) fn mount_tracked_partition(
+    layout: &PartitionLayout,
+    spec: PartitionMountSpec,
+    rootfs: &Path,
+    ods_status: &mut OdsStatus,
+    mounts: &mut Vec<PathBuf>,
+) -> crate::error::Result<()> {
+    let Some(dev) = layout.partitions.get(&spec.partition) else {
+        return Ok(());
+    };
+    let mount_path = rootfs.join(spec.mount_point);
+    fsck_and_record(dev, spec.partition, ods_status, spec.fstype)?;
+    mount(MountPoint::new(dev, &mount_path, spec.options))?;
+    mounts.push(mount_path);
     Ok(())
 }
 
@@ -480,5 +515,39 @@ mod tests {
         // Must not panic; no boot env write; no log dir (data not mounted).
         persist_fsck_results(&ods, None, temp.path());
         assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+    }
+
+    #[test]
+    #[cfg(feature = "factory-reset")]
+    fn mount_tracked_partition_is_noop_when_absent_from_layout() {
+        use crate::partition::RootDevice;
+        use std::collections::HashMap;
+
+        let layout = PartitionLayout {
+            partitions: HashMap::new(),
+            device: RootDevice {
+                base: PathBuf::from("/dev/sda"),
+                partition_sep: "",
+                root_partition: PathBuf::from("/dev/sda2"),
+            },
+        };
+        let mut ods_status = OdsStatus::new();
+        let mut mounts: Vec<PathBuf> = Vec::new();
+
+        let result = mount_tracked_partition(
+            &layout,
+            PartitionMountSpec {
+                partition: PartitionName::Factory,
+                mount_point: mount_points::FACTORY_PARTITION,
+                options: MountOptions::ext4_readonly(),
+                fstype: FsType::Ext4,
+            },
+            Path::new("/nonexistent"),
+            &mut ods_status,
+            &mut mounts,
+        );
+
+        assert!(result.is_ok());
+        assert!(mounts.is_empty());
     }
 }

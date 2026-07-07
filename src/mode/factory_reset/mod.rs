@@ -10,12 +10,12 @@ use crate::{
     bootloader::BootEnvKey,
     error::{FactoryResetError, InitramfsError, Result},
     filesystem::{
-        MountOptions, MountPoint, is_path_mounted, mount, mount_points, setup_data_overlay,
-        setup_etc_overlay, umount,
+        FsType, MountOptions, PartitionMountSpec, mount_points, mount_tracked_partition,
+        setup_data_overlay_tracked, setup_etc_overlay_tracked, unmount_tracked,
     },
     mode::{BootContext, factory_reset::backup_restore::RestoreResult},
     partition::{PartitionLayout, PartitionName},
-    runtime::{FactoryResetStatus, FactoryResetStatusCode},
+    runtime::{FactoryResetStatus, FactoryResetStatusCode, OdsStatus},
 };
 
 use crate::mode::factory_reset::{
@@ -47,7 +47,7 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
         warn!("Failed to clear factory-reset bootloader var: {e}; proceeding anyway");
     }
 
-    let status = match run_reset(ctx.layout, ctx.rootfs, &config) {
+    let status = match run_reset(ctx.layout, ctx.rootfs, &config, &mut ctx.ods_status) {
         Ok(status) => status,
         Err(e) => {
             warn!("Factory reset failed: {e}; continuing with Normal boot");
@@ -84,6 +84,7 @@ fn run_reset(
     layout: &PartitionLayout,
     rootfs: &Path,
     config: &FactoryResetConfig,
+    ods_status: &mut OdsStatus,
 ) -> Result<FactoryResetStatus> {
     if config.mode != SUPPORTED_RESET_MODE {
         let msg = format!("factory reset mode {} is not supported", config.mode);
@@ -92,20 +93,20 @@ fn run_reset(
     }
 
     let mut mounts: Vec<PathBuf> = Vec::new();
-    factory_reset_mount(layout, rootfs, &mut mounts).inspect_err(|_| {
-        let _ = factory_reset_umount(&mut mounts);
+    factory_reset_mount(layout, rootfs, ods_status, &mut mounts).inspect_err(|_| {
+        let _ = unmount_tracked(&mut mounts);
     })?;
 
     let preserve_list = build_preserve_list(config, rootfs).inspect_err(|_| {
-        let _ = factory_reset_umount(&mut mounts);
+        let _ = unmount_tracked(&mut mounts);
     })?;
 
     let backup_dir = PathBuf::from(FACTORY_RESET_BACKUP_DIR);
     backup_all(rootfs, &preserve_list, &backup_dir).inspect_err(|_| {
-        let _ = factory_reset_umount(&mut mounts);
+        let _ = unmount_tracked(&mut mounts);
     })?;
 
-    factory_reset_umount(&mut mounts)?;
+    unmount_tracked(&mut mounts)?;
 
     let data_dev = layout.partitions.get(&PartitionName::Data).ok_or_else(|| {
         FactoryResetError::MountError("data partition not found in layout".to_string())
@@ -118,14 +119,26 @@ fn run_reset(
         layout,
         rootfs,
         &mut mounts,
-        data_dev,
-        etc_dev,
-        &preserve_list,
-        &backup_dir,
+        ods_status,
+        ReformatTargets {
+            data_dev,
+            etc_dev,
+            preserve_list: &preserve_list,
+            backup_dir: &backup_dir,
+        },
     ) {
         Ok(status) => Ok(status),
         Err(e) => Ok(destructive_phase_failure_status(e, preserve_list)),
     }
+}
+
+/// Devices and paths needed by `run_destructive_phase`, grouped to keep the
+/// function's argument count manageable.
+struct ReformatTargets<'a> {
+    data_dev: &'a Path,
+    etc_dev: &'a Path,
+    preserve_list: &'a [String],
+    backup_dir: &'a Path,
 }
 
 /// Reformat + restore — everything from here on is destructive: `data` and/or
@@ -135,26 +148,25 @@ fn run_destructive_phase(
     layout: &PartitionLayout,
     rootfs: &Path,
     mounts: &mut Vec<PathBuf>,
-    data_dev: &Path,
-    etc_dev: &Path,
-    preserve_list: &[String],
-    backup_dir: &Path,
+    ods_status: &mut OdsStatus,
+    targets: ReformatTargets,
 ) -> Result<FactoryResetStatus> {
-    reformat_ext4(data_dev, DATA_PARTITION_LABEL)?;
-    reformat_ext4(etc_dev, ETC_PARTITION_LABEL)?;
+    reformat_ext4(targets.data_dev, DATA_PARTITION_LABEL)?;
+    reformat_ext4(targets.etc_dev, ETC_PARTITION_LABEL)?;
 
     // Re-mount including factory so setup_etc_overlay reseeds etc's now-empty
     // upper dir with factory defaults before restore_all overlays preserved
     // paths on top — the seed check only fires while the upper dir is empty.
-    factory_reset_mount(layout, rootfs, mounts).inspect_err(|_| {
-        let _ = factory_reset_umount(mounts);
+    factory_reset_mount(layout, rootfs, ods_status, mounts).inspect_err(|_| {
+        let _ = unmount_tracked(mounts);
     })?;
 
-    let restore_result = restore_all(rootfs, preserve_list, backup_dir).inspect_err(|_| {
-        let _ = factory_reset_umount(mounts);
-    })?;
+    let restore_result = restore_all(rootfs, targets.preserve_list, targets.backup_dir)
+        .inspect_err(|_| {
+            let _ = unmount_tracked(mounts);
+        })?;
 
-    factory_reset_umount(mounts)?;
+    unmount_tracked(mounts)?;
 
     log::info!("factory-reset complete");
 
@@ -163,14 +175,14 @@ fn run_destructive_phase(
             status: FactoryResetStatusCode::Success,
             error: None,
             context: None,
-            paths: preserve_list.to_vec(),
+            paths: targets.preserve_list.to_vec(),
             data_wiped: true,
         },
         RestoreResult::PartialFailure { context, error } => FactoryResetStatus {
             status: FactoryResetStatusCode::Error,
             error: Some(error),
             context: Some(context),
-            paths: preserve_list.to_vec(),
+            paths: targets.preserve_list.to_vec(),
             data_wiped: true,
         },
     };
@@ -197,109 +209,58 @@ fn destructive_phase_failure_status(e: InitramfsError, paths: Vec<String>) -> Fa
 
 /// Mount factory (ro, if present), etc (rw), data (rw) and set up overlays.
 ///
-/// Tracks each mount in `mounts` so `factory_reset_umount` can reverse them.
+/// Tracks each mount in `mounts` so `unmount_tracked` can reverse them.
 /// Used for both the pre-backup and post-reformat mounts — factory must be
-/// present both times so `setup_etc_overlay` can always reseed an empty etc
-/// upper dir from factory defaults.
+/// present both times so `setup_etc_overlay_tracked` can always reseed an
+/// empty etc upper dir from factory defaults.
 fn factory_reset_mount(
     layout: &PartitionLayout,
     rootfs: &Path,
+    ods_status: &mut OdsStatus,
     mounts: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    mount_partition(
+    mount_tracked_partition(
         layout,
-        PartitionName::Factory,
-        mount_points::FACTORY_PARTITION,
-        MountOptions::ext4_readonly(),
-        "factory",
+        PartitionMountSpec {
+            partition: PartitionName::Factory,
+            mount_point: mount_points::FACTORY_PARTITION,
+            options: MountOptions::ext4_readonly(),
+            fstype: FsType::Ext4,
+        },
         rootfs,
+        ods_status,
         mounts,
     )?;
 
-    mount_partition(
+    mount_tracked_partition(
         layout,
-        PartitionName::Etc,
-        mount_points::ETC_PARTITION,
-        MountOptions::ext4_readwrite(),
-        "etc",
+        PartitionMountSpec {
+            partition: PartitionName::Etc,
+            mount_point: mount_points::ETC_PARTITION,
+            options: MountOptions::ext4_readwrite(),
+            fstype: FsType::Ext4,
+        },
         rootfs,
+        ods_status,
         mounts,
     )?;
 
-    mount_partition(
+    mount_tracked_partition(
         layout,
-        PartitionName::Data,
-        mount_points::DATA_PARTITION,
-        MountOptions::ext4_readwrite(),
-        "data",
+        PartitionMountSpec {
+            partition: PartitionName::Data,
+            mount_point: mount_points::DATA_PARTITION,
+            options: MountOptions::ext4_readwrite(),
+            fstype: FsType::Ext4,
+        },
         rootfs,
+        ods_status,
         mounts,
     )?;
 
-    setup_etc_overlay(rootfs)
-        .map_err(|e| FactoryResetError::MountError(format!("etc overlay: {e}")))?;
-    mounts.push(rootfs.join("etc"));
+    setup_etc_overlay_tracked(rootfs, mounts)?;
+    setup_data_overlay_tracked(rootfs, mounts)?;
 
-    setup_data_overlay(rootfs)
-        .map_err(|e| FactoryResetError::MountError(format!("data overlay: {e}")))?;
-    mounts.push(rootfs.join("home"));
-    mounts.push(rootfs.join("var/lib"));
-    mounts.push(rootfs.join("usr/local"));
-    #[cfg(feature = "persistent-var-log")]
-    mounts.push(rootfs.join("var/log"));
-
-    Ok(())
-}
-
-/// Mount `partition` at `rootfs/mount_point`, if present in `layout`, and
-/// track it in `mounts` for later cleanup via `factory_reset_umount`.
-///
-/// A no-op when the partition is absent from the layout.
-fn mount_partition(
-    layout: &PartitionLayout,
-    partition: PartitionName,
-    mount_point: &str,
-    options: MountOptions,
-    label: &str,
-    rootfs: &Path,
-    mounts: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let Some(dev) = layout.partitions.get(&partition) else {
-        return Ok(());
-    };
-    let mount_path = rootfs.join(mount_point);
-    std::fs::create_dir_all(&mount_path)?;
-    mount(MountPoint::new(dev, &mount_path, options))
-        .map_err(|e| FactoryResetError::MountError(format!("{label}: {e}")))?;
-    mounts.push(mount_path);
-    Ok(())
-}
-
-/// Unmount all factory-reset mounts in reverse order.
-///
-/// Continues on individual failures and returns the last error, if any, so
-/// the caller always attempts to unmount everything regardless of partial failures.
-pub(crate) fn factory_reset_umount(mounts: &mut Vec<PathBuf>) -> Result<()> {
-    let mut last_err: Option<InitramfsError> = None;
-    for path in mounts.drain(..).rev() {
-        // is_path_mounted re-reads /proc/mounts; treat a read failure as
-        // "assume still mounted" rather than "not mounted" — a spurious skip
-        // here would leave a partition mounted under the imminent reformat.
-        let mounted = is_path_mounted(&path).unwrap_or_else(|e| {
-            warn!(
-                "Failed to check mount status for {}: {e}; attempting unmount anyway",
-                path.display()
-            );
-            true
-        });
-        if mounted && let Err(e) = umount(&path) {
-            warn!("Failed to unmount {}: {e}", path.display());
-            last_err = Some(e.into());
-        }
-    }
-    if let Some(e) = last_err {
-        return Err(e);
-    }
     Ok(())
 }
 
@@ -308,13 +269,6 @@ mod tests {
     use super::*;
     use crate::partition::RootDevice;
     use std::collections::HashMap;
-
-    #[test]
-    fn factory_reset_umount_succeeds_for_empty_mount_list() {
-        let mut mounts: Vec<PathBuf> = Vec::new();
-        assert!(factory_reset_umount(&mut mounts).is_ok());
-        assert!(mounts.is_empty());
-    }
 
     fn empty_layout() -> PartitionLayout {
         PartitionLayout {
@@ -330,33 +284,18 @@ mod tests {
     #[test]
     fn run_reset_rejects_unsupported_mode_before_touching_layout() {
         // Pure gate checked before any mount is attempted — an empty layout
-        // (no real partitions) proves this never reaches mount_partition.
+        // (no real partitions) proves this never reaches factory_reset_mount.
         let layout = empty_layout();
         let config = FactoryResetConfig {
             mode: 2,
             preserve: vec![],
         };
-        let err = run_reset(&layout, Path::new("/nonexistent"), &config).unwrap_err();
+        let mut ods_status = OdsStatus::new();
+        let err =
+            run_reset(&layout, Path::new("/nonexistent"), &config, &mut ods_status).unwrap_err();
         assert!(matches!(
             err,
             InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
         ));
-    }
-
-    #[test]
-    fn mount_partition_is_noop_when_absent_from_layout() {
-        let layout = empty_layout();
-        let mut mounts: Vec<PathBuf> = Vec::new();
-        let result = mount_partition(
-            &layout,
-            PartitionName::Factory,
-            mount_points::FACTORY_PARTITION,
-            MountOptions::ext4_readonly(),
-            "factory",
-            Path::new("/nonexistent"),
-            &mut mounts,
-        );
-        assert!(result.is_ok());
-        assert!(mounts.is_empty());
     }
 }

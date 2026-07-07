@@ -7,7 +7,7 @@
 //! - Initial copy of factory etc to upper layer
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use nix::mount::MsFlags;
@@ -69,6 +69,16 @@ pub mod mount_points {
 /// or a factory reset (both cases require populating config from factory
 /// defaults).
 pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
+    setup_etc_overlay_tracked(rootfs_dir, &mut Vec::new())
+}
+
+/// Same as `setup_etc_overlay`, but records the overlay target in `mounts`
+/// immediately after mounting, so a caller doing manual cleanup (e.g.
+/// factory reset) can always unmount exactly what ended up mounted.
+pub(crate) fn setup_etc_overlay_tracked(
+    rootfs_dir: &Path,
+    mounts: &mut Vec<PathBuf>,
+) -> Result<()> {
     let etc_mount = rootfs_dir.join(mount_points::ETC_PARTITION);
     let factory_mount = rootfs_dir.join(mount_points::FACTORY_PARTITION);
 
@@ -88,6 +98,7 @@ pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
     }
 
     mount_overlay(&lower_dir, &upper_dir, &work_dir, &target)?;
+    mounts.push(target.clone());
 
     log::info!(
         "Setup etc overlay: lower={}, upper={} -> {}",
@@ -107,25 +118,43 @@ pub fn setup_etc_overlay(rootfs_dir: &Path) -> Result<()> {
 /// - Bind mount: data/local -> rootfs/usr/local
 /// - Conditional: data/var/log -> rootfs/var/log (compile-time `persistent-var-log` feature)
 pub fn setup_data_overlay(rootfs_dir: &Path) -> Result<()> {
+    setup_data_overlay_tracked(rootfs_dir, &mut Vec::new())
+}
+
+/// Same as `setup_data_overlay`, but records each mount target in `mounts`
+/// immediately after it succeeds, so a caller doing manual cleanup (e.g.
+/// factory reset) can always unmount exactly what ended up mounted — even
+/// if a later sub-mount in this call fails.
+pub(crate) fn setup_data_overlay_tracked(
+    rootfs_dir: &Path,
+    mounts: &mut Vec<PathBuf>,
+) -> Result<()> {
     let data_mount = rootfs_dir.join(mount_points::DATA_PARTITION);
 
     setup_home_overlay(rootfs_dir, &data_mount)?;
+    mounts.push(rootfs_dir.join(paths::HOME));
 
     bind_mount(
         &data_mount.join(paths::VAR_LIB),
         &rootfs_dir.join(paths::VAR_LIB),
     )?;
+    mounts.push(rootfs_dir.join(paths::VAR_LIB));
+
     // data partition uses a "local" subdir instead of "usr/local"
     bind_mount(
         &data_mount.join(paths::DATA_LOCAL_DIR),
         &rootfs_dir.join(paths::USR_LOCAL),
     )?;
+    mounts.push(rootfs_dir.join(paths::USR_LOCAL));
 
     #[cfg(feature = "persistent-var-log")]
-    bind_mount(
-        &data_mount.join(paths::VAR_LOG),
-        &rootfs_dir.join(paths::VAR_LOG),
-    )?;
+    {
+        bind_mount(
+            &data_mount.join(paths::VAR_LOG),
+            &rootfs_dir.join(paths::VAR_LOG),
+        )?;
+        mounts.push(rootfs_dir.join(paths::VAR_LOG));
+    }
 
     Ok(())
 }

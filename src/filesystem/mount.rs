@@ -288,6 +288,28 @@ pub fn umount(path: &Path) -> Result<()> {
     })
 }
 
+/// Unmount every path in `mounts`, in reverse (LIFO) order, draining the
+/// list. Continues past individual failures so every mount is attempted
+/// regardless of earlier errors; returns the last error encountered, if any.
+///
+/// Each path must already be mounted — callers push onto `mounts` only
+/// immediately after a successful mount, so no unmount-status guard is
+/// needed here.
+#[cfg(feature = "factory-reset")]
+pub(crate) fn unmount_tracked(mounts: &mut Vec<PathBuf>) -> Result<()> {
+    let mut last_err = None;
+    for path in mounts.drain(..).rev() {
+        if let Err(e) = umount(&path) {
+            log::warn!("Failed to unmount {}: {e}", path.display());
+            last_err = Some(e);
+        }
+    }
+    match last_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 /// Check if a path is mounted by reading /proc/mounts
 pub fn is_path_mounted(path: &Path) -> Result<bool> {
     let mounts =
@@ -308,6 +330,14 @@ pub fn is_path_mounted(path: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "factory-reset")]
+    fn unmount_tracked_succeeds_for_empty_mount_list() {
+        let mut mounts: Vec<PathBuf> = Vec::new();
+        assert!(unmount_tracked(&mut mounts).is_ok());
+        assert!(mounts.is_empty());
+    }
 
     #[test]
     fn test_fstype_as_str() {
