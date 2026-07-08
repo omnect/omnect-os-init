@@ -26,6 +26,15 @@ mod flags {
     pub const NOEXEC: MsFlags = MsFlags::MS_NOEXEC;
 }
 
+/// vfat mount data for the boot partition.
+///
+/// Grants the disk group (`gid=6`) ownership with group-write permissions:
+/// - `gid=6`            — disk group owns the mount
+/// - `fmask=0002`       — files are group-writable (vs. default 0022)
+/// - `dmask=0002`       — directories are group-writable
+/// - `allow_utime=0020` — group members may update file timestamps
+const VFAT_BOOT_DATA: &str = "gid=6,fmask=0002,dmask=0002,allow_utime=0020";
+
 /// Filesystem type for mount and fsck operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsType {
@@ -100,11 +109,14 @@ impl MountOptions {
     }
 
     /// Create options for a FAT32 boot partition
+    ///
+    /// Mounts with `disk`-group ownership and group-writable permissions so
+    /// that the bootloader (GRUB/U-Boot) can write its environment file.
     pub fn vfat() -> Self {
         Self {
             fstype: Some(FsType::Vfat),
             flags: MsFlags::empty(),
-            data: None,
+            data: Some(VFAT_BOOT_DATA.to_string()),
         }
     }
 
@@ -224,23 +236,6 @@ pub fn mount(mp: MountPoint) -> Result<()> {
     Ok(())
 }
 
-/// Mount a filesystem read-write.
-pub fn mount_readwrite(
-    source: impl Into<PathBuf>,
-    target: impl Into<PathBuf>,
-    fstype: FsType,
-) -> Result<()> {
-    mount(MountPoint::new(
-        source,
-        target,
-        MountOptions {
-            fstype: Some(fstype),
-            flags: MsFlags::empty(),
-            data: None,
-        },
-    ))
-}
-
 /// Mount a tmpfs filesystem.
 pub fn mount_tmpfs(target: impl Into<PathBuf>, flags: MsFlags, data: Option<&str>) -> Result<()> {
     mount(MountPoint::new(
@@ -285,6 +280,36 @@ pub fn mount_bind_private(source: impl Into<PathBuf>, target: impl Into<PathBuf>
     Ok(())
 }
 
+/// Unmount the filesystem at `path`.
+pub fn umount(path: &Path) -> Result<()> {
+    nix::mount::umount(path).map_err(|e| FilesystemError::UnmountFailed {
+        target: path.to_path_buf(),
+        reason: e.to_string(),
+    })
+}
+
+/// Unmount every path in `mounts`, in reverse (LIFO) order, draining the
+/// list. Continues past individual failures so every mount is attempted
+/// regardless of earlier errors; returns the last error encountered, if any.
+///
+/// Each path must already be mounted — callers push onto `mounts` only
+/// immediately after a successful mount, so no unmount-status guard is
+/// needed here.
+#[cfg(feature = "factory-reset")]
+pub(crate) fn unmount_tracked(mounts: &mut Vec<PathBuf>) -> Result<()> {
+    let mut last_err = None;
+    for path in mounts.drain(..).rev() {
+        if let Err(e) = umount(&path) {
+            log::warn!("Failed to unmount {}: {e}", path.display());
+            last_err = Some(e);
+        }
+    }
+    match last_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 /// Check if a path is mounted by reading /proc/mounts
 pub fn is_path_mounted(path: &Path) -> Result<bool> {
     let mounts =
@@ -305,6 +330,14 @@ pub fn is_path_mounted(path: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "factory-reset")]
+    fn unmount_tracked_succeeds_for_empty_mount_list() {
+        let mut mounts: Vec<PathBuf> = Vec::new();
+        assert!(unmount_tracked(&mut mounts).is_ok());
+        assert!(mounts.is_empty());
+    }
 
     #[test]
     fn test_fstype_as_str() {
@@ -357,5 +390,14 @@ mod tests {
         assert_eq!(mp.source, PathBuf::from("/dev/sda1"));
         assert_eq!(mp.target, PathBuf::from("/mnt/boot"));
         assert_eq!(mp.options.fstype, Some(FsType::Vfat));
+    }
+
+    #[test]
+    fn vfat_options_embed_disk_gid() {
+        let opts = MountOptions::vfat();
+        assert_eq!(
+            opts.data,
+            Some("gid=6,fmask=0002,dmask=0002,allow_utime=0020".to_string())
+        );
     }
 }

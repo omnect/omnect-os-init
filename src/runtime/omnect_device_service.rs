@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nix::unistd::{Gid, Uid, chown};
 use serde::Serialize;
@@ -30,9 +30,6 @@ const UPDATE_VALIDATE_FAILED_FILE: &str = "omnect_validate_update_failed";
 
 /// BootEnv updated marker
 const BOOTLOADER_UPDATED_FILE: &str = "omnect_bootloader_updated";
-
-/// Factory reset status file (in /tmp)
-const FACTORY_RESET_STATUS_FILE: &str = "/tmp/factory-reset.json";
 
 /// Name of the omnect-device-service user and group in the rootfs
 const ODS_USER: &str = "omnect_device_service";
@@ -215,6 +212,11 @@ pub struct FactoryResetStatus {
     /// Paths that were preserved
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
+    /// `true` once the destructive phase (partition reformat) began. On
+    /// `status: Error` this distinguishes a safe no-op abort (nothing touched)
+    /// from a failure after data was already wiped. Always serialized — absence
+    /// of the key would itself be a bug (mirrors `OdsStatus.first_boot`).
+    pub data_wiped: bool,
 }
 
 impl OdsStatus {
@@ -289,12 +291,6 @@ pub fn create_ods_runtime_files(
             "update validation skipped — bootloader unavailable; \
              any in-flight A/B update will roll back on timer expiry"
         );
-    }
-
-    // Copy factory reset status if exists
-    if let Some(dst) = copy_factory_reset_status(ods_dir)? {
-        set_ownership(&dst, uid, gid)?;
-        set_mode(&dst, FilePermission::FileRestricted)?;
     }
 
     log::info!("Created ODS runtime files in {}", ods_dir.display());
@@ -401,29 +397,6 @@ fn handle_update_validation(
     }
 
     Ok(())
-}
-
-/// Copy factory reset status from /tmp if it exists.
-/// Returns the destination path if the file was copied.
-fn copy_factory_reset_status(ods_dir: &Path) -> Result<Option<PathBuf>> {
-    let src = PathBuf::from(FACTORY_RESET_STATUS_FILE);
-
-    if !src.exists() {
-        return Ok(None);
-    }
-
-    let dst = ods_dir.join("factory-reset.json");
-    fs::copy(&src, &dst).map_err(|e| {
-        InitramfsError::Io(std::io::Error::other(format!(
-            "Failed to copy {} to {}: {}",
-            src.display(),
-            dst.display(),
-            e
-        )))
-    })?;
-    log::debug!("Copied factory reset status to ODS dir");
-
-    Ok(Some(dst))
 }
 
 /// Look up the UID for a user in the rootfs /etc/passwd.
@@ -599,6 +572,7 @@ mod tests {
             error: None,
             context: Some("normal".to_string()),
             paths: vec!["/etc/hostname".to_string()],
+            data_wiped: true,
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -621,9 +595,31 @@ mod tests {
                 error: None,
                 context: None,
                 paths: vec![],
+                data_wiped: false,
             };
             let json: Value = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
             assert_eq!(json["status"], *expected, "variant {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn factory_reset_data_wiped_always_serialized() {
+        // Absence of the key would itself be a bug (mirrors first_boot_always_serialized) —
+        // ODS/cloud must be able to distinguish a safe pre-reformat abort (false) from a
+        // failure after data was already wiped (true).
+        for wiped in [false, true] {
+            let s = FactoryResetStatus {
+                status: FactoryResetStatusCode::Error,
+                error: Some("test".to_string()),
+                context: None,
+                paths: vec![],
+                data_wiped: wiped,
+            };
+            let json = serde_json::to_string(&s).unwrap();
+            assert!(
+                json.contains(&format!("\"data_wiped\":{wiped}")),
+                "data_wiped={wiped} must be serialized; got: {json}"
+            );
         }
     }
 

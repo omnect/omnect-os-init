@@ -4,7 +4,10 @@
 //! during initramfs startup. Kept in the library crate so they can be unit-tested
 //! with mock bootloaders and temporary directories.
 
-use std::{fs, path::Path};
+use std::fs;
+use std::path::Path;
+#[cfg(feature = "factory-reset")]
+use std::path::PathBuf;
 
 use nix::mount::MsFlags;
 
@@ -12,7 +15,7 @@ use crate::bootloader::BootEnv;
 use crate::error::{FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
     FsType, FsckExitCode, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
-    mount, mount_points, mount_readwrite, mount_tmpfs,
+    mount, mount_points, mount_tmpfs,
 };
 use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
@@ -127,16 +130,50 @@ pub fn mount_core_partitions(
             }));
         }
         fsck_and_record(boot_dev, PartitionName::Boot, ods_status, FsType::Vfat)?;
-        mount_readwrite(boot_dev, &boot_mount, FsType::Vfat)?;
+        mount(MountPoint::new(boot_dev, &boot_mount, MountOptions::vfat()))?;
     }
 
+    Ok(())
+}
+
+/// Describes one partition mount for `mount_tracked_partition`.
+#[cfg(feature = "factory-reset")]
+pub(crate) struct PartitionMountSpec<'a> {
+    pub partition: PartitionName,
+    pub mount_point: &'a str,
+    pub options: MountOptions,
+    pub fstype: FsType,
+}
+
+/// Mount `spec.partition` at `rootfs/spec.mount_point`, if present in
+/// `layout`: run fsck, mount it, and track the mount path in `mounts` for
+/// later cleanup via `unmount_tracked`.
+///
+/// A no-op when the partition is absent from the layout.
+#[cfg(feature = "factory-reset")]
+pub(crate) fn mount_tracked_partition(
+    layout: &PartitionLayout,
+    spec: PartitionMountSpec,
+    rootfs: &Path,
+    ods_status: &mut OdsStatus,
+    mounts: &mut Vec<PathBuf>,
+) -> crate::error::Result<()> {
+    let Some(dev) = layout.partitions.get(&spec.partition) else {
+        return Ok(());
+    };
+    let mount_path = rootfs.join(spec.mount_point);
+    fsck_and_record(dev, spec.partition, ods_status, spec.fstype)?;
+    mount(MountPoint::new(dev, &mount_path, spec.options))?;
+    mounts.push(mount_path);
     Ok(())
 }
 
 /// Mount the remaining partitions after the boot env is opened.
 ///
 /// Mounts factory, cert, etc, data, and var/volatile. Must be called after
-/// `mount_core_partitions` and after `open_boot_env`.
+/// `mount_core_partitions` and after `open_boot_env`. Each mount is skipped
+/// with a warning if already mounted, guarding against a leaked mount (e.g.
+/// from an aborted factory reset) turning into a fatal `MountFailed`.
 pub fn mount_remaining_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
@@ -144,49 +181,77 @@ pub fn mount_remaining_partitions(
 ) -> crate::error::Result<()> {
     if let Some(factory_dev) = layout.partitions.get(&PartitionName::Factory) {
         let factory_mount = rootfs.join(mount_points::FACTORY_PARTITION);
-        fsck_and_record(
-            factory_dev,
-            PartitionName::Factory,
-            ods_status,
-            FsType::Ext4,
-        )?;
-        mount(MountPoint::new(
-            factory_dev,
-            &factory_mount,
-            MountOptions::ext4_readonly().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&factory_mount)? {
+            log::warn!(
+                "factory already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                factory_mount.display()
+            );
+        } else {
+            fsck_and_record(
+                factory_dev,
+                PartitionName::Factory,
+                ods_status,
+                FsType::Ext4,
+            )?;
+            mount(MountPoint::new(
+                factory_dev,
+                &factory_mount,
+                MountOptions::ext4_readonly().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
-        fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            cert_dev,
-            &cert_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&cert_mount)? {
+            log::warn!(
+                "cert already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                cert_mount.display()
+            );
+        } else {
+            fsck_and_record(cert_dev, PartitionName::Cert, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                cert_dev,
+                &cert_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // Mount etc partition (for overlay upper)
     if let Some(etc_dev) = layout.partitions.get(&PartitionName::Etc) {
         let etc_mount = rootfs.join(mount_points::ETC_PARTITION);
-        fsck_and_record(etc_dev, PartitionName::Etc, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            etc_dev,
-            &etc_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&etc_mount)? {
+            log::warn!(
+                "etc already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                etc_mount.display()
+            );
+        } else {
+            fsck_and_record(etc_dev, PartitionName::Etc, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                etc_dev,
+                &etc_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     if let Some(data_dev) = layout.partitions.get(&PartitionName::Data) {
         let data_mount = rootfs.join(mount_points::DATA_PARTITION);
-        fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
-        mount(MountPoint::new(
-            data_dev,
-            &data_mount,
-            MountOptions::ext4_readwrite().noatime().nodiratime(),
-        ))?;
+        if is_path_mounted(&data_mount)? {
+            log::warn!(
+                "data already mounted at {}; skipping (unexpected — likely a leaked mount)",
+                data_mount.display()
+            );
+        } else {
+            fsck_and_record(data_dev, PartitionName::Data, ods_status, FsType::Ext4)?;
+            mount(MountPoint::new(
+                data_dev,
+                &data_mount,
+                MountOptions::ext4_readwrite().noatime().nodiratime(),
+            ))?;
+        }
     }
 
     // /var/volatile provides a writable mount for volatile data under the read-only rootfs
@@ -450,5 +515,39 @@ mod tests {
         // Must not panic; no boot env write; no log dir (data not mounted).
         persist_fsck_results(&ods, None, temp.path());
         assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+    }
+
+    #[test]
+    #[cfg(feature = "factory-reset")]
+    fn mount_tracked_partition_is_noop_when_absent_from_layout() {
+        use crate::partition::RootDevice;
+        use std::collections::HashMap;
+
+        let layout = PartitionLayout {
+            partitions: HashMap::new(),
+            device: RootDevice {
+                base: PathBuf::from("/dev/sda"),
+                partition_sep: "",
+                root_partition: PathBuf::from("/dev/sda2"),
+            },
+        };
+        let mut ods_status = OdsStatus::new();
+        let mut mounts: Vec<PathBuf> = Vec::new();
+
+        let result = mount_tracked_partition(
+            &layout,
+            PartitionMountSpec {
+                partition: PartitionName::Factory,
+                mount_point: mount_points::FACTORY_PARTITION,
+                options: MountOptions::ext4_readonly(),
+                fstype: FsType::Ext4,
+            },
+            Path::new("/nonexistent"),
+            &mut ods_status,
+            &mut mounts,
+        );
+
+        assert!(result.is_ok());
+        assert!(mounts.is_empty());
     }
 }

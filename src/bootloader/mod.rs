@@ -47,6 +47,11 @@ pub enum BootEnvKey {
     /// `run_init`. Unified first-boot sentinel; read by the resize-data init
     /// setup step and the first-boot detection in `run_init`.
     FirstBootDone,
+    #[cfg(feature = "factory-reset")]
+    /// `factory-reset` — JSON trigger set by ODS to request a factory reset.
+    /// Value format: `{"mode":1,"preserve":["applications","network"]}`.
+    /// Cleared by the initramfs as the first step of the reset sequence.
+    FactoryReset,
 }
 
 impl BootEnvKey {
@@ -57,6 +62,8 @@ impl BootEnvKey {
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
+            #[cfg(feature = "factory-reset")]
+            Self::FactoryReset => Cow::Borrowed("factory-reset"),
         }
     }
 }
@@ -408,5 +415,25 @@ mod tests {
             BootEnvKey::FirstBootDone.as_str().as_ref(),
             "omnect_first_boot_done"
         );
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_key_as_str() {
+        assert_eq!(BootEnvKey::FactoryReset.as_str().as_ref(), "factory-reset");
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_key_roundtrip_via_mock() {
+        let mut bl = MockBootEnv::new();
+        bl.set_env(BootEnvKey::FactoryReset, Some(r#"{"mode":1}"#))
+            .unwrap();
+        assert_eq!(
+            bl.get_env(BootEnvKey::FactoryReset).unwrap(),
+            Some(r#"{"mode":1}"#.to_string())
+        );
+        bl.set_env(BootEnvKey::FactoryReset, None).unwrap();
+        assert_eq!(bl.get_env(BootEnvKey::FactoryReset).unwrap(), None);
     }
 }
