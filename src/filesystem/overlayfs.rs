@@ -16,9 +16,7 @@ use crate::error::FilesystemError;
 use crate::filesystem::{
     FsType, MountOptions, MountPoint, Result, mount, mount_bind, mount_bind_private,
 };
-/// Path to the `cp` binary. Shared with `mode::factory_reset::backup_restore`
-/// (re-exported via `filesystem::CP_CMD`) so both call sites use a single
-/// declaration rather than hardcoding the path independently.
+/// cp command for copying directory contents
 pub(crate) const CP_CMD: &str = "/bin/cp";
 
 /// The kernel ignores the mount source for overlayfs, but the mount syscall
