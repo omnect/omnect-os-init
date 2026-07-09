@@ -72,9 +72,25 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
             }
         }
     };
+    persist_exhausted_signal(&status, &mut ctx.boot_env);
     ctx.ods_status.set_factory_reset(status);
 
     crate::mode::normal::run(ctx)
+}
+
+/// Best-effort write of the unrecoverable-failure signal to the bootloader env,
+/// so the outcome survives even if the ensuing Normal boot halts before
+/// `create_ods_runtime_files`. A degraded env is a no-op.
+fn persist_exhausted_signal(
+    status: &FactoryResetStatus,
+    boot_env: &mut crate::bootloader::BootEnvState,
+) {
+    if let Some((part, reason)) = status.exhausted_signal()
+        && let Some(bl) = boot_env.available_mut()
+        && let Err(e) = bl.save_factory_reset_failure(part, reason)
+    {
+        warn!("failed to persist factory-reset failure signal: {e}");
+    }
 }
 
 /// Inner reset sequence. Returns `Err` only for failures before the
@@ -687,6 +703,55 @@ mod tests {
         #[test]
         fn neither_is_none() {
             assert_eq!(join_context(None, None), None);
+        }
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod persist_signal_tests {
+        use super::*;
+        use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+
+        fn status_with_signal(part: PartitionName) -> FactoryResetStatus {
+            FactoryResetStatus {
+                status: FactoryResetStatusCode::Error,
+                error: Some("exhausted".into()),
+                context: None,
+                paths: vec![],
+                data_wiped: true,
+                exhausted_signal: Some((part, "mkfs retry exhausted".into())),
+            }
+        }
+
+        #[test]
+        fn writes_bootloader_key_when_signal_present() {
+            let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
+            persist_exhausted_signal(&status_with_signal(PartitionName::Etc), &mut env);
+            let bl = env.available().unwrap();
+            assert_eq!(
+                bl.get_env(BootEnvKey::FactoryResetLastError).unwrap(),
+                Some("etc:mkfs retry exhausted".to_string())
+            );
+        }
+
+        #[test]
+        fn no_write_when_no_signal() {
+            let mut status = status_with_signal(PartitionName::Etc);
+            status.exhausted_signal = None;
+            let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
+            persist_exhausted_signal(&status, &mut env);
+            let bl = env.available().unwrap();
+            assert_eq!(bl.get_env(BootEnvKey::FactoryResetLastError).unwrap(), None);
+        }
+
+        #[test]
+        fn no_panic_on_degraded_env() {
+            use crate::error::BootEnvError;
+            let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
+                command: "boot-env-tool".into(),
+                reason: "test".into(),
+            });
+            // Best-effort: degraded env is a no-op, must not panic.
+            persist_exhausted_signal(&status_with_signal(PartitionName::Data), &mut env);
         }
     }
 }
