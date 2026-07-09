@@ -508,6 +508,44 @@ mod tests {
         }
 
         #[test]
+        fn data_recovers_after_one_reformat() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            // First mount fails on data, second succeeds.
+            let mut ops = ScriptedOps::new(vec![Err(mount_failed(data)), Ok(())]);
+            let report = mount_reformatted_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert!(report.exhausted.is_none());
+            assert_eq!(ops.reformatted, vec![data.to_path_buf()]);
+        }
+
+        #[test]
+        fn both_partitions_each_reformat_once() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            let mut ops = ScriptedOps::new(vec![
+                Err(mount_failed(data)),
+                Err(mount_failed(etc)),
+                Ok(()),
+            ]);
+            let report = mount_reformatted_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert!(report.exhausted.is_none());
+            assert_eq!(
+                report.retried,
+                vec![PartitionName::Data, PartitionName::Etc]
+            );
+            assert_eq!(ops.reformatted, vec![data.to_path_buf(), etc.to_path_buf()]);
+        }
+
+        #[test]
         fn etc_exhausts_after_second_failure() {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             let mut ops = ScriptedOps::new(vec![Err(mount_failed(etc)), Err(mount_failed(etc))]);
