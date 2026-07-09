@@ -22,6 +22,34 @@ pub use self::uboot::UBootBootEnv;
 
 pub type Result<T> = std::result::Result<T, BootEnvError>;
 
+/// Upper bound (bytes) on the failure reason stored in the bootloader env by
+/// `save_factory_reset_failure`. grubenv is a fixed ~1024-byte shared block, so
+/// the diagnostic is kept short and human-readable rather than exhaustive.
+///
+/// `save_factory_reset_failure` lands in a follow-up change; until then this
+/// constant has no non-test caller.
+#[cfg(feature = "factory-reset")]
+#[allow(dead_code)]
+const MAX_FACTORY_RESET_FAILURE_REASON_LEN: usize = 128;
+
+/// Truncate `s` to at most `max_bytes`, never splitting a multi-byte UTF-8
+/// character (a naive byte slice would panic on a non-ASCII boundary).
+///
+/// `save_factory_reset_failure` lands in a follow-up change; until then this
+/// helper has no non-test caller.
+#[cfg(feature = "factory-reset")]
+#[allow(dead_code)]
+fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Decoded fsck result stored in the bootloader environment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FsckRecord {
@@ -435,5 +463,29 @@ mod tests {
         );
         bl.set_env(BootEnvKey::FactoryReset, None).unwrap();
         assert_eq!(bl.get_env(BootEnvKey::FactoryReset).unwrap(), None);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod truncate_tests {
+        use super::super::truncate_on_char_boundary;
+
+        #[test]
+        fn returns_input_when_within_limit() {
+            assert_eq!(truncate_on_char_boundary("short", 128), "short");
+        }
+
+        #[test]
+        fn truncates_ascii_at_limit() {
+            assert_eq!(truncate_on_char_boundary("abcdef", 3), "abc");
+        }
+
+        #[test]
+        fn never_splits_a_multibyte_char() {
+            // "é" is 2 bytes (0xC3 0xA9). Truncating to 1 byte must not split it.
+            let s = "aé";
+            let out = truncate_on_char_boundary(s, 2);
+            assert!(s.is_char_boundary(out.len()));
+            assert_eq!(out, "a");
+        }
     }
 }
