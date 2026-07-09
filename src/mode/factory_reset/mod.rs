@@ -68,6 +68,7 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
                 context: None,
                 paths: vec![],
                 data_wiped: false,
+                exhausted_signal: None,
             }
         }
     };
@@ -177,6 +178,7 @@ fn run_destructive_phase(
             context: None,
             paths: targets.preserve_list.to_vec(),
             data_wiped: true,
+            exhausted_signal: None,
         },
         RestoreResult::PartialFailure { context, error } => FactoryResetStatus {
             status: FactoryResetStatusCode::Error,
@@ -184,6 +186,7 @@ fn run_destructive_phase(
             context: Some(context),
             paths: targets.preserve_list.to_vec(),
             data_wiped: true,
+            exhausted_signal: None,
         },
     };
 
@@ -204,6 +207,7 @@ fn destructive_phase_failure_status(e: InitramfsError, paths: Vec<String>) -> Fa
         context: None,
         paths,
         data_wiped: true,
+        exhausted_signal: None,
     }
 }
 
