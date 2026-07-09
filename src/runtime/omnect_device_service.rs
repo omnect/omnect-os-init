@@ -218,8 +218,8 @@ pub struct FactoryResetStatus {
     /// of the key would itself be a bug (mirrors `OdsStatus.first_boot`).
     pub data_wiped: bool,
     /// Set when the destructive phase exhausted its reformat retry on a
-    /// partition. Not user-facing status — plumbing that carries the typed
-    /// `(partition, reason)` up to `run()` for the bootloader-env write. Never
+    /// partition. Not user-facing status — an internal carrier for the typed
+    /// (partition, reason), read by run() for the bootloader-env write. Never
     /// serialized to the ODS JSON.
     #[cfg(feature = "factory-reset")]
     #[serde(skip)]

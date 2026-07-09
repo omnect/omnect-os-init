@@ -282,7 +282,7 @@ mod tests {
         let result = restore_all(&rootfs, &manifest, &backup).unwrap();
         assert!(matches!(result, RestoreResult::PartialFailure { .. }));
         if let RestoreResult::PartialFailure { context, .. } = result {
-            assert!(context.contains("etc/hostname"));
+            assert!(context.contains("etc/hostname:missing-backup"));
         }
     }
 

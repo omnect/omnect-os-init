@@ -394,9 +394,12 @@ fn resolve_failed_partition(
             }
         }
         InitramfsError::Filesystem(FilesystemError::OverlayFailed { target, .. }) => {
-            if *target == rootfs.join(mount_points::DATA_PARTITION) {
+            // OverlayFailed carries the overlay upper/work dir, which lives under the
+            // partition mount point (e.g. mnt/etc/upper, mnt/data/home/upper). Match by
+            // prefix, not exact equality against the mount point.
+            if target.starts_with(rootfs.join(mount_points::DATA_PARTITION)) {
                 Some(PartitionName::Data)
-            } else if *target == rootfs.join(mount_points::ETC_PARTITION) {
+            } else if target.starts_with(rootfs.join(mount_points::ETC_PARTITION)) {
                 Some(PartitionName::Etc)
             } else {
                 None
@@ -603,8 +606,10 @@ mod tests {
         #[test]
         fn overlay_failure_on_etc_triggers_reformat() {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
-            let etc_mount = Path::new("/rootfs").join(mount_points::ETC_PARTITION);
-            let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_mount)), Ok(())]);
+            let etc_overlay_dir = Path::new("/rootfs")
+                .join(mount_points::ETC_PARTITION)
+                .join("upper");
+            let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_overlay_dir)), Ok(())]);
             let report = mount_reformatted_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),

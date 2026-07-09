@@ -506,7 +506,9 @@ mod tests {
 
     #[cfg(feature = "factory-reset")]
     mod factory_reset_failure_tests {
-        use super::super::{BootEnv, BootEnvKey, MockBootEnv};
+        use super::super::{
+            BootEnv, BootEnvKey, MAX_FACTORY_RESET_FAILURE_REASON_LEN, MockBootEnv,
+        };
         use crate::partition::PartitionName;
 
         #[test]
@@ -538,8 +540,7 @@ mod tests {
                 .get_env(BootEnvKey::FactoryResetLastError)
                 .unwrap()
                 .unwrap();
-            // "data:" prefix (5) + at most MAX (128) reason bytes.
-            assert!(stored.len() <= 5 + 128);
+            assert!(stored.len() <= "data:".len() + MAX_FACTORY_RESET_FAILURE_REASON_LEN);
             assert!(stored.starts_with("data:x"));
         }
     }
