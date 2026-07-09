@@ -214,8 +214,9 @@ trait ReformatRetryOps {
 Control flow: try `mount_all()` (mount + overlay setup). On failure, resolve the failing partition
 to `data`/`etc` — for `FilesystemError::MountFailed { src_path, .. }` by matching `src_path`
 against `targets.data_dev`/`etc_dev`; for `FilesystemError::OverlayFailed { target, .. }` (which
-carries the mount point, not a device path — see §3.6) by matching `target` against the `etc`/`data`
-mount points. Then:
+carries the overlay upper/work directory located *under* the partition mount point, not a device
+path — see §3.6) by matching `target` against the `etc`/`data` mount points with `starts_with`
+(prefix match, not exact equality). Then:
 
 - **not yet retried** → record the partition in `retried`, `reformat()` it, loop once more;
 - **already retried** → set `exhausted = Some((partition, reason))` and **return
@@ -320,7 +321,7 @@ pub struct FactoryResetStatus {
 }
 ```
 
-`#[serde(skip)]` keeps it out of the ODS JSON — it is plumbing, not status. `run_destructive_phase`
+`#[serde(skip)]` keeps it out of the ODS JSON — it is an internal carrier, not status. `run_destructive_phase`
 sets it when `report.exhausted` is `Some` (§3.2); every other construction site leaves it `None`
 (default). `run()` reads it via a small `exhausted_signal()` accessor:
 
@@ -355,10 +356,12 @@ failure on a reformatted partition to fall through with no retry and brick exact
 
 Fix: the retry match in §3.2 treats an `OverlayFailed` that resolves to the `data`/`etc` partition
 identically to `MountFailed` — an empty just-`mkfs`'d filesystem failing overlay-dir creation is
-the same "bad-reformat" signal as a mount failure. Because `OverlayFailed` carries the mount point
-(`target`) rather than a device path, resolving it back to a partition goes through the
-`target → PartitionName` mapping (`mount_points::ETC_PARTITION`/`DATA_PARTITION`) instead of
-`src_path` equality against `targets.data_dev`/`etc_dev`.
+the same "bad-reformat" signal as a mount failure. `OverlayFailed.target` is the overlay upper/work
+directory, which lives *under* the partition mount point (e.g. `mnt/etc/upper`, `mnt/data/home/upper`),
+never exactly equal to the mount point itself. Resolving it back to a partition therefore matches
+`target` against `mount_points::ETC_PARTITION`/`DATA_PARTITION` with `starts_with` (prefix match),
+not exact equality — and not `src_path` equality against `targets.data_dev`/`etc_dev`, which is
+only for the `MountFailed` arm.
 
 ## 4. Data flow (destructive phase, updated)
 
