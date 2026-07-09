@@ -11,9 +11,34 @@ const PRESERVE_LIST_MANDATORY: &str = "/etc/omnect/factory-reset.d/";
 const KEY_APPLICATIONS: &str = "applications";
 const KEY_PATHS: &str = "paths";
 
+/// The only factory-reset mode currently supported (backup / reformat / restore).
+const SUPPORTED_RESET_MODE: u32 = 1;
+
+/// Validated factory-reset mode. Only `SUPPORTED_RESET_MODE` is representable;
+/// any other value is rejected at deserialize time, so an unsupported trigger
+/// never reaches the reset sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u32")]
+pub struct ResetMode(u32);
+
+impl ResetMode {
+    pub const MODE_1: ResetMode = ResetMode(SUPPORTED_RESET_MODE);
+}
+
+impl TryFrom<u32> for ResetMode {
+    type Error = String;
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        if value == SUPPORTED_RESET_MODE {
+            Ok(ResetMode(value))
+        } else {
+            Err(format!("factory reset mode {value} is not supported"))
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FactoryResetConfig {
-    pub mode: u32,
+    pub mode: ResetMode,
     #[serde(default)]
     pub preserve: Vec<String>,
 }
@@ -173,16 +198,27 @@ mod tests {
     #[test]
     fn parse_mode_and_preserve() {
         let cfg = FactoryResetConfig::parse(r#"{"mode":1,"preserve":[]}"#).unwrap();
-        assert_eq!(cfg.mode, 1);
+        assert_eq!(cfg.mode, ResetMode::MODE_1);
         assert!(cfg.preserve.is_empty());
     }
 
     #[test]
-    fn parse_with_preserve_keys() {
-        let cfg = FactoryResetConfig::parse(r#"{"mode":2,"preserve":["applications","network"]}"#)
-            .unwrap();
-        assert_eq!(cfg.mode, 2);
-        assert_eq!(cfg.preserve, vec!["applications", "network"]);
+    fn parse_rejects_unsupported_mode() {
+        assert!(FactoryResetConfig::parse(r#"{"mode":2,"preserve":[]}"#).is_err());
+        assert!(FactoryResetConfig::parse(r#"{"mode":0,"preserve":[]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_accepts_mode_1() {
+        let cfg = FactoryResetConfig::parse(r#"{"mode":1,"preserve":["applications"]}"#).unwrap();
+        assert_eq!(cfg.mode, ResetMode::MODE_1);
+        assert_eq!(cfg.preserve, vec!["applications"]);
+    }
+
+    #[test]
+    fn reset_mode_try_from_rejects_non_one() {
+        assert!(ResetMode::try_from(2u32).is_err());
+        assert!(ResetMode::try_from(1u32).is_ok());
     }
 
     #[test]
@@ -199,7 +235,7 @@ mod tests {
     fn build_preserve_list_empty_preserve() {
         let temp = TempDir::new().unwrap();
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec![],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -218,7 +254,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["applications".into()],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -239,7 +275,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["network".into()],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -259,7 +295,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["network".into()],
         };
         assert!(build_preserve_list(&cfg, temp.path()).is_err());
@@ -295,7 +331,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["network".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -313,7 +349,7 @@ mod tests {
         fs::write(dir.join("app.json"), r#"{"paths":["../outside"]}"#).unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -331,7 +367,7 @@ mod tests {
         fs::write(dir.join("app.json"), "not json").unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -352,7 +388,7 @@ mod tests {
         fs::create_dir_all(dir.join("app.json")).unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -376,7 +412,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["network".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -394,7 +430,7 @@ mod tests {
         fs::write(dir.join("app.json"), r#"{"paths":["var/app", null]}"#).unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::MODE_1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();

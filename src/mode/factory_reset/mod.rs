@@ -25,7 +25,6 @@ use crate::mode::factory_reset::{
 };
 
 const FACTORY_RESET_BACKUP_DIR: &str = "/tmp/factory_reset/backup";
-const SUPPORTED_RESET_MODE: u32 = 1;
 
 /// ext4 volume labels applied by `reformat_ext4` — distinct from the
 /// `mount_points` path constants, which name mount *locations* not labels.
@@ -103,12 +102,6 @@ fn run_reset(
     config: &FactoryResetConfig,
     ods_status: &mut OdsStatus,
 ) -> Result<FactoryResetStatus> {
-    if config.mode != SUPPORTED_RESET_MODE {
-        let msg = format!("factory reset mode {} is not supported", config.mode);
-        warn!("{msg}");
-        return Err(FactoryResetError::InvalidConfig(msg).into());
-    }
-
     let mut mounts: Vec<PathBuf> = Vec::new();
     factory_reset_mount(layout, rootfs, ods_status, &mut mounts).inspect_err(|_| {
         let _ = unmount_tracked(&mut mounts);
@@ -461,37 +454,6 @@ fn mount_reformatted_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::partition::RootDevice;
-    use std::collections::HashMap;
-
-    fn empty_layout() -> PartitionLayout {
-        PartitionLayout {
-            partitions: HashMap::new(),
-            device: RootDevice {
-                base: PathBuf::from("/dev/sda"),
-                partition_sep: "",
-                root_partition: PathBuf::from("/dev/sda2"),
-            },
-        }
-    }
-
-    #[test]
-    fn run_reset_rejects_unsupported_mode_before_touching_layout() {
-        // Pure gate checked before any mount is attempted — an empty layout
-        // (no real partitions) proves this never reaches factory_reset_mount.
-        let layout = empty_layout();
-        let config = FactoryResetConfig {
-            mode: 2,
-            preserve: vec![],
-        };
-        let mut ods_status = OdsStatus::new();
-        let err =
-            run_reset(&layout, Path::new("/nonexistent"), &config, &mut ods_status).unwrap_err();
-        assert!(matches!(
-            err,
-            InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
-        ));
-    }
 
     #[cfg(feature = "factory-reset")]
     mod retry_tests {
