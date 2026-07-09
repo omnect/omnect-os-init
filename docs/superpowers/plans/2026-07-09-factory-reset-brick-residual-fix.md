@@ -170,8 +170,8 @@ mod factory_reset_failure_tests {
             .get_env(BootEnvKey::FactoryResetLastError)
             .unwrap()
             .unwrap();
-        // "data:" prefix (5) + at most MAX (128) reason bytes.
-        assert!(stored.len() <= 5 + 128);
+        // "data:" prefix + at most MAX reason bytes.
+        assert!(stored.len() <= "data:".len() + MAX_FACTORY_RESET_FAILURE_REASON_LEN);
         assert!(stored.starts_with("data:x"));
     }
 }
@@ -302,9 +302,9 @@ In `pub struct FactoryResetStatus` (after `pub data_wiped: bool,`):
 
 ```rust
     /// Set when the destructive phase exhausted its reformat retry on a
-    /// partition. Not user-facing status — plumbing that carries the typed
-    /// `(partition, reason)` up to `run()` for the bootloader-env write. Never
-    /// serialized to the ODS JSON.
+    /// partition. Not user-facing status — an internal carrier for the typed
+    /// `(partition, reason)`, read by `run()` for the bootloader-env write.
+    /// Never serialized to the ODS JSON.
     #[cfg(feature = "factory-reset")]
     #[serde(skip)]
     pub exhausted_signal: Option<(PartitionName, String)>,
@@ -470,8 +470,10 @@ mod retry_tests {
     #[test]
     fn overlay_failure_on_etc_triggers_reformat() {
         let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
-        let etc_mount = Path::new("/rootfs").join(mount_points::ETC_PARTITION);
-        let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_mount)), Ok(())]);
+        // Real OverlayFailed target is the overlay upper dir UNDER the partition
+        // mount point, not the mount point itself.
+        let etc_overlay_dir = Path::new("/rootfs").join(mount_points::ETC_PARTITION).join("upper");
+        let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_overlay_dir)), Ok(())]);
         let report =
             mount_reformatted_with_retry(Path::new("/rootfs"), &targets(data, etc, &[]), &mut ops)
                 .unwrap();
@@ -547,9 +549,12 @@ fn resolve_failed_partition(
             }
         }
         InitramfsError::Filesystem(FilesystemError::OverlayFailed { target, .. }) => {
-            if *target == rootfs.join(mount_points::DATA_PARTITION) {
+            // OverlayFailed carries the overlay upper/work dir, which lives under
+            // the partition mount point (e.g. mnt/etc/upper, mnt/data/home/upper).
+            // Match by prefix, not exact equality against the mount point.
+            if target.starts_with(rootfs.join(mount_points::DATA_PARTITION)) {
                 Some(PartitionName::Data)
-            } else if *target == rootfs.join(mount_points::ETC_PARTITION) {
+            } else if target.starts_with(rootfs.join(mount_points::ETC_PARTITION)) {
                 Some(PartitionName::Etc)
             } else {
                 None
@@ -1069,7 +1074,7 @@ Replace/extend the tests in `src/mode/factory_reset/backup_restore.rs`. Add:
         let result = restore_all(&rootfs, &manifest, &backup).unwrap();
         assert!(matches!(result, RestoreResult::PartialFailure { .. }));
         if let RestoreResult::PartialFailure { context, .. } = result {
-            assert!(context.contains("etc/hostname"));
+            assert!(context.contains("etc/hostname:missing-backup"));
         }
     }
 
@@ -1176,7 +1181,7 @@ pub fn restore_all(
 }
 ```
 
-(`restore_path` keeps its existing internal `!backup_src.exists()` guard as a harmless belt-and-suspenders; the manifest loop is what produces the `PartialFailure`.)
+(`restore_path` keeps its existing internal `!backup_src.exists()` guard as a harmless extra check; the manifest loop is what produces the `PartialFailure`.)
 
 - [ ] **Step 5: Thread the manifest through `ReformatTargets` and `run_reset`**
 
