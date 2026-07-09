@@ -142,6 +142,55 @@ struct ReformatTargets<'a> {
     backup_dir: &'a Path,
 }
 
+/// Real `ReformatRetryOps`: `mount_all` re-runs the full factory mount and, on
+/// failure, unmounts what it managed so the next attempt starts clean.
+struct RealReformatOps<'a> {
+    layout: &'a PartitionLayout,
+    rootfs: &'a Path,
+    ods_status: &'a mut OdsStatus,
+    mounts: &'a mut Vec<PathBuf>,
+}
+
+impl ReformatRetryOps for RealReformatOps<'_> {
+    fn reformat(&mut self, device: &Path, label: &str) -> Result<()> {
+        reformat_ext4(device, label)
+    }
+
+    fn mount_all(&mut self) -> Result<()> {
+        factory_reset_mount(self.layout, self.rootfs, self.ods_status, self.mounts).inspect_err(
+            |_| {
+                let _ = unmount_tracked(self.mounts);
+            },
+        )
+    }
+}
+
+/// Combine the optional retry note and the optional restore-partial-failure
+/// context into a single `context` string, joined with `";"` — the same
+/// separator `restore_all` uses internally (`backup_restore.rs`). Returns the
+/// lone value when only one is present, or None when neither is.
+fn join_context(retry_note: Option<String>, restore_context: Option<String>) -> Option<String> {
+    match (retry_note, restore_context) {
+        (Some(a), Some(b)) => Some(format!("{a};{b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+/// Human-readable note for a partition that needed a reformat retry, for the
+/// `context` field. Empty `retried` → None.
+fn retry_note(retried: &[PartitionName]) -> Option<String> {
+    if retried.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = retried.iter().map(|p| p.to_string()).collect();
+    Some(format!(
+        "{} reformatted twice: initial remount failed",
+        names.join(",")
+    ))
+}
+
 /// Reformat + restore — everything from here on is destructive: `data` and/or
 /// `etc` may already be wiped and the tmpfs backup discarded. Callers must
 /// treat any `Err` from this function as data-loss, not a safe no-op abort.
@@ -155,12 +204,33 @@ fn run_destructive_phase(
     reformat_ext4(targets.data_dev, DATA_PARTITION_LABEL)?;
     reformat_ext4(targets.etc_dev, ETC_PARTITION_LABEL)?;
 
-    // Re-mount including factory so setup_etc_overlay reseeds etc's now-empty
-    // upper dir with factory defaults before restore_all overlays preserved
-    // paths on top — the seed check only fires while the upper dir is empty.
-    factory_reset_mount(layout, rootfs, ods_status, mounts).inspect_err(|_| {
+    let report = {
+        let mut ops = RealReformatOps {
+            layout,
+            rootfs,
+            ods_status,
+            mounts,
+        };
+        mount_reformatted_with_retry(rootfs, &targets, &mut ops)?
+    };
+
+    if let Some((part, reason)) = report.exhausted {
+        // The reformatted partition is still unmountable — restore cannot run.
+        // Report data-loss and carry the typed signal out for run() (§3.5).
+        warn!(
+            "factory reset: {part} still unmountable after reformat retry; \
+             preserved data lost: {reason}"
+        );
         let _ = unmount_tracked(mounts);
-    })?;
+        return Ok(FactoryResetStatus {
+            status: FactoryResetStatusCode::Error,
+            error: Some(reason.clone()),
+            context: retry_note(&report.retried),
+            paths: targets.preserve_list.to_vec(),
+            data_wiped: true,
+            exhausted_signal: Some((part, reason)),
+        });
+    }
 
     let restore_result = restore_all(rootfs, targets.preserve_list, targets.backup_dir)
         .inspect_err(|_| {
@@ -171,11 +241,12 @@ fn run_destructive_phase(
 
     log::info!("factory-reset complete");
 
+    let note = retry_note(&report.retried);
     let status = match restore_result {
         RestoreResult::Success => FactoryResetStatus {
             status: FactoryResetStatusCode::Success,
             error: None,
-            context: None,
+            context: note,
             paths: targets.preserve_list.to_vec(),
             data_wiped: true,
             exhausted_signal: None,
@@ -183,7 +254,7 @@ fn run_destructive_phase(
         RestoreResult::PartialFailure { context, error } => FactoryResetStatus {
             status: FactoryResetStatusCode::Error,
             error: Some(error),
-            context: Some(context),
+            context: join_context(note, Some(context)),
             paths: targets.preserve_list.to_vec(),
             data_wiped: true,
             exhausted_signal: None,
@@ -270,9 +341,6 @@ fn factory_reset_mount(
 
 /// Outcome of the reformat-retry loop, returned so the caller can set the
 /// success `context` note and, on exhaustion, the bootloader-env signal.
-// No non-test caller until Task 5 wires this into run_destructive_phase; the
-// allow is removed there.
-#[allow(dead_code)]
 struct RetryReport {
     /// Partitions that needed one reformat-and-retry (empty on a clean mount).
     retried: Vec<PartitionName>,
@@ -283,9 +351,6 @@ struct RetryReport {
 /// Injectable seam over the destructive-phase mount side effects, so the
 /// bounded-retry control flow is unit-testable without real block devices.
 /// Narrowly scoped to this loop — not a general refactor of the module.
-// No non-test caller until Task 5 wires this into run_destructive_phase; the
-// allow is removed there.
-#[allow(dead_code)]
 trait ReformatRetryOps {
     fn reformat(&mut self, device: &Path, label: &str) -> Result<()>;
     fn mount_all(&mut self) -> Result<()>;
@@ -302,9 +367,6 @@ trait ReformatRetryOps {
 /// come from the same `layout.partitions` lookup. If a future change resolves
 /// one side to a different path form (e.g. `/dev/omnect/data`), this match
 /// silently stops firing — the mocked tests cannot catch that.
-// No non-test caller until Task 5 wires this into run_destructive_phase; the
-// allow is removed there.
-#[allow(dead_code)]
 fn resolve_failed_partition(
     err: &InitramfsError,
     rootfs: &Path,
@@ -342,9 +404,6 @@ fn resolve_failed_partition(
 /// and is returned in `RetryReport.exhausted` — NOT propagated as `Err`, so the
 /// typed `(partition, reason)` survives out to `run()` (see spec §3.2/§3.5). A
 /// failure resolving to neither reformatted partition propagates immediately.
-// No non-test caller until Task 5 wires this into run_destructive_phase; the
-// allow is removed there.
-#[allow(dead_code)]
 fn mount_reformatted_with_retry(
     rootfs: &Path,
     targets: &ReformatTargets,
@@ -588,6 +647,46 @@ mod tests {
             );
             assert!(result.is_err());
             assert!(ops.reformatted.is_empty());
+        }
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod context_join_tests {
+        use super::*;
+
+        #[test]
+        fn retry_note_only() {
+            let out = join_context(
+                Some("etc reformatted twice: initial remount failed".into()),
+                None,
+            );
+            assert_eq!(
+                out.as_deref(),
+                Some("etc reformatted twice: initial remount failed")
+            );
+        }
+
+        #[test]
+        fn restore_context_only() {
+            let out = join_context(None, Some("etc/hostname:restore".into()));
+            assert_eq!(out.as_deref(), Some("etc/hostname:restore"));
+        }
+
+        #[test]
+        fn both_joined_with_bare_semicolon() {
+            let out = join_context(
+                Some("etc reformatted twice: initial remount failed".into()),
+                Some("etc/hostname:restore".into()),
+            );
+            assert_eq!(
+                out.as_deref(),
+                Some("etc reformatted twice: initial remount failed;etc/hostname:restore")
+            );
+        }
+
+        #[test]
+        fn neither_is_none() {
+            assert_eq!(join_context(None, None), None);
         }
     }
 }
