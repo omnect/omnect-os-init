@@ -119,7 +119,7 @@ fn run_reset(
     })?;
 
     let backup_dir = PathBuf::from(FACTORY_RESET_BACKUP_DIR);
-    backup_all(rootfs, &preserve_list, &backup_dir).inspect_err(|_| {
+    let backed_up = backup_all(rootfs, &preserve_list, &backup_dir).inspect_err(|_| {
         let _ = unmount_tracked(&mut mounts);
     })?;
 
@@ -141,6 +141,7 @@ fn run_reset(
             data_dev,
             etc_dev,
             preserve_list: &preserve_list,
+            backed_up: &backed_up,
             backup_dir: &backup_dir,
         },
     ) {
@@ -155,6 +156,7 @@ struct ReformatTargets<'a> {
     data_dev: &'a Path,
     etc_dev: &'a Path,
     preserve_list: &'a [String],
+    backed_up: &'a [String],
     backup_dir: &'a Path,
 }
 
@@ -248,8 +250,8 @@ fn run_destructive_phase(
         });
     }
 
-    let restore_result = restore_all(rootfs, targets.preserve_list, targets.backup_dir)
-        .inspect_err(|_| {
+    let restore_result =
+        restore_all(rootfs, targets.backed_up, targets.backup_dir).inspect_err(|_| {
             let _ = unmount_tracked(mounts);
         })?;
 
@@ -530,6 +532,7 @@ mod tests {
                 data_dev: data,
                 etc_dev: etc,
                 preserve_list: preserve,
+                backed_up: preserve,
                 backup_dir: Path::new("/tmp/does-not-matter"),
             }
         }
