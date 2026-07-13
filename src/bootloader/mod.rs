@@ -482,7 +482,7 @@ mod tests {
 
     #[cfg(feature = "factory-reset")]
     mod truncate_tests {
-        use super::super::truncate_on_char_boundary;
+        use crate::bootloader::truncate_on_char_boundary;
 
         #[test]
         fn returns_input_when_within_limit() {
@@ -506,7 +506,7 @@ mod tests {
 
     #[cfg(feature = "factory-reset")]
     mod factory_reset_failure_tests {
-        use super::super::{
+        use crate::bootloader::{
             BootEnv, BootEnvKey, MAX_FACTORY_RESET_FAILURE_REASON_LEN, MockBootEnv,
         };
         use crate::partition::PartitionName;

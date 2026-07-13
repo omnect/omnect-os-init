@@ -26,6 +26,10 @@ use crate::mode::factory_reset::{
 
 const FACTORY_RESET_BACKUP_DIR: &str = "/tmp/factory_reset/backup";
 
+/// Shared join separator between the retry note and the restore
+/// partial-failure context (also used by `restore_all` in `backup_restore.rs`).
+pub(crate) const CONTEXT_SEPARATOR: &str = ";";
+
 /// ext4 volume labels applied by `reformat_ext4` — distinct from the
 /// `mount_points` path constants, which name mount *locations* not labels.
 const DATA_PARTITION_LABEL: &str = "data";
@@ -84,10 +88,14 @@ fn persist_exhausted_signal(
     status: &FactoryResetStatus,
     boot_env: &mut crate::bootloader::BootEnvState,
 ) {
-    if let Some((part, reason)) = status.exhausted_signal()
-        && let Some(bl) = boot_env.available_mut()
-        && let Err(e) = bl.save_factory_reset_failure(part, reason)
-    {
+    let Some((part, reason)) = status.exhausted_signal() else {
+        return;
+    };
+    let Some(bl) = boot_env.available_mut() else {
+        warn!("factory-reset failure signal exists but boot env is degraded; cannot persist it");
+        return;
+    };
+    if let Err(e) = bl.save_factory_reset_failure(part, reason) {
         warn!("failed to persist factory-reset failure signal: {e}");
     }
 }
@@ -177,12 +185,12 @@ impl ReformatRetryOps for RealReformatOps<'_> {
 }
 
 /// Combine the optional retry note and the optional restore-partial-failure
-/// context into a single `context` string, joined with `";"` — the same
-/// separator `restore_all` uses internally (`backup_restore.rs`). Returns the
-/// lone value when only one is present, or None when neither is.
+/// context into a single `context` string, joined with `CONTEXT_SEPARATOR` —
+/// the same separator `restore_all` uses internally (`backup_restore.rs`).
+/// Returns the lone value when only one is present, or None when neither is.
 fn join_context(retry_note: Option<String>, restore_context: Option<String>) -> Option<String> {
     match (retry_note, restore_context) {
-        (Some(a), Some(b)) => Some(format!("{a};{b}")),
+        (Some(a), Some(b)) => Some(format!("{a}{CONTEXT_SEPARATOR}{b}")),
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
         (None, None) => None,
@@ -227,7 +235,7 @@ fn run_destructive_phase(
 
     if let Some((part, reason)) = report.exhausted {
         // The reformatted partition is still unmountable — restore cannot run.
-        // Report data-loss and carry the typed signal out for run() (§3.5).
+        // Report data-loss and carry the typed signal out for run().
         warn!(
             "factory reset: {part} still unmountable after reformat retry; \
              preserved data lost: {reason}"
@@ -389,7 +397,7 @@ struct RetryReport {
     exhausted: Option<(PartitionName, String)>,
 }
 
-/// Injectable seam over the destructive-phase mount side effects, so the
+/// Injectable abstraction over the destructive-phase mount side effects, so the
 /// bounded-retry control flow is unit-testable without real block devices.
 /// Narrowly scoped to this loop — not a general refactor of the module.
 trait ReformatRetryOps {
@@ -452,8 +460,8 @@ fn resolve_failed_partition(
 /// resolving to a reformatted partition, that partition is re-`mkfs`'d once and
 /// the mount retried. A second failure on the same partition abandons the retry
 /// and is returned in `RetryReport.exhausted` — NOT propagated as `Err`, so the
-/// typed `(partition, reason)` survives out to `run()` (see spec §3.2/§3.5). A
-/// failure resolving to neither reformatted partition propagates immediately.
+/// typed `(partition, reason)` survives out to `run()`. A failure resolving to
+/// neither reformatted partition propagates immediately.
 fn mount_reformatted_with_retry(
     rootfs: &Path,
     targets: &ReformatTargets,

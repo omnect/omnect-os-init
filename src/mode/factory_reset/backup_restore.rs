@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{FactoryResetError, Result};
 use crate::filesystem::CP_CMD;
+use crate::mode::factory_reset::CONTEXT_SEPARATOR;
 
 const SYNC_CMD: &str = "/bin/sync";
 
@@ -68,7 +69,7 @@ pub fn restore_all(
 
     if let Some(error) = last_error {
         Ok(RestoreResult::PartialFailure {
-            context: error_context.join(";"),
+            context: error_context.join(CONTEXT_SEPARATOR),
             error,
         })
     } else {
