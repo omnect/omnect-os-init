@@ -10,7 +10,7 @@ use crate::{
     bootloader::BootEnvKey,
     error::{FactoryResetError, FilesystemError, InitramfsError, Result},
     filesystem::{
-        FsType, MountOptions, PartitionMountSpec, mount_points, mount_tracked_partition,
+        FsType, MountOptions, PartitionMountSpec, mount_points, mount_tracked_partition, paths,
         setup_data_overlay_tracked, setup_etc_overlay_tracked, unmount_tracked,
     },
     mode::{BootContext, factory_reset::backup_restore::RestoreResult},
@@ -394,12 +394,18 @@ fn resolve_failed_partition(
             }
         }
         InitramfsError::Filesystem(FilesystemError::OverlayFailed { target, .. }) => {
-            // OverlayFailed carries the overlay upper/work dir, which lives under the
-            // partition mount point (e.g. mnt/etc/upper, mnt/data/home/upper). Match by
-            // prefix, not exact equality against the mount point.
-            if target.starts_with(rootfs.join(mount_points::DATA_PARTITION)) {
+            // OverlayFailed carries one of two paths, both under the reformatted
+            // partition: the overlay upper/work dir under the partition mount point
+            // (dir-prep failure, e.g. mnt/etc/upper — matched by prefix), or the
+            // overlay mount target itself, rootfs/etc or rootfs/home (mount-syscall
+            // failure — matched by equality).
+            if target.starts_with(rootfs.join(mount_points::DATA_PARTITION))
+                || *target == rootfs.join(paths::HOME)
+            {
                 Some(PartitionName::Data)
-            } else if target.starts_with(rootfs.join(mount_points::ETC_PARTITION)) {
+            } else if target.starts_with(rootfs.join(mount_points::ETC_PARTITION))
+                || *target == rootfs.join(paths::ETC)
+            {
                 Some(PartitionName::Etc)
             } else {
                 None
@@ -619,6 +625,38 @@ mod tests {
             assert_eq!(report.retried, vec![PartitionName::Etc]);
             assert!(report.exhausted.is_none());
             assert_eq!(ops.reformatted, vec![etc.to_path_buf()]);
+        }
+
+        #[test]
+        fn overlay_mount_target_failure_on_etc_resolves_and_retries() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            let etc_overlay_target = Path::new("/rootfs").join(paths::ETC);
+            let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_overlay_target)), Ok(())]);
+            let report = mount_reformatted_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert_eq!(report.retried, vec![PartitionName::Etc]);
+            assert!(report.exhausted.is_none());
+            assert_eq!(ops.reformatted, vec![etc.to_path_buf()]);
+        }
+
+        #[test]
+        fn overlay_mount_target_failure_on_home_resolves_to_data() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            let home_overlay_target = Path::new("/rootfs").join(paths::HOME);
+            let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&home_overlay_target)), Ok(())]);
+            let report = mount_reformatted_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert!(report.exhausted.is_none());
+            assert_eq!(ops.reformatted, vec![data.to_path_buf()]);
         }
 
         #[test]

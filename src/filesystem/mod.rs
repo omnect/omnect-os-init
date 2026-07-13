@@ -30,7 +30,7 @@ pub use self::overlayfs::{
     mount_points, setup_data_overlay, setup_etc_overlay, setup_raw_rootfs_mount,
 };
 #[cfg(feature = "factory-reset")]
-pub(crate) use self::overlayfs::{setup_data_overlay_tracked, setup_etc_overlay_tracked};
+pub(crate) use self::overlayfs::{paths, setup_data_overlay_tracked, setup_etc_overlay_tracked};
 
 use crate::error::FilesystemError;
 

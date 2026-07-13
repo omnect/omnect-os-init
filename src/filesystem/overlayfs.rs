@@ -31,7 +31,7 @@ mod overlay_dirs {
 }
 
 /// Standard paths relative to rootfs
-mod paths {
+pub(crate) mod paths {
     pub const ETC: &str = "etc";
     pub const HOME: &str = "home";
     pub const VAR_LIB: &str = "var/lib";
