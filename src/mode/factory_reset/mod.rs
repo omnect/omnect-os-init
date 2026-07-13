@@ -233,14 +233,12 @@ fn run_destructive_phase(
              preserved data lost: {reason}"
         );
         let _ = unmount_tracked(mounts);
-        return Ok(FactoryResetStatus {
-            status: FactoryResetStatusCode::Error,
-            error: Some(reason.clone()),
-            context: retry_note(&report.retried),
-            paths: targets.preserve_list.to_vec(),
-            data_wiped: true,
-            exhausted_signal: Some((part, reason)),
-        });
+        return Ok(exhausted_status(
+            part,
+            reason,
+            &report.retried,
+            targets.preserve_list,
+        ));
     }
 
     let restore_result =
@@ -252,13 +250,47 @@ fn run_destructive_phase(
 
     log::info!("factory-reset complete");
 
-    let note = retry_note(&report.retried);
-    let status = match restore_result {
+    Ok(restored_status(
+        &report.retried,
+        restore_result,
+        targets.preserve_list,
+    ))
+}
+
+/// Status for the case where the reformatted partition is still unmountable
+/// after the retry — restore never runs, so `data_wiped` and the typed
+/// exhausted signal are the only evidence the preserved data is lost.
+fn exhausted_status(
+    partition: PartitionName,
+    reason: String,
+    retried: &[PartitionName],
+    preserve_list: &[String],
+) -> FactoryResetStatus {
+    FactoryResetStatus {
+        status: FactoryResetStatusCode::Error,
+        error: Some(reason.clone()),
+        context: retry_note(retried),
+        paths: preserve_list.to_vec(),
+        data_wiped: true,
+        exhausted_signal: Some((partition, reason)),
+    }
+}
+
+/// Status for the case where mounts succeeded and restore ran — success or
+/// failure of the restore itself decides `status`, but `data_wiped` is always
+/// `true` since the reformat already happened.
+fn restored_status(
+    retried: &[PartitionName],
+    restore: RestoreResult,
+    preserve_list: &[String],
+) -> FactoryResetStatus {
+    let note = retry_note(retried);
+    match restore {
         RestoreResult::Success => FactoryResetStatus {
             status: FactoryResetStatusCode::Success,
             error: None,
             context: note,
-            paths: targets.preserve_list.to_vec(),
+            paths: preserve_list.to_vec(),
             data_wiped: true,
             exhausted_signal: None,
         },
@@ -266,13 +298,11 @@ fn run_destructive_phase(
             status: FactoryResetStatusCode::Error,
             error: Some(error),
             context: join_context(note, Some(context)),
-            paths: targets.preserve_list.to_vec(),
+            paths: preserve_list.to_vec(),
             data_wiped: true,
             exhausted_signal: None,
         },
-    };
-
-    Ok(status)
+    }
 }
 
 /// Build the status for a failure that occurred during or after the
@@ -711,6 +741,106 @@ mod tests {
         #[test]
         fn neither_is_none() {
             assert_eq!(join_context(None, None), None);
+        }
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod status_assembly_tests {
+        use super::*;
+        use crate::error::FactoryResetError;
+
+        #[test]
+        fn exhausted_status_reports_error_and_wiped_data() {
+            let status = exhausted_status(
+                PartitionName::Etc,
+                "mkfs retry exhausted".into(),
+                &[PartitionName::Etc],
+                &["/p".to_string()],
+            );
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            assert!(status.data_wiped);
+            assert_eq!(
+                status.exhausted_signal,
+                Some((PartitionName::Etc, "mkfs retry exhausted".to_string()))
+            );
+            assert!(
+                status
+                    .context
+                    .as_deref()
+                    .is_some_and(|c| c.contains("reformatted twice"))
+            );
+        }
+
+        #[test]
+        fn restored_status_success_no_retry() {
+            let status = restored_status(&[], RestoreResult::Success, &["/p".to_string()]);
+            assert_eq!(status.status, FactoryResetStatusCode::Success);
+            assert!(status.data_wiped);
+            assert_eq!(status.context, None);
+            assert_eq!(status.exhausted_signal, None);
+        }
+
+        #[test]
+        fn restored_status_success_with_retry_note() {
+            let status = restored_status(
+                &[PartitionName::Etc],
+                RestoreResult::Success,
+                &["/p".to_string()],
+            );
+            assert_eq!(status.status, FactoryResetStatusCode::Success);
+            assert_eq!(
+                status.context.as_deref(),
+                retry_note(&[PartitionName::Etc]).as_deref()
+            );
+        }
+
+        #[test]
+        fn restored_status_partial_failure_no_retry() {
+            let status = restored_status(
+                &[],
+                RestoreResult::PartialFailure {
+                    context: "etc/hostname:restore".into(),
+                    error: "cp failed".into(),
+                },
+                &["/p".to_string()],
+            );
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            assert!(status.data_wiped);
+            assert_eq!(status.error.as_deref(), Some("cp failed"));
+            assert!(
+                status
+                    .context
+                    .as_deref()
+                    .is_some_and(|c| c.contains("etc/hostname:restore"))
+            );
+            assert_eq!(status.exhausted_signal, None);
+        }
+
+        #[test]
+        fn restored_status_partial_failure_joins_retry_and_restore_context() {
+            let status = restored_status(
+                &[PartitionName::Etc],
+                RestoreResult::PartialFailure {
+                    context: "etc/hostname:restore".into(),
+                    error: "cp failed".into(),
+                },
+                &["/p".to_string()],
+            );
+            let note = retry_note(&[PartitionName::Etc]).expect("retry note");
+            assert_eq!(
+                status.context.as_deref(),
+                Some(format!("{note};etc/hostname:restore").as_str())
+            );
+        }
+
+        #[test]
+        fn destructive_phase_failure_status_reports_error_and_wiped_data() {
+            let e = FactoryResetError::MountError("no data partition".into()).into();
+            let status = destructive_phase_failure_status(e, vec!["/p".to_string()]);
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            assert!(status.data_wiped);
+            assert_eq!(status.exhausted_signal, None);
+            assert!(status.error.is_some());
         }
     }
 
