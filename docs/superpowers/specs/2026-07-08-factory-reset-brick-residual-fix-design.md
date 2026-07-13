@@ -214,9 +214,10 @@ trait ReformatRetryOps {
 Control flow: try `mount_all()` (mount + overlay setup). On failure, resolve the failing partition
 to `data`/`etc` — for `FilesystemError::MountFailed { src_path, .. }` by matching `src_path`
 against `targets.data_dev`/`etc_dev`; for `FilesystemError::OverlayFailed { target, .. }` (which
-carries the overlay upper/work directory located *under* the partition mount point, not a device
-path — see §3.6) by matching `target` against the `etc`/`data` mount points with `starts_with`
-(prefix match, not exact equality). Then:
+carries either the overlay upper/work directory under the partition mount point, or the overlay
+mount target `rootfs/etc`/`rootfs/home` — see §3.6) by matching `target` against the `etc`/`data`
+mount points with `starts_with` (prefix match) or against the overlay targets with exact equality.
+Then:
 
 - **not yet retried** → record the partition in `retried`, `reformat()` it, loop once more;
 - **already retried** → set `exhausted = Some((partition, reason))` and **return
@@ -355,13 +356,23 @@ upper/work directories → `FilesystemError::OverlayFailed`, which is **also** `
 failure on a reformatted partition to fall through with no retry and brick exactly as before.
 
 Fix: the retry match in §3.2 treats an `OverlayFailed` that resolves to the `data`/`etc` partition
-identically to `MountFailed` — an empty just-`mkfs`'d filesystem failing overlay-dir creation is
-the same "bad-reformat" signal as a mount failure. `OverlayFailed.target` is the overlay upper/work
-directory, which lives *under* the partition mount point (e.g. `mnt/etc/upper`, `mnt/data/home/upper`),
-never exactly equal to the mount point itself. Resolving it back to a partition therefore matches
-`target` against `mount_points::ETC_PARTITION`/`DATA_PARTITION` with `starts_with` (prefix match),
-not exact equality — and not `src_path` equality against `targets.data_dev`/`etc_dev`, which is
-only for the `MountFailed` arm.
+identically to `MountFailed` — an empty just-`mkfs`'d filesystem failing overlay setup is the same
+"bad-reformat" signal as a mount failure. `OverlayFailed.target` carries one of two different paths,
+depending on which overlay-setup step failed:
+
+- **Dir-prep failure**: the overlay upper/work directory, which lives *under* the partition mount
+  point (e.g. `mnt/etc/upper`, `mnt/data/home/upper`). Resolved by matching `target` against
+  `mount_points::ETC_PARTITION`/`DATA_PARTITION` with `starts_with` (prefix match, not exact
+  equality).
+- **Mount-syscall failure**: the overlay mount target itself, i.e. `rootfs/etc` or `rootfs/home`
+  (`overlayfs.rs`'s `mount_overlay` call sites) — a path that starts with neither mount-point
+  prefix above, so it needs its own case. Resolved by matching `target` for exact equality against
+  `rootfs.join(paths::ETC)` / `rootfs.join(paths::HOME)` (the same private path constants
+  `overlayfs.rs` uses to build the overlay target, exposed at `pub(crate)` visibility so this match
+  has one source of truth instead of a duplicated string literal).
+
+Both sub-cases resolve to the same partition and get the same retry treatment; neither is `src_path`
+equality against `targets.data_dev`/`etc_dev`, which is only for the `MountFailed` arm.
 
 ## 4. Data flow (destructive phase, updated)
 
