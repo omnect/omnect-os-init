@@ -1,0 +1,126 @@
+//! Integration tests for factory-reset: ODS JSON contract and detect fallback.
+
+#![cfg(feature = "factory-reset")]
+
+use omnect_os_init::MockBootEnv;
+use omnect_os_init::bootloader::BootEnvKey;
+use omnect_os_init::mode::BootMode;
+use omnect_os_init::partition::PartitionName;
+use omnect_os_init::runtime::{FactoryResetStatus, FactoryResetStatusCode, OdsStatus};
+
+#[test]
+fn factory_reset_success_status_json() {
+    let status = FactoryResetStatus {
+        status: FactoryResetStatusCode::Success,
+        error: None,
+        context: None,
+        paths: vec!["/etc/omnect/factory-reset.d/".into()],
+        data_wiped: true,
+        exhausted_signal: None,
+    };
+    let mut ods = OdsStatus::new();
+    ods.set_factory_reset(status);
+    let json = serde_json::to_string(&ods).unwrap();
+
+    assert!(
+        json.contains("\"factory_reset\""),
+        "missing factory_reset key: {json}"
+    );
+    assert!(
+        json.contains("\"status\":0"),
+        "status must be bare integer 0: {json}"
+    );
+    assert!(
+        json.contains("\"data_wiped\":true"),
+        "data_wiped missing: {json}"
+    );
+    assert!(
+        json.contains("/etc/omnect/factory-reset.d/"),
+        "preserved path missing: {json}"
+    );
+    assert!(
+        !json.contains("\"error\""),
+        "error must be skipped when None: {json}"
+    );
+    assert!(
+        !json.contains("\"context\""),
+        "context must be skipped when None: {json}"
+    );
+}
+
+#[test]
+fn factory_reset_error_status_json() {
+    let status = FactoryResetStatus {
+        status: FactoryResetStatusCode::Error,
+        error: Some("mkfs retry exhausted".into()),
+        context: Some("etc reformatted twice: initial remount failed".into()),
+        paths: vec!["/etc/omnect/factory-reset.d/".into()],
+        data_wiped: true,
+        exhausted_signal: Some((PartitionName::Etc, "mkfs retry exhausted".into())),
+    };
+    let mut ods = OdsStatus::new();
+    ods.set_factory_reset(status);
+    let json = serde_json::to_string(&ods).unwrap();
+
+    assert!(
+        json.contains("\"status\":2"),
+        "status must be integer 2: {json}"
+    );
+    assert!(json.contains("\"error\":"), "error missing: {json}");
+    assert!(json.contains("\"context\":"), "context missing: {json}");
+    assert!(
+        json.contains("\"data_wiped\":true"),
+        "data_wiped missing: {json}"
+    );
+    assert!(
+        !json.contains("exhausted_signal"),
+        "exhausted_signal must never leak into the ODS contract: {json}"
+    );
+}
+
+#[test]
+fn factory_reset_status_code_serializes_as_integer() {
+    let status = FactoryResetStatus {
+        status: FactoryResetStatusCode::Success,
+        error: None,
+        context: None,
+        paths: vec![],
+        data_wiped: false,
+        exhausted_signal: None,
+    };
+    let mut ods = OdsStatus::new();
+    ods.set_factory_reset(status);
+    let json = serde_json::to_string(&ods).unwrap();
+
+    assert!(
+        json.contains("\"status\":0"),
+        "status must serialize as bare integer, not a string: {json}"
+    );
+}
+
+#[test]
+fn detect_unsupported_mode_falls_back_to_normal() {
+    let mock = MockBootEnv::new().with_env(BootEnvKey::FactoryReset, r#"{"mode":2,"preserve":[]}"#);
+    let mode = BootMode::detect(Some(&mock)).unwrap();
+    assert!(
+        matches!(mode, BootMode::Normal),
+        "unsupported mode 2 must fall back to Normal"
+    );
+
+    let mock = MockBootEnv::new().with_env(BootEnvKey::FactoryReset, r#"{"mode":0,"preserve":[]}"#);
+    let mode = BootMode::detect(Some(&mock)).unwrap();
+    assert!(
+        matches!(mode, BootMode::Normal),
+        "unsupported mode 0 must fall back to Normal"
+    );
+}
+
+#[test]
+fn detect_supported_mode_selects_factory_reset() {
+    let mock = MockBootEnv::new().with_env(BootEnvKey::FactoryReset, r#"{"mode":1,"preserve":[]}"#);
+    let mode = BootMode::detect(Some(&mock)).unwrap();
+    assert!(
+        matches!(mode, BootMode::FactoryReset(_)),
+        "supported mode 1 must select FactoryReset"
+    );
+}
