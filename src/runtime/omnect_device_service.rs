@@ -217,24 +217,6 @@ pub struct FactoryResetStatus {
     /// from a failure after data was already wiped. Always serialized — absence
     /// of the key would itself be a bug (mirrors `OdsStatus.first_boot`).
     pub data_wiped: bool,
-    /// Set when the destructive phase exhausted its reformat retry on a
-    /// partition. Not user-facing status — an internal carrier for the typed
-    /// (partition, reason), read by run() for the bootloader-env write. Never
-    /// serialized to the ODS JSON.
-    #[cfg(feature = "factory-reset")]
-    #[serde(skip)]
-    pub exhausted_signal: Option<(PartitionName, String)>,
-}
-
-#[cfg(feature = "factory-reset")]
-impl FactoryResetStatus {
-    /// The typed exhausted signal, if the destructive phase gave up on a
-    /// partition. Consumed by `run()` to write the bootloader-env failure key.
-    pub fn exhausted_signal(&self) -> Option<(PartitionName, &str)> {
-        self.exhausted_signal
-            .as_ref()
-            .map(|(p, r)| (*p, r.as_str()))
-    }
 }
 
 impl OdsStatus {
@@ -591,35 +573,11 @@ mod tests {
             context: Some("normal".to_string()),
             paths: vec!["/etc/hostname".to_string()],
             data_wiped: true,
-            #[cfg(feature = "factory-reset")]
-            exhausted_signal: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"status\":0"));
         assert!(json.contains("\"paths\""));
-    }
-
-    #[cfg(feature = "factory-reset")]
-    #[test]
-    fn exhausted_signal_is_not_serialized_and_is_readable() {
-        use crate::partition::PartitionName;
-        let status = FactoryResetStatus {
-            status: FactoryResetStatusCode::Error,
-            error: Some("boom".into()),
-            context: None,
-            paths: vec![],
-            data_wiped: true,
-            exhausted_signal: Some((PartitionName::Etc, "mkfs retry exhausted".into())),
-        };
-        // Accessor exposes the typed signal.
-        assert_eq!(
-            status.exhausted_signal(),
-            Some((PartitionName::Etc, "mkfs retry exhausted"))
-        );
-        // #[serde(skip)] keeps it out of the ODS JSON.
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(!json.contains("exhausted_signal"));
     }
 
     #[test]
@@ -638,8 +596,6 @@ mod tests {
                 context: None,
                 paths: vec![],
                 data_wiped: false,
-                #[cfg(feature = "factory-reset")]
-                exhausted_signal: None,
             };
             let json: Value = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
             assert_eq!(json["status"], *expected, "variant {:?}", variant);
@@ -658,8 +614,6 @@ mod tests {
                 context: None,
                 paths: vec![],
                 data_wiped: wiped,
-                #[cfg(feature = "factory-reset")]
-                exhausted_signal: None,
             };
             let json = serde_json::to_string(&s).unwrap();
             assert!(

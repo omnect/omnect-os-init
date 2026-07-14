@@ -5,7 +5,6 @@
 use omnect_os_init::MockBootEnv;
 use omnect_os_init::bootloader::BootEnvKey;
 use omnect_os_init::mode::BootMode;
-use omnect_os_init::partition::PartitionName;
 use omnect_os_init::runtime::{FactoryResetStatus, FactoryResetStatusCode, OdsStatus};
 
 #[test]
@@ -16,7 +15,6 @@ fn factory_reset_success_status_json() {
         context: None,
         paths: vec!["/etc/omnect/factory-reset.d/".into()],
         data_wiped: true,
-        exhausted_signal: None,
     };
     let mut ods = OdsStatus::new();
     ods.set_factory_reset(status);
@@ -56,7 +54,6 @@ fn factory_reset_error_status_json() {
         context: Some("etc reformatted twice: initial remount failed".into()),
         paths: vec!["/etc/omnect/factory-reset.d/".into()],
         data_wiped: true,
-        exhausted_signal: Some((PartitionName::Etc, "mkfs retry exhausted".into())),
     };
     let mut ods = OdsStatus::new();
     ods.set_factory_reset(status);
@@ -72,10 +69,6 @@ fn factory_reset_error_status_json() {
         json.contains("\"data_wiped\":true"),
         "data_wiped missing: {json}"
     );
-    assert!(
-        !json.contains("exhausted_signal"),
-        "exhausted_signal must never leak into the ODS contract: {json}"
-    );
 }
 
 #[test]
@@ -86,7 +79,6 @@ fn factory_reset_status_code_serializes_as_integer() {
         context: None,
         paths: vec![],
         data_wiped: false,
-        exhausted_signal: None,
     };
     let mut ods = OdsStatus::new();
     ods.set_factory_reset(status);

@@ -50,8 +50,8 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
         warn!("Failed to clear factory-reset bootloader var: {e}; proceeding anyway");
     }
 
-    let status = match run_reset(ctx.layout, ctx.rootfs, &config, &mut ctx.ods_status) {
-        Ok(status) => status,
+    let (status, signal) = match run_reset(ctx.layout, ctx.rootfs, &config, &mut ctx.ods_status) {
+        Ok(pair) => pair,
         Err(e) => {
             warn!("Factory reset failed: {e}; continuing with Normal boot");
             let code = match &e {
@@ -65,17 +65,19 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
                 // per-path failures as RestoreResult::PartialFailure and always returns Ok.
                 _ => FactoryResetStatusCode::Error,
             };
-            FactoryResetStatus {
-                status: code,
-                error: Some(e.to_string()),
-                context: None,
-                paths: vec![],
-                data_wiped: false,
-                exhausted_signal: None,
-            }
+            (
+                FactoryResetStatus {
+                    status: code,
+                    error: Some(e.to_string()),
+                    context: None,
+                    paths: vec![],
+                    data_wiped: false,
+                },
+                None,
+            )
         }
     };
-    persist_exhausted_signal(&status, &mut ctx.boot_env);
+    persist_exhausted_signal(signal.as_ref(), &mut ctx.boot_env);
     ctx.ods_status.set_factory_reset(status);
 
     crate::mode::normal::run(ctx)
@@ -85,17 +87,17 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
 /// so the outcome survives even if the ensuing Normal boot halts before
 /// `create_ods_runtime_files`. A degraded env is a no-op.
 fn persist_exhausted_signal(
-    status: &FactoryResetStatus,
+    signal: Option<&ResetFailureSignal>,
     boot_env: &mut crate::bootloader::BootEnvState,
 ) {
-    let Some((part, reason)) = status.exhausted_signal() else {
+    let Some(sig) = signal else {
         return;
     };
     let Some(bl) = boot_env.available_mut() else {
         warn!("factory-reset failure signal exists but boot env is degraded; cannot persist it");
         return;
     };
-    if let Err(e) = bl.save_factory_reset_failure(part, reason) {
+    if let Err(e) = bl.save_factory_reset_failure(sig.partition, &sig.reason) {
         warn!("failed to persist factory-reset failure signal: {e}");
     }
 }
@@ -109,7 +111,7 @@ fn run_reset(
     rootfs: &Path,
     config: &FactoryResetConfig,
     ods_status: &mut OdsStatus,
-) -> Result<FactoryResetStatus> {
+) -> Result<(FactoryResetStatus, Option<ResetFailureSignal>)> {
     let mut mounts: Vec<PathBuf> = Vec::new();
     factory_reset_mount(layout, rootfs, ods_status, &mut mounts).inspect_err(|_| {
         let _ = unmount_tracked(&mut mounts);
@@ -146,8 +148,8 @@ fn run_reset(
             backup_dir: &backup_dir,
         },
     ) {
-        Ok(status) => Ok(status),
-        Err(e) => Ok(destructive_phase_failure_status(e, preserve_list)),
+        Ok(pair) => Ok(pair),
+        Err(e) => Ok((destructive_phase_failure_status(e, preserve_list), None)),
     }
 }
 
@@ -215,7 +217,7 @@ fn run_destructive_phase(
     mounts: &mut Vec<PathBuf>,
     ods_status: &mut OdsStatus,
     targets: ReformatTargets,
-) -> Result<FactoryResetStatus> {
+) -> Result<(FactoryResetStatus, Option<ResetFailureSignal>)> {
     reformat_ext4(targets.data_dev, DATA_PARTITION_LABEL)?;
     reformat_ext4(targets.etc_dev, ETC_PARTITION_LABEL)?;
 
@@ -229,20 +231,17 @@ fn run_destructive_phase(
         mount_reformatted_with_retry(rootfs, &targets, &mut ops)?
     };
 
-    if let Some((part, reason)) = report.exhausted {
+    if let Some(signal) = report.exhausted {
         // The reformatted partition is still unmountable — restore cannot run.
         // Report data-loss and carry the typed signal out for run().
         warn!(
-            "factory reset: {part} still unmountable after reformat retry; \
-             preserved data lost: {reason}"
+            "factory reset: {} still unmountable after reformat retry; \
+             preserved data lost: {}",
+            signal.partition, signal.reason
         );
         let _ = unmount_tracked(mounts);
-        return Ok(exhausted_status(
-            part,
-            reason,
-            &report.retried,
-            targets.preserve_list,
-        ));
+        let status = exhausted_status(&signal, &report.retried, targets.preserve_list);
+        return Ok((status, Some(signal)));
     }
 
     let restore_result =
@@ -254,29 +253,26 @@ fn run_destructive_phase(
 
     log::info!("factory-reset complete");
 
-    Ok(restored_status(
-        &report.retried,
-        restore_result,
-        targets.preserve_list,
+    Ok((
+        restored_status(&report.retried, restore_result, targets.preserve_list),
+        None,
     ))
 }
 
 /// Status for the case where the reformatted partition is still unmountable
-/// after the retry — restore never runs, so `data_wiped` and the typed
-/// exhausted signal are the only evidence the preserved data is lost.
+/// after the retry — restore never runs, so `data_wiped` is the only evidence
+/// the preserved data is lost (the signal itself is carried separately).
 fn exhausted_status(
-    partition: PartitionName,
-    reason: String,
+    signal: &ResetFailureSignal,
     retried: &[PartitionName],
     preserve_list: &[String],
 ) -> FactoryResetStatus {
     FactoryResetStatus {
         status: FactoryResetStatusCode::Error,
-        error: Some(reason.clone()),
+        error: Some(signal.reason.clone()),
         context: retry_note(retried),
         paths: preserve_list.to_vec(),
         data_wiped: true,
-        exhausted_signal: Some((partition, reason)),
     }
 }
 
@@ -296,7 +292,6 @@ fn restored_status(
             context: note,
             paths: preserve_list.to_vec(),
             data_wiped: true,
-            exhausted_signal: None,
         },
         RestoreResult::PartialFailure { context, error } => FactoryResetStatus {
             status: FactoryResetStatusCode::Error,
@@ -304,7 +299,6 @@ fn restored_status(
             context: join_context(note, Some(context)),
             paths: preserve_list.to_vec(),
             data_wiped: true,
-            exhausted_signal: None,
         },
     }
 }
@@ -323,7 +317,6 @@ fn destructive_phase_failure_status(e: InitramfsError, paths: Vec<String>) -> Fa
         context: None,
         paths,
         data_wiped: true,
-        exhausted_signal: None,
     }
 }
 
@@ -390,7 +383,15 @@ struct RetryReport {
     /// Partitions that needed one reformat-and-retry (empty on a clean mount).
     retried: Vec<PartitionName>,
     /// Set when the retry was exhausted: the partition and reason to persist.
-    exhausted: Option<(PartitionName, String)>,
+    exhausted: Option<ResetFailureSignal>,
+}
+
+/// Partition and reason for an unrecoverable reformat/mount failure, carried
+/// out of the destructive phase to `run()` for the bootloader-env write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResetFailureSignal {
+    partition: PartitionName,
+    reason: String,
 }
 
 /// Injectable abstraction over the destructive-phase mount side effects, so the
@@ -479,7 +480,10 @@ fn mount_reformatted_with_retry(
                 if retried.contains(&part) {
                     return Ok(RetryReport {
                         retried,
-                        exhausted: Some((part, e.to_string())),
+                        exhausted: Some(ResetFailureSignal {
+                            partition: part,
+                            reason: e.to_string(),
+                        }),
                     });
                 }
                 let (device, label) = match part {
@@ -639,8 +643,8 @@ mod tests {
             )
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Etc]);
-            let (part, _reason) = report.exhausted.expect("must record exhausted");
-            assert_eq!(part, PartitionName::Etc);
+            let sig = report.exhausted.expect("must record exhausted");
+            assert_eq!(sig.partition, PartitionName::Etc);
         }
 
         #[test]
@@ -755,18 +759,14 @@ mod tests {
 
         #[test]
         fn exhausted_status_reports_error_and_wiped_data() {
-            let status = exhausted_status(
-                PartitionName::Etc,
-                "mkfs retry exhausted".into(),
-                &[PartitionName::Etc],
-                &["/p".to_string()],
-            );
+            let sig = ResetFailureSignal {
+                partition: PartitionName::Etc,
+                reason: "mkfs retry exhausted".into(),
+            };
+            let status = exhausted_status(&sig, &[PartitionName::Etc], &["/p".to_string()]);
             assert_eq!(status.status, FactoryResetStatusCode::Error);
             assert!(status.data_wiped);
-            assert_eq!(
-                status.exhausted_signal,
-                Some((PartitionName::Etc, "mkfs retry exhausted".to_string()))
-            );
+            assert_eq!(status.error.as_deref(), Some("mkfs retry exhausted"));
             assert!(
                 status
                     .context
@@ -781,7 +781,6 @@ mod tests {
             assert_eq!(status.status, FactoryResetStatusCode::Success);
             assert!(status.data_wiped);
             assert_eq!(status.context, None);
-            assert_eq!(status.exhausted_signal, None);
         }
 
         #[test]
@@ -817,7 +816,6 @@ mod tests {
                     .as_deref()
                     .is_some_and(|c| c.contains("etc/hostname:restore"))
             );
-            assert_eq!(status.exhausted_signal, None);
         }
 
         #[test]
@@ -843,7 +841,6 @@ mod tests {
             let status = destructive_phase_failure_status(e, vec!["/p".to_string()]);
             assert_eq!(status.status, FactoryResetStatusCode::Error);
             assert!(status.data_wiped);
-            assert_eq!(status.exhausted_signal, None);
             assert!(status.error.is_some());
         }
     }
@@ -853,21 +850,14 @@ mod tests {
         use super::*;
         use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
 
-        fn status_with_signal(part: PartitionName) -> FactoryResetStatus {
-            FactoryResetStatus {
-                status: FactoryResetStatusCode::Error,
-                error: Some("exhausted".into()),
-                context: None,
-                paths: vec![],
-                data_wiped: true,
-                exhausted_signal: Some((part, "mkfs retry exhausted".into())),
-            }
-        }
-
         #[test]
         fn writes_bootloader_key_when_signal_present() {
+            let sig = ResetFailureSignal {
+                partition: PartitionName::Etc,
+                reason: "mkfs retry exhausted".into(),
+            };
             let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
-            persist_exhausted_signal(&status_with_signal(PartitionName::Etc), &mut env);
+            persist_exhausted_signal(Some(&sig), &mut env);
             let bl = env.available().unwrap();
             assert_eq!(
                 bl.get_env(BootEnvKey::FactoryResetLastError).unwrap(),
@@ -877,10 +867,8 @@ mod tests {
 
         #[test]
         fn no_write_when_no_signal() {
-            let mut status = status_with_signal(PartitionName::Etc);
-            status.exhausted_signal = None;
             let mut env = BootEnvState::Available(Box::new(MockBootEnv::new()));
-            persist_exhausted_signal(&status, &mut env);
+            persist_exhausted_signal(None, &mut env);
             let bl = env.available().unwrap();
             assert_eq!(bl.get_env(BootEnvKey::FactoryResetLastError).unwrap(), None);
         }
@@ -888,12 +876,16 @@ mod tests {
         #[test]
         fn no_panic_on_degraded_env() {
             use crate::error::BootEnvError;
+            let sig = ResetFailureSignal {
+                partition: PartitionName::Data,
+                reason: "mkfs retry exhausted".into(),
+            };
             let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
                 command: "boot-env-tool".into(),
                 reason: "test".into(),
             });
             // Best-effort: degraded env is a no-op, must not panic.
-            persist_exhausted_signal(&status_with_signal(PartitionName::Data), &mut env);
+            persist_exhausted_signal(Some(&sig), &mut env);
         }
     }
 }
