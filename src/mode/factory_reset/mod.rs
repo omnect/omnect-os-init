@@ -184,10 +184,6 @@ impl ReformatRetryOps for RealReformatOps<'_> {
     }
 }
 
-/// Combine the optional retry note and the optional restore-partial-failure
-/// context into a single `context` string, joined with `CONTEXT_SEPARATOR` —
-/// the same separator `restore_all` uses internally (`backup_restore.rs`).
-/// Returns the lone value when only one is present, or None when neither is.
 fn join_context(retry_note: Option<String>, restore_context: Option<String>) -> Option<String> {
     match (retry_note, restore_context) {
         (Some(a), Some(b)) => Some(format!("{a}{CONTEXT_SEPARATOR}{b}")),

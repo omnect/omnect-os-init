@@ -112,7 +112,7 @@ mod tests {
             if let BootMode::FactoryReset(config) = mode {
                 assert_eq!(
                     config.mode,
-                    crate::mode::factory_reset::config::ResetMode::MODE_1
+                    crate::mode::factory_reset::config::ResetMode::Mode1
                 );
                 assert!(config.preserve.is_empty());
             }

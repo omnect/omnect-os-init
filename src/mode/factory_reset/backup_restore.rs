@@ -14,8 +14,7 @@ pub enum RestoreResult {
 }
 
 /// Backup all preserve-list paths from rootfs into backup_dir. Returns the
-/// subset of paths actually backed up (those whose source existed) — the
-/// manifest `restore_all` uses to detect a backup lost before restore.
+/// subset actually backed up (those whose source existed).
 pub fn backup_all(
     rootfs: &Path,
     preserve_list: &[String],
@@ -34,14 +33,9 @@ pub fn backup_all(
 /// Restore all backed-up paths from backup_dir back into rootfs.
 ///
 /// `backed_up` is the manifest returned by `backup_all`. A manifest entry whose
-/// backup is missing at restore time is reported as `PartialFailure` (the
-/// backup was lost between backup and restore), not silently skipped — unlike
-/// a path that was never in the manifest because it never existed on the
-/// device, which is not a failure.
-///
-/// Partial restore failures are accumulated and returned as `RestoreResult::PartialFailure`
-/// rather than aborting mid-restore. This ensures as many paths as possible are restored
-/// even when individual files cannot be copied.
+/// backup is missing at restore time is reported as `PartialFailure`, not
+/// silently skipped. Per-path restore failures are accumulated rather than
+/// aborting mid-restore, so as many paths as possible are restored.
 pub fn restore_all(
     rootfs: &Path,
     backed_up: &[String],

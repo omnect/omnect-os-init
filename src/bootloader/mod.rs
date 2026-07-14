@@ -22,9 +22,8 @@ pub use self::uboot::UBootBootEnv;
 
 pub type Result<T> = std::result::Result<T, BootEnvError>;
 
-/// Upper bound (bytes) on the failure reason stored in the bootloader env by
-/// `save_factory_reset_failure`. grubenv is a fixed ~1024-byte shared block, so
-/// the diagnostic is kept short and human-readable rather than exhaustive.
+/// Upper bound (bytes) on the failure reason stored via `save_factory_reset_failure`.
+/// The bootloader env block is small and shared by all variables, so keep it short.
 #[cfg(feature = "factory-reset")]
 const MAX_FACTORY_RESET_FAILURE_REASON_LEN: usize = 128;
 
@@ -150,10 +149,8 @@ pub trait BootEnv: Send + Sync {
 
     /// Persist an unrecoverable factory-reset reformat/mount failure.
     ///
-    /// Plain text (`"<partition>:<reason>"`), not gzip+base64 like
-    /// `save_fsck_status`: the payload is small and bounded, and an operator
-    /// should be able to read it directly with `fw_printenv`/`grub-editenv list`
-    /// without decoding.
+    /// Stored as plain text `"<partition>:<reason>"`, readable directly with
+    /// `fw_printenv`/`grub-editenv list`.
     #[cfg(feature = "factory-reset")]
     fn save_factory_reset_failure(&mut self, partition: PartitionName, reason: &str) -> Result<()> {
         let reason = truncate_on_char_boundary(reason, MAX_FACTORY_RESET_FAILURE_REASON_LEN);
