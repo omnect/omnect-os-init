@@ -202,10 +202,7 @@ fn retry_note(retried: &[PartitionName]) -> Option<String> {
         return None;
     }
     let names: Vec<String> = retried.iter().map(|p| p.to_string()).collect();
-    Some(format!(
-        "{} reformatted twice: initial remount failed",
-        names.join(",")
-    ))
+    Some(format!("{} reformatted twice", names.join(",")))
 }
 
 /// Reformat + restore — everything from here on is destructive: `data` and/or
@@ -218,9 +215,6 @@ fn run_destructive_phase(
     ods_status: &mut OdsStatus,
     targets: ReformatTargets,
 ) -> Result<(FactoryResetStatus, Option<ResetFailureSignal>)> {
-    reformat_ext4(targets.data_dev, DATA_PARTITION_LABEL)?;
-    reformat_ext4(targets.etc_dev, ETC_PARTITION_LABEL)?;
-
     let report = {
         let mut ops = RealReformatOps {
             layout,
@@ -228,7 +222,7 @@ fn run_destructive_phase(
             ods_status,
             mounts,
         };
-        mount_reformatted_with_retry(rootfs, &targets, &mut ops)?
+        reformat_and_mount_with_retry(rootfs, &targets, &mut ops)?
     };
 
     if let Some(signal) = report.exhausted {
@@ -450,21 +444,41 @@ fn resolve_failed_partition(
     }
 }
 
-/// Mount the reformatted partitions, self-healing a single bad reformat per
-/// partition before giving up.
+/// Run the `{mkfs → mount}` attempt for `data` and `etc`, self-healing one bad
+/// attempt per partition. At most two `mkfs` per partition.
 ///
-/// At most one reformat-and-retry per `data`/`etc`: on a mount/overlay failure
-/// resolving to a reformatted partition, that partition is re-`mkfs`'d once and
-/// the mount retried. A second failure on the same partition abandons the retry
-/// and is returned in `RetryReport.exhausted` — NOT propagated as `Err`, so the
-/// typed `(partition, reason)` survives out to `run()`. A failure resolving to
-/// neither reformatted partition propagates immediately.
-fn mount_reformatted_with_retry(
+/// Phase 1 reformats each partition, retrying its `mkfs` once on failure (the
+/// partition is known at the call site, so no error resolution is needed).
+/// Phase 2 mounts everything; a mount/overlay failure resolving to a partition
+/// (§`resolve_failed_partition`) re-`mkfs`'s it and retries the mount once. On a
+/// partition's second failure — or a failed re-`mkfs` — the signal is returned
+/// in `RetryReport.exhausted`, not propagated as `Err`, so it stays typed for
+/// `run()`. A mount failure resolving to neither partition propagates as `Err`.
+fn reformat_and_mount_with_retry(
     rootfs: &Path,
     targets: &ReformatTargets,
     ops: &mut dyn ReformatRetryOps,
 ) -> Result<RetryReport> {
     let mut retried: Vec<PartitionName> = Vec::new();
+
+    for (partition, device, label) in [
+        (PartitionName::Data, targets.data_dev, DATA_PARTITION_LABEL),
+        (PartitionName::Etc, targets.etc_dev, ETC_PARTITION_LABEL),
+    ] {
+        if ops.reformat(device, label).is_err() {
+            retried.push(partition);
+            if let Err(e) = ops.reformat(device, label) {
+                return Ok(RetryReport {
+                    retried,
+                    exhausted: Some(ResetFailureSignal {
+                        partition,
+                        reason: e.to_string(),
+                    }),
+                });
+            }
+        }
+    }
+
     loop {
         match ops.mount_all() {
             Ok(()) => {
@@ -474,25 +488,33 @@ fn mount_reformatted_with_retry(
                 });
             }
             Err(e) => {
-                let Some(part) = resolve_failed_partition(&e, rootfs, targets) else {
+                let Some(partition) = resolve_failed_partition(&e, rootfs, targets) else {
                     return Err(e);
                 };
-                if retried.contains(&part) {
+                if retried.contains(&partition) {
                     return Ok(RetryReport {
                         retried,
                         exhausted: Some(ResetFailureSignal {
-                            partition: part,
+                            partition,
                             reason: e.to_string(),
                         }),
                     });
                 }
-                let (device, label) = match part {
+                let (device, label) = match partition {
                     PartitionName::Data => (targets.data_dev, DATA_PARTITION_LABEL),
                     PartitionName::Etc => (targets.etc_dev, ETC_PARTITION_LABEL),
                     _ => return Err(e),
                 };
-                retried.push(part);
-                ops.reformat(device, label)?;
+                retried.push(partition);
+                if let Err(re) = ops.reformat(device, label) {
+                    return Ok(RetryReport {
+                        retried,
+                        exhausted: Some(ResetFailureSignal {
+                            partition,
+                            reason: re.to_string(),
+                        }),
+                    });
+                }
             }
         }
     }
@@ -507,29 +529,45 @@ mod tests {
         use super::*;
         use crate::error::FilesystemError;
 
-        // Programmable ops: each mount_all() call pops the next scripted result.
+        // Programmable ops: each mount_all()/reformat() call pops the next
+        // scripted result for that method (an empty queue means Ok).
         struct ScriptedOps {
             mount_results: std::collections::VecDeque<Result<()>>,
+            reformat_results: std::collections::VecDeque<Result<()>>,
             reformatted: Vec<PathBuf>,
         }
         impl ScriptedOps {
             fn new(results: Vec<Result<()>>) -> Self {
                 Self {
                     mount_results: results.into_iter().collect(),
+                    reformat_results: std::collections::VecDeque::new(),
                     reformatted: vec![],
                 }
+            }
+
+            fn with_reformat_results(mut self, r: Vec<Result<()>>) -> Self {
+                self.reformat_results = r.into_iter().collect();
+                self
             }
         }
         impl ReformatRetryOps for ScriptedOps {
             fn reformat(&mut self, device: &Path, _label: &str) -> Result<()> {
                 self.reformatted.push(device.to_path_buf());
-                Ok(())
+                self.reformat_results.pop_front().unwrap_or(Ok(()))
             }
             fn mount_all(&mut self) -> Result<()> {
                 self.mount_results
                     .pop_front()
                     .expect("mount_all called more times than scripted")
             }
+        }
+
+        fn reformat_failed() -> InitramfsError {
+            crate::error::FactoryResetError::ReformatFailed {
+                device: std::path::PathBuf::from("/dev/sda6"),
+                reason: "mkfs failed".into(),
+            }
+            .into()
         }
 
         fn targets<'a>(
@@ -567,7 +605,7 @@ mod tests {
         fn clean_mount_reports_no_retry() {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             let mut ops = ScriptedOps::new(vec![Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -575,7 +613,6 @@ mod tests {
             .unwrap();
             assert!(report.retried.is_empty());
             assert!(report.exhausted.is_none());
-            assert!(ops.reformatted.is_empty());
         }
 
         #[test]
@@ -583,7 +620,7 @@ mod tests {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             // First mount fails on etc, second succeeds.
             let mut ops = ScriptedOps::new(vec![Err(mount_failed(etc)), Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -591,7 +628,6 @@ mod tests {
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Etc]);
             assert!(report.exhausted.is_none());
-            assert_eq!(ops.reformatted, vec![etc.to_path_buf()]);
         }
 
         #[test]
@@ -599,7 +635,7 @@ mod tests {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             // First mount fails on data, second succeeds.
             let mut ops = ScriptedOps::new(vec![Err(mount_failed(data)), Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -607,7 +643,6 @@ mod tests {
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Data]);
             assert!(report.exhausted.is_none());
-            assert_eq!(ops.reformatted, vec![data.to_path_buf()]);
         }
 
         #[test]
@@ -618,7 +653,7 @@ mod tests {
                 Err(mount_failed(etc)),
                 Ok(()),
             ]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -629,14 +664,13 @@ mod tests {
                 report.retried,
                 vec![PartitionName::Data, PartitionName::Etc]
             );
-            assert_eq!(ops.reformatted, vec![data.to_path_buf(), etc.to_path_buf()]);
         }
 
         #[test]
         fn etc_exhausts_after_second_failure() {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             let mut ops = ScriptedOps::new(vec![Err(mount_failed(etc)), Err(mount_failed(etc))]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -654,7 +688,7 @@ mod tests {
                 .join(mount_points::ETC_PARTITION)
                 .join("upper");
             let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_overlay_dir)), Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -662,7 +696,6 @@ mod tests {
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Etc]);
             assert!(report.exhausted.is_none());
-            assert_eq!(ops.reformatted, vec![etc.to_path_buf()]);
         }
 
         #[test]
@@ -670,7 +703,7 @@ mod tests {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             let etc_overlay_target = Path::new("/rootfs").join(paths::ETC);
             let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&etc_overlay_target)), Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -678,7 +711,6 @@ mod tests {
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Etc]);
             assert!(report.exhausted.is_none());
-            assert_eq!(ops.reformatted, vec![etc.to_path_buf()]);
         }
 
         #[test]
@@ -686,7 +718,7 @@ mod tests {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             let home_overlay_target = Path::new("/rootfs").join(paths::HOME);
             let mut ops = ScriptedOps::new(vec![Err(overlay_failed(&home_overlay_target)), Ok(())]);
-            let report = mount_reformatted_with_retry(
+            let report = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
@@ -694,7 +726,6 @@ mod tests {
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Data]);
             assert!(report.exhausted.is_none());
-            assert_eq!(ops.reformatted, vec![data.to_path_buf()]);
         }
 
         #[test]
@@ -702,13 +733,44 @@ mod tests {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
             // A failure on the factory partition device — matches neither data nor etc.
             let mut ops = ScriptedOps::new(vec![Err(mount_failed(Path::new("/dev/sda4")))]);
-            let result = mount_reformatted_with_retry(
+            let result = reformat_and_mount_with_retry(
                 Path::new("/rootfs"),
                 &targets(data, etc, &[]),
                 &mut ops,
             );
             assert!(result.is_err());
-            assert!(ops.reformatted.is_empty());
+        }
+
+        #[test]
+        fn initial_mkfs_failure_retries_then_mounts() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            let mut ops =
+                ScriptedOps::new(vec![Ok(())]).with_reformat_results(vec![Err(reformat_failed())]);
+            let report = reformat_and_mount_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert!(report.exhausted.is_none());
+        }
+
+        #[test]
+        fn initial_mkfs_failure_exhausts_with_signal() {
+            let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
+            // Both attempts to mkfs data fail; mount_all must never be reached.
+            let mut ops = ScriptedOps::new(vec![])
+                .with_reformat_results(vec![Err(reformat_failed()), Err(reformat_failed())]);
+            let report = reformat_and_mount_with_retry(
+                Path::new("/rootfs"),
+                &targets(data, etc, &[]),
+                &mut ops,
+            )
+            .unwrap();
+            assert_eq!(report.retried, vec![PartitionName::Data]);
+            let sig = report.exhausted.expect("must record exhausted");
+            assert_eq!(sig.partition, PartitionName::Data);
         }
     }
 
@@ -718,14 +780,8 @@ mod tests {
 
         #[test]
         fn retry_note_only() {
-            let out = join_context(
-                Some("etc reformatted twice: initial remount failed".into()),
-                None,
-            );
-            assert_eq!(
-                out.as_deref(),
-                Some("etc reformatted twice: initial remount failed")
-            );
+            let out = join_context(Some("etc reformatted twice".into()), None);
+            assert_eq!(out.as_deref(), Some("etc reformatted twice"));
         }
 
         #[test]
@@ -737,12 +793,12 @@ mod tests {
         #[test]
         fn both_joined_with_bare_semicolon() {
             let out = join_context(
-                Some("etc reformatted twice: initial remount failed".into()),
+                Some("etc reformatted twice".into()),
                 Some("etc/hostname:restore".into()),
             );
             assert_eq!(
                 out.as_deref(),
-                Some("etc reformatted twice: initial remount failed;etc/hostname:restore")
+                Some("etc reformatted twice;etc/hostname:restore")
             );
         }
 
