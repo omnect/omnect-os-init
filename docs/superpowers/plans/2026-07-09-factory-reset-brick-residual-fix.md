@@ -1,5 +1,19 @@
 # Factory Reset mkfs-Corruption Brick Residual Fix — Implementation Plan
 
+> **Status: executed, then partly superseded by PR review.** This is the original build plan. Two
+> later review-driven changes replaced parts of Tasks 3–6, so their code blocks below no longer
+> match the shipped code. The authoritative current design is the spec
+> (`docs/superpowers/specs/2026-07-08-factory-reset-brick-residual-fix-design.md`). The changes:
+> - **Signal carrier (was Task 3/5/6):** the failure signal is no longer a `#[serde(skip)]`
+>   `exhausted_signal` field on `FactoryResetStatus`. It is a named `ResetFailureSignal` returned
+>   alongside the status (`run_reset`/`run_destructive_phase` return
+>   `(FactoryResetStatus, Option<ResetFailureSignal>)`). See spec §3.5.
+> - **Retry model (was Task 4/5):** the retry covers the whole `{mkfs → mount}` step, not just the
+>   mount. A `mkfs` failure is retried and signalled too. The function is `reformat_and_mount_with_retry`
+>   (two phases: reformat, then mount), not `mount_reformatted_with_retry`. See spec §0/§3.2/§4.
+>
+> Read the spec, not the Task 3–6 code blocks, for what the code does now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop a factory reset from silently bricking the device when a freshly reformatted `data`/`etc` partition is unmountable, by self-healing with a bounded reformat retry and persisting a diagnosable failure signal to the bootloader environment.
