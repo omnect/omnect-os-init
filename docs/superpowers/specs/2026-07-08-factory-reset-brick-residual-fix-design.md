@@ -8,35 +8,29 @@
 > local/untracked). Corrections from that review are folded in directly below; the one substantive
 > open question it raised was resolved by the team on 2026-07-09 (§0).
 
-## 0. Self-heal mechanism — `{mkfs → mount}` retry per partition
+## 0. Self-heal mechanism — retry `mkfs`, always mount, signal on failure
 
-The self-heal retries the whole `{mkfs → mount}` step per partition, not only the mount. A partition
-attempt is: `mkfs.ext4` the partition, then mount it (with its overlay). The attempt fails if the
-`mkfs` itself fails, or if the mount/overlay after a successful `mkfs` fails. A failed attempt gets
-one more full attempt — a second `mkfs`, then mount. After two failed attempts the partition is
-exhausted: the failure is persisted (§3.1/§3.5) and boot continues (§2.2). At most two `mkfs` per
-partition, so the loop always terminates.
+Per partition (`data`, `etc`): `mkfs.ext4` it; on a `mkfs` failure, retry the `mkfs` once — at most
+two `mkfs` per partition. Every `mkfs` failure is logged with `warn!`, so a failure the retry heals
+still shows up (an early sign of failing storage). The `mkfs` step never ends the reset on its own:
+after the reformats, the mount is **always** attempted. The mount is the real gate:
 
-Why the `mkfs` step is inside the retry, not just the mount:
+- mount succeeds → the reset proceeds (restore, then boot), even if a `mkfs` reported errors earlier
+  (the filesystem turned out usable);
+- mount/overlay fails on `data`/`etc` → the partition is unusable; record the failure signal
+  (§3.1/§3.5) and give up. Boot still continues to Normal (§2.2).
 
-- A failing `mkfs` is detected (non-zero exit). Proceeding to mount a partition whose `mkfs` just
-  failed is pointless — the mount fails too. A `mkfs` failure must retry the `mkfs`, not fall
-  through to a mount.
-- The bad-block/FTL-remap case fits a `mkfs` write failure directly: `omnect-os-init` runs on eMMC,
-  NVMe, and SD-card storage in the field (`meta-omnect` `doc/PHYTEC.md` eMMC, `doc/WELOTEC.md`
-  NVMe), all with a flash-translation layer that can remap bad blocks — a second `mkfs` write to the
-  same logical blocks can land on different physical media if the first write marked a block bad.
-- The mkfs-succeeded-but-unmountable case is still covered; it is the other way an attempt can fail.
+**A mount failure is not re-`mkfs`'d.** Re-running a `mkfs` the kernel already accepted (exit 0)
+cannot heal a mount/overlay failure — that is a kernel/overlay-option problem or genuinely dead
+storage, not something a second identical write fixes. Retry is scoped to the `mkfs` step; the mount
+decides the rest. A plain non-destructive mount retry is also not a stage: mount is read-only
+against the on-disk state, so retrying it without another write changes nothing.
 
-A plain (non-destructive) mount retry is not a separate stage: mount is read-only against the
-on-disk state, so retrying it without another write changes nothing.
-
-**Revises the earlier decision (2026-07-14).** An earlier version of this section (2026-07-09)
-triggered the re-`mkfs` only on a mount failure and left the initial `mkfs` outside the retry. A
-genuine `mkfs` failure was then neither retried nor signalled: it propagated to a `data_wiped`
-status and fell through to a normal boot that tried to mount the failed partition. PR-review
-feedback (mlilien) flagged this. The `{mkfs → mount}` attempt model above replaces that mount-only
-trigger.
+**History.** Earlier versions (2026-07-09 and 2026-07-14) triggered a re-`mkfs` on a mount failure.
+PR review (mlilien, JanZachmann) found that unrealistic — a `mkfs` that exited 0 leaves nothing a
+second identical `mkfs` would change. The value of this fix is the diagnosable signal, not the
+re-`mkfs`. The model above scopes retry to the `mkfs` step, always attempts the mount, and logs
+every `mkfs` failure.
 
 ## 1. Problem
 
@@ -76,42 +70,40 @@ because the fix requires a design decision rather than a triage-time patch.
 
 Two changes, layered:
 
-1. **Self-heal**: retry the `{mkfs → mount}` step per partition. If a partition's `mkfs` fails, or
-   if the mount/overlay after a successful `mkfs` fails, that partition gets one more full attempt
-   (a second `mkfs`, then mount). This satisfies "must never block boot" for the dominant case (a
-   bad reformat, not dead hardware). See §0 for the attempt model.
-2. **Defense in depth**: if the retry is also exhausted, persist a compact failure signal to the
+1. **Self-heal**: retry a failed `mkfs` once per partition (log every `mkfs` failure), then always
+   attempt the mount. The mount decides: success continues the reset; a mount/overlay failure on
+   `data`/`etc` gives up. See §0.
+2. **Defense in depth**: on a mount failure that gives up, persist a compact failure signal to the
    bootloader environment *before* handing off to `normal::run`, mirroring the existing
    `save_fsck_status` pattern (`bootloader/mod.rs:98-106`) that survives even a later halt. This
-   does not by itself prevent the halt in the exhausted-retry case — see §2.1.
+   does not by itself prevent the halt — see §2.2.
 
 ### 2.1 Alternatives considered
 
 | Option | Verdict | Why |
 |---|---|---|
-| Re-`mkfs` per `{mkfs → mount}` attempt, retry once | **Adopted** (§0) | Covers both a `mkfs` write failure and a mkfs-succeeded-but-unmountable result; the second `mkfs` write can heal a bad-block/FTL-remap case on the eMMC/NVMe/SD storage this runs on |
-| Re-`mkfs` only on mount failure (`mkfs` outside the retry) | **Rejected** (§0) | Leaves a genuine `mkfs` failure neither retried nor signalled, and pointlessly falls through to a mount of the failed partition — the earlier 2026-07-09 design, replaced |
-| Plain mount retry (no re-mkfs), retry once | **Rejected as sole mechanism** (§0) | Mount is read-only, so retrying it after a failed write changes nothing; does not cover the metadata-not-committed or bad-block-remap cases |
-| New degraded fallback boot mode (mount `etc` read-only from factory defaults, skip the overlay) | **Out of scope**, deferred | Solves a different problem (repairable-vs-not signaling on genuinely dead storage) than "must not brick on a bad reformat"; a real feature with its own design (new mode-like path, new `create_ods_runtime_files`/`switch_root` interaction), not a fix-sized change |
-| Persist `data_wiped` status to bootloader env before handoff, alone | **Adopted as a layer, not standalone** | Makes the outcome visible but does not itself stop the halt; needed regardless once retries are also exhausted |
+| Retry `mkfs` on a `mkfs` failure; always mount; signal on mount failure | **Adopted** (§0) | A failed `mkfs` is worth one retry (transient/bad-block write); the mount is the real gate and is always attempted; a mount failure is signalled, not blindly re-`mkfs`'d |
+| Re-`mkfs` on a mount failure too | **Rejected** (§0) | A `mkfs` that exited 0 leaves nothing a second identical `mkfs` would change; a mount failure is a kernel/overlay-option or dead-storage problem — flagged by mlilien/JanZachmann |
+| Plain mount retry (non-destructive), retry once | **Rejected** (§0) | Mount is read-only against the on-disk state, so retrying it without another write changes nothing |
+| New degraded fallback boot mode (mount `etc` read-only from factory defaults, skip the overlay) | **Out of scope**, deferred | Solves a different problem (repairable-vs-not signaling on genuinely dead storage); a real feature with its own design (new mode-like path, new `create_ods_runtime_files`/`switch_root` interaction), not a fix-sized change |
+| Persist `data_wiped` status to bootloader env before handoff, alone | **Adopted as a layer, not standalone** | Makes the outcome visible but does not itself stop the halt; needed regardless |
 
-### 2.2 Terminal fallback (retry exhausted)
+### 2.2 Terminal fallback (mount gives up)
 
-If both attempts for a partition fail (two `mkfs`), this is treated as genuine hardware failure, not
-a software defect in the reset sequence — no further `mkfs` attempt is expected to help. The
-bootloader-env failure signal (§3.1) is written, and the code path is allowed to continue into
-`normal::run`, which will still hit `MountFailed`/`FsckFailed` → `Fatal` and halt. This residual is
-accepted: it is now a real storage-hardware fault, and the improvement is that the failure is
-diagnosable (`fw_printenv`/`grub-editenv list` shows the signal) rather than silent. Inventing
-further in-initramfs fallback behavior for this case is out of scope (see the deferred fallback boot
-mode above).
+When the mount fails on a reformatted `data`/`etc` partition, this is treated as genuine hardware
+failure — no further `mkfs` is expected to help. The bootloader-env failure signal (§3.1) is
+written, and the code path continues into `normal::run`, which will hit `MountFailed`/`FsckFailed` →
+`Fatal` and halt. This residual is accepted: it is a real storage-hardware fault, and the
+improvement is that the failure is diagnosable (`fw_printenv`/`grub-editenv list` shows the signal)
+rather than silent. Inventing further in-initramfs fallback behavior is out of scope (see the
+deferred fallback boot mode above).
 
 ### 2.3 Partition scope
 
-Applies symmetrically to both `data` and `etc` — `run_destructive_phase` reformats and remounts
-both, and `normal::run`'s remount hits the identical `MountFailed → Fatal` halt for either one. The
-"known-good empty state" for `data` is trivially the freshly-reformatted empty filesystem (no
-factory-seed step, unlike `etc`).
+Applies symmetrically to both `data` and `etc` — `run_destructive_phase` reformats and mounts both,
+and `normal::run`'s remount hits the identical `MountFailed → Fatal` halt for either one. The
+"known-good empty state" for `data` is the freshly-reformatted empty filesystem (no factory-seed
+step, unlike `etc`).
 
 ## 3. Component changes
 
@@ -163,44 +155,37 @@ comfortably fit a `mount(2)`/`mkfs` error string within typical grubenv/uboot-en
 
 ### 3.2 `src/mode/factory_reset/mod.rs`
 
-`run_destructive_phase` changes from a single `factory_reset_mount` call after reformatting to a
-bounded reformat-retry loop.
-
-**Correction from review:** the original draft had this function return `Result<()>` and take no
-access to the bootloader env, but then described both writing to the bootloader env (§3.1) and
-setting a `context` note on *success* (§3.3) as if they happened here — neither is possible with
-that signature. Fixed by returning a `RetryReport` and moving the actual bootloader-env write up
-into `run()` (§3.5), which is the only place that owns `ctx.boot_env`.
+`run_destructive_phase` reformats `data`/`etc` (each with one `mkfs` retry), then mounts once, via
+`reformat_and_mount_with_retry`. The function returns a `RetryReport` — not the bootloader-env write
+itself — so `run()` (§3.5), the only place that owns `ctx.boot_env`, does the write.
 
 ```rust
-/// Outcome of the `{mkfs → mount}` retry loop, carried back so the caller can
-/// set the success `context` note (§3.3) and, on failure, the bootloader-env
+/// Outcome of the reformat+mount, carried back so the caller can set the
+/// success `context` note (§3.3) and, on a mount failure, the bootloader-env
 /// signal (§3.5).
 struct RetryReport {
-    /// Partitions that needed a second attempt (empty on a clean first attempt).
+    /// Partitions whose `mkfs` failed at least once (empty on clean reformats).
     retried: Vec<PartitionName>,
-    /// Set when both attempts for a partition failed: the signal to persist.
+    /// Set when the mount failed on a `data`/`etc` partition: the signal to persist.
     exhausted: Option<ResetFailureSignal>,
 }
 
-/// Run the `{mkfs → mount}` attempt for `data` and `etc`, self-healing one bad
-/// attempt per partition before giving up.
-///
-/// Each partition gets at most two `mkfs` attempts. An attempt fails if the
-/// `reformat()` fails, or if the following `mount_all()` (mount or overlay
-/// setup) fails and resolves to that partition (§3.6). On the second failure of
-/// the same partition the loop abandons it and returns the signal in
-/// `RetryReport.exhausted` — not `Err` (see §2.2/§0 and the boxed note below).
+/// Reformat `data` and `etc`, then mount. A failed `mkfs` is retried once per
+/// partition (every failure logged); a `mkfs` that fails twice does not give up
+/// — the mount is still attempted. A mount/overlay failure resolving to
+/// `data`/`etc` returns that partition in `RetryReport.exhausted` (not `Err`, so
+/// the typed signal survives to `run()`, §3.5); a failure resolving to neither
+/// (e.g. `factory`) propagates as `Err`.
 ///
 /// Does NOT take `boot_env` — persistence happens in `run()` (§3.5).
-fn mount_reformatted_with_retry(
+fn reformat_and_mount_with_retry(
     rootfs: &Path,
     targets: &ReformatTargets,
     ops: &mut dyn ReformatRetryOps,
 ) -> Result<RetryReport> { /* ... */ }
 
-/// Seam over the reformat/mount side effects, so the bounded-retry control flow
-/// is unit-testable without real block devices. Scoped to this loop (see §5,
+/// Seam over the reformat/mount side effects, so the control flow is
+/// unit-testable without real block devices. Scoped to this function (see §5,
 /// hardening item 7).
 trait ReformatRetryOps {
     fn reformat(&mut self, device: &Path, label: &str) -> Result<()>;
@@ -208,15 +193,14 @@ trait ReformatRetryOps {
 }
 ```
 
-Control flow, two phases (`mkfs` is per-partition, the mount is holistic, so they cannot be one
-uniform step without re-`mkfs`-ing a good partition):
+Control flow, two phases (`mkfs` is per-partition, the mount is holistic):
 
-1. **Reformat phase.** `reformat()` each of `data` and `etc`. If a partition's `mkfs` fails, retry
-   that partition's `mkfs` once and record it in `retried`; a second `mkfs` failure returns
-   `exhausted` for that partition. The partition is known at the call site here, so no error
-   resolution is needed.
-2. **Mount phase.** `mount_all()` (mount + overlay setup). On failure, resolve the partition via
-   `resolve_failed_partition`:
+1. **Reformat phase.** `reformat()` each of `data` and `etc`. On a `mkfs` failure: `warn!`, record
+   the partition in `retried`, retry the `mkfs` once; a second failure only `warn!`s — it does NOT
+   return early. The mount is always attempted next (the filesystem may be usable, and the mount is
+   the real gate).
+2. **Mount phase.** `mount_all()` (mount + overlay setup) once. On failure, resolve the partition
+   via `resolve_failed_partition`:
    - `FilesystemError::MountFailed { src_path, .. }` → match `src_path` against
      `targets.data_dev`/`etc_dev`.
    - `FilesystemError::OverlayFailed { target, .. }` → `target` is either the overlay upper/work dir
@@ -225,13 +209,12 @@ uniform step without re-`mkfs`-ing a good partition):
      equality against the overlay targets.
 
    Then:
-   - **not yet retried** → record the partition in `retried`, re-`mkfs` it, retry the mount;
-   - **already retried** (or the re-`mkfs` fails) → set
-     `exhausted = Some(ResetFailureSignal { partition, reason })` and **return
-     `Ok(RetryReport{ retried, exhausted })`** — do *not* propagate `Err` (see the boxed note below);
-   - **resolves to neither** (`factory`, or an unresolvable path) → propagate the `Err` immediately.
+   - **resolves to `data`/`etc`** → `exhausted = Some(ResetFailureSignal { partition, reason })` and
+     **return `Ok(RetryReport{ retried, exhausted })`** — no re-`mkfs`, and *not* `Err` (see the
+     boxed note below);
+   - **resolves to neither** (`factory`, or an unresolvable path) → propagate the `Err`.
 
-At most two `mkfs` per partition, so the loop always terminates.
+At most two `mkfs` per partition; the mount is attempted exactly once.
 
 **Why the exhausted case returns `Ok`, not `Err`.** The signal must reach `run()` as *structured*
 data (a typed `PartitionName` + reason) so `save_factory_reset_failure` (§3.1) can be called — that
@@ -274,7 +257,7 @@ out, which is what necessitated the `RetryReport` change above.
 {
   "factory_reset": {
     "status": 0,
-    "context": "etc reformatted twice: initial remount failed",
+    "context": "etc reformatted twice",
     "paths": ["..."],
     "data_wiped": true
   }
@@ -291,8 +274,8 @@ string into the same field when a preserved path fails to restore. If a retry ha
 subsequent restore has a partial failure, both messages are relevant and neither should silently
 overwrite the other: join them with **`";"`** — the same separator `restore_all` already uses
 internally for its own multi-path context, not `"; "` (with a space) — e.g.
-`"etc reformatted twice: initial remount failed;etc/hostname:restore"`, falling back to whichever
-one is present when only one occurred.
+`"etc reformatted twice;etc/hostname:restore"`, falling back to whichever one is present when only
+one occurred.
 
 ### 3.4 `src/error.rs`
 
@@ -375,16 +358,14 @@ run_destructive_phase:
   report = reformat_and_mount_with_retry():
     phase 1 — reformat: for part in {data, etc}:
       ops.reformat(part)
-        Err → record part in `retried`; ops.reformat(part) once more
-          Err again → exhausted: Some(ResetFailureSignal{part, reason}); done
-    phase 2 — mount: loop:
+        Err → warn!; record part in `retried`; ops.reformat(part) once more
+          Err again → warn! only — do NOT give up; the mount is still attempted
+    phase 2 — mount ONCE:
       ops.mount_all()   (mount + overlay)
         Ok → RetryReport{ retried, exhausted: None }
-        Err(MountFailed{src_path} | OverlayFailed{target}) resolving to data/etc:
-          not yet retried → record in `retried`; ops.reformat(part)
-              (re-mkfs Err → exhausted: Some(signal)); retry mount_all()
-          already retried → exhausted: Some(ResetFailureSignal{part, reason})
-        Err(...) resolving to factory/unknown → propagate Err (no retry, no signal)
+        Err(MountFailed{src_path} | OverlayFailed{target}) resolving to data/etc →
+          exhausted: Some(ResetFailureSignal{part, reason})   (NO re-mkfs)
+        Err(...) resolving to factory/unknown → propagate Err (no signal)
   match report.exhausted:
     Some(signal) → build failure status (Error, data_wiped:true, paths);
                    skip restore_all; return (status, Some(signal))
@@ -399,10 +380,10 @@ run():
   ctx.ods_status.set_factory_reset(status)
   → mode::normal::run(ctx)  [always, unchanged]
     mount_remaining_partitions:
-      - if self-heal succeeded above: mounts cleanly, boots normally
-      - if both attempts were exhausted above: hits the same fault again →
+      - mount succeeded above → mounts cleanly, boots normally
+      - mount gave up above → hits the same fault again →
         MountFailed/FsckFailed → Fatal → halt (accepted residual, see §2.2;
-        bootloader env now holds the diagnosable failure signal from this boot)
+        bootloader env holds the diagnosable signal from this boot)
 ```
 
 ## 5. Hardening-item disposition
