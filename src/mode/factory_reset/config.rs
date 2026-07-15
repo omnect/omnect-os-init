@@ -11,24 +11,23 @@ const PRESERVE_LIST_MANDATORY: &str = "/etc/omnect/factory-reset.d/";
 const KEY_APPLICATIONS: &str = "applications";
 const KEY_PATHS: &str = "paths";
 
-/// The only factory-reset mode currently supported (backup / reformat / restore).
-const SUPPORTED_RESET_MODE: u32 = 1;
-
 /// Validated factory-reset mode. Only `Mode1` is representable; any other value
 /// is rejected at deserialize time, so an unsupported trigger never reaches the
-/// reset sequence.
+/// reset sequence. The discriminant is the on-wire mode number.
+#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u32")]
 pub enum ResetMode {
-    Mode1,
+    Mode1 = 1,
 }
 
 impl TryFrom<u32> for ResetMode {
     type Error = String;
     fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
-        match value {
-            SUPPORTED_RESET_MODE => Ok(ResetMode::Mode1),
-            other => Err(format!("factory reset mode {other} is not supported")),
+        if value == ResetMode::Mode1 as u32 {
+            Ok(ResetMode::Mode1)
+        } else {
+            Err(format!("factory reset mode {value} is not supported"))
         }
     }
 }
