@@ -77,11 +77,12 @@ flowchart TD
         FCLEAR["clear factory-reset\nbootloader var (best-effort)"] --> FMOUNT["mount factory(ro) + etc(rw) + data(rw)\n+ overlays"]
         FMOUNT --> FBACKUP["build_preserve_list()\nbackup_all() → /tmp/factory_reset/backup"]
         FBACKUP --> FUMOUNT1["umount"]
-        FUMOUNT1 --> FFORMAT["reformat_ext4(data)\nreformat_ext4(etc)"]
-        FFORMAT --> FREMOUNT["re-mount etc(rw) + data(rw)\n+ overlays — no factory"]
-        FREMOUNT --> FRESTORE["restore_all()"]
+        FUMOUNT1 --> FFORMAT["reformat_and_mount_with_retry()\nmkfs data/etc (1 retry each, warn on fail)\nthen mount once — the gate"]
+        FFORMAT -->|"mount ok"| FRESTORE["restore_all()"]
+        FFORMAT -->|"mount fails on data/etc"| FSIGNAL["record failure signal\n→ bootloader env (in run())"]
         FRESTORE --> FUMOUNT2["umount"]
         FUMOUNT2 --> FSTATUS["ods_status.set_factory_reset(...)\nsuccess or error — never blocks boot"]
+        FSIGNAL --> FSTATUS
     end
     FSTATUS --> MREM
 
@@ -157,11 +158,41 @@ including degraded boot.
 
 Enabled by the `factory-reset` feature. `BootMode::detect()` reads the `factory-reset`
 bootloader env key; a present, valid-JSON value dispatches to `mode::factory_reset::run()`
-instead of `mode::normal::run()`. The reset sequence (mount → backup → reformat →
+instead of `mode::normal::run()`. The reset sequence (mount → backup → reformat → mount →
 restore) always completes with a `FactoryResetStatus` recorded in the ODS status JSON —
 success or error — and then falls through into the same `mode::normal::run()` path a
 normal boot takes (`MREM` onward), so a failed or unsupported reset never blocks the
 device from booting: `FactoryResetError` is classified as `ContinueDegraded`.
+
+**Factory reset — reformat/mount retry (`FFORMAT`)**
+
+Inside `reformat_and_mount_with_retry`, each of `data`/`etc` is `mkfs`'d with one retry on
+failure, then the mount is attempted once as the deciding step. A `mkfs` that fails twice
+does not give up — the mount is still tried (the filesystem may be usable, and the mount is
+the real gate). A mount failure on `data`/`etc` is recorded as a bootloader-env signal
+(`omnect_factory_reset_last_error`), so even if the following Normal boot halts on the same
+partition the cause is still readable (`fw_printenv` / `grub-editenv list`). A mount failure
+is not re-`mkfs`'d: re-running a `mkfs` the kernel already accepted cannot heal it.
+
+```mermaid
+flowchart TD
+    RF["mkfs(data), mkfs(etc)\none retry each on failure\nwarn! on every mkfs failure"] --> MNT{"mount + overlays\n(once)"}
+    MNT -->|ok| OKP["reset proceeds\nrestore → boot"]
+    MNT -->|"fails on data/etc"| SIG["write bootloader-env signal\nomnect_factory_reset_last_error"]
+    SIG --> GIVEUP["give up → Normal boot\n→ Fatal → halt (diagnosable)"]
+    MNT -->|"fails on factory/unknown"| PROP["propagate error\nno signal"]
+```
+
+| mkfs | mount | 2nd mkfs? | `warn!` | bootloader signal | ODS status | boot |
+|------|-------|-----------|---------|-------------------|------------|------|
+| ok | ok | no | no | no | `Success` | normal |
+| 1× fail, then ok | ok | yes | yes | no | `Success` + note | normal |
+| 2× fail | ok | yes | yes | no | `Success` + note | normal |
+| 2× fail | fails | yes | yes | **yes** | `Error` | halt |
+| ok | fails (data/etc) | no | yes | **yes** | `Error` | halt |
+
+The `mkfs` is retried only on a `mkfs` failure; the mount is always attempted and is the gate;
+a mount failure is recorded as a diagnosable signal rather than re-`mkfs`'d.
 
 
 ## Building
