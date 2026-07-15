@@ -449,10 +449,10 @@ fn resolve_failed_partition(
 ///
 /// Phase 1 reformats each partition, retrying its `mkfs` once on failure (the
 /// partition is known at the call site, so no error resolution is needed).
-/// Phase 2 mounts everything; a mount/overlay failure resolving to a partition
-/// (§`resolve_failed_partition`) re-`mkfs`'s it and retries the mount once. On a
-/// partition's second failure — or a failed re-`mkfs` — the signal is returned
-/// in `RetryReport.exhausted`, not propagated as `Err`, so it stays typed for
+/// Phase 2 mounts everything; a mount/overlay failure that resolves to a
+/// partition re-`mkfs`'s it and retries the mount once. On a partition's second
+/// failure — or a failed re-`mkfs` — the signal is returned in
+/// `RetryReport.exhausted`, not propagated as `Err`, so it stays typed for
 /// `run()`. A mount failure resolving to neither partition propagates as `Err`.
 fn reformat_and_mount_with_retry(
     rootfs: &Path,
