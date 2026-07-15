@@ -163,8 +163,8 @@ struct ReformatTargets<'a> {
     backup_dir: &'a Path,
 }
 
-/// Real `ReformatRetryOps`: `mount_all` re-runs the full factory mount and, on
-/// failure, unmounts what it managed so the next attempt starts clean.
+/// Real `ReformatRetryOps`: `mount_all` runs the full factory mount and, on
+/// failure, unmounts what it managed so a failed reset leaves nothing half-mounted.
 struct RealReformatOps<'a> {
     layout: &'a PartitionLayout,
     rootfs: &'a Path,
@@ -370,26 +370,27 @@ fn factory_reset_mount(
     Ok(())
 }
 
-/// Outcome of the reformat-retry loop, returned so the caller can set the
-/// success `context` note and, on exhaustion, the bootloader-env signal.
+/// Outcome of the reformat + mount, returned so the caller can set the success
+/// `context` note and, on a mount failure, the bootloader-env signal.
 struct RetryReport {
-    /// Partitions that needed one reformat-and-retry (empty on a clean mount).
+    /// Partitions whose `mkfs` failed at least once and was retried (empty when
+    /// both reformats succeeded first try).
     retried: Vec<PartitionName>,
-    /// Set when the retry was exhausted: the partition and reason to persist.
+    /// Set when the mount failed on a `data`/`etc` partition: the signal to persist.
     exhausted: Option<ResetFailureSignal>,
 }
 
-/// Partition and reason for an unrecoverable reformat/mount failure, carried
-/// out of the destructive phase to `run()` for the bootloader-env write.
+/// Partition and reason for a mount failure the reset could not get past,
+/// carried out of the destructive phase to `run()` for the bootloader-env write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResetFailureSignal {
     partition: PartitionName,
     reason: String,
 }
 
-/// Injectable abstraction over the destructive-phase mount side effects, so the
-/// bounded-retry control flow is unit-testable without real block devices.
-/// Narrowly scoped to this loop — not a general refactor of the module.
+/// Injectable abstraction over the destructive-phase reformat/mount side
+/// effects, so the control flow is unit-testable without real block devices.
+/// Narrowly scoped here — not a general refactor of the module.
 trait ReformatRetryOps {
     fn reformat(&mut self, device: &Path, label: &str) -> Result<()>;
     fn mount_all(&mut self) -> Result<()>;
