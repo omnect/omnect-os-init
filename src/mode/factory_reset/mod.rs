@@ -205,6 +205,13 @@ fn retry_note(retried: &[PartitionName]) -> Option<String> {
     Some(format!("{} reformatted twice", names.join(",")))
 }
 
+/// Error text for partitions whose `mkfs` failed both times — the reset still
+/// mounted them, but two failures mark the storage as suspect.
+fn mkfs_failed_note(reformat_failed: &[PartitionName]) -> String {
+    let names: Vec<String> = reformat_failed.iter().map(|p| p.to_string()).collect();
+    format!("{}: mkfs failed twice", names.join(","))
+}
+
 /// Reformat + restore — everything from here on is destructive: `data` and/or
 /// `etc` may already be wiped and the tmpfs backup discarded. Callers must
 /// treat any `Err` from this function as data-loss, not a safe no-op abort.
@@ -247,7 +254,12 @@ fn run_destructive_phase(
     log::info!("factory-reset complete");
 
     Ok((
-        restored_status(&report.retried, restore_result, targets.preserve_list),
+        restored_status(
+            &report.retried,
+            &report.reformat_failed,
+            restore_result,
+            targets.preserve_list,
+        ),
         None,
     ))
 }
@@ -269,16 +281,33 @@ fn exhausted_status(
     }
 }
 
-/// Status for the case where mounts succeeded and restore ran — success or
-/// failure of the restore itself decides `status`, but `data_wiped` is always
-/// `true` since the reformat already happened.
+/// Status for the case where mounts succeeded and restore ran. A restore
+/// failure is always `Error`. On a clean restore the `mkfs` history decides:
+/// a `mkfs` that failed twice is `Error`, a recovered single failure is
+/// `Warning`, no retry is `Success`. `data_wiped` is always `true` since the
+/// reformat already happened.
 fn restored_status(
     retried: &[PartitionName],
+    reformat_failed: &[PartitionName],
     restore: RestoreResult,
     preserve_list: &[String],
 ) -> FactoryResetStatus {
     let note = retry_note(retried);
     match restore {
+        RestoreResult::Success if !reformat_failed.is_empty() => FactoryResetStatus {
+            status: FactoryResetStatusCode::Error,
+            error: Some(mkfs_failed_note(reformat_failed)),
+            context: note,
+            paths: preserve_list.to_vec(),
+            data_wiped: true,
+        },
+        RestoreResult::Success if !retried.is_empty() => FactoryResetStatus {
+            status: FactoryResetStatusCode::Warning,
+            error: None,
+            context: note,
+            paths: preserve_list.to_vec(),
+            data_wiped: true,
+        },
         RestoreResult::Success => FactoryResetStatus {
             status: FactoryResetStatusCode::Success,
             error: None,
@@ -374,8 +403,11 @@ fn factory_reset_mount(
 /// `context` note and, on a mount failure, the bootloader-env signal.
 struct RetryReport {
     /// Partitions whose `mkfs` failed at least once and was retried (empty when
-    /// both reformats succeeded first try).
+    /// both reformats succeeded first try). Superset of `reformat_failed`.
     retried: Vec<PartitionName>,
+    /// Partitions whose `mkfs` failed both times; the mount was still attempted.
+    /// A recovered single failure is a `Warning`, two failures are an `Error`.
+    reformat_failed: Vec<PartitionName>,
     /// Set when the mount failed on a `data`/`etc` partition: the signal to persist.
     exhausted: Option<ResetFailureSignal>,
 }
@@ -459,6 +491,7 @@ fn reformat_and_mount_with_retry(
     ops: &mut dyn ReformatRetryOps,
 ) -> Result<RetryReport> {
     let mut retried: Vec<PartitionName> = Vec::new();
+    let mut reformat_failed: Vec<PartitionName> = Vec::new();
 
     for (partition, device, label) in [
         (PartitionName::Data, targets.data_dev, DATA_PARTITION_LABEL),
@@ -471,6 +504,7 @@ fn reformat_and_mount_with_retry(
                 warn!(
                     "factory reset: mkfs of {partition} failed again; attempting the mount anyway: {second}"
                 );
+                reformat_failed.push(partition);
             }
         }
     }
@@ -478,11 +512,13 @@ fn reformat_and_mount_with_retry(
     match ops.mount_all() {
         Ok(()) => Ok(RetryReport {
             retried,
+            reformat_failed,
             exhausted: None,
         }),
         Err(e) => match resolve_failed_partition(&e, rootfs, targets) {
             Some(partition) => Ok(RetryReport {
                 retried,
+                reformat_failed,
                 exhausted: Some(ResetFailureSignal {
                     partition,
                     reason: e.to_string(),
@@ -600,6 +636,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert!(report.reformat_failed.is_empty());
             assert!(report.exhausted.is_none());
         }
 
@@ -617,6 +654,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert_eq!(report.reformat_failed, vec![PartitionName::Data]);
             let sig = report.exhausted.expect("must record exhausted");
             assert_eq!(sig.partition, PartitionName::Data);
             assert!(
@@ -626,9 +664,10 @@ mod tests {
         }
 
         #[test]
-        fn mkfs_double_failure_but_mount_succeeds_is_success() {
+        fn mkfs_double_failure_but_mount_succeeds_records_reformat_failed() {
             let (data, etc) = (Path::new("/dev/sda7"), Path::new("/dev/sda6"));
-            // mkfs failed twice, yet the partition mounts → treat as success.
+            // mkfs failed twice, yet the partition mounts. reformat_failed carries
+            // it so the status becomes Error (suspect storage), not Warning.
             let mut ops = ScriptedOps::new(vec![Ok(())])
                 .with_reformat_results(vec![Err(reformat_failed()), Err(reformat_failed())]);
             let report = reformat_and_mount_with_retry(
@@ -639,6 +678,7 @@ mod tests {
             .unwrap();
             assert!(report.exhausted.is_none());
             assert_eq!(report.retried, vec![PartitionName::Data]);
+            assert_eq!(report.reformat_failed, vec![PartitionName::Data]);
         }
 
         #[test]
@@ -779,20 +819,22 @@ mod tests {
 
         #[test]
         fn restored_status_success_no_retry() {
-            let status = restored_status(&[], RestoreResult::Success, &["/p".to_string()]);
+            let status = restored_status(&[], &[], RestoreResult::Success, &["/p".to_string()]);
             assert_eq!(status.status, FactoryResetStatusCode::Success);
             assert!(status.data_wiped);
             assert_eq!(status.context, None);
         }
 
         #[test]
-        fn restored_status_success_with_retry_note() {
+        fn restored_status_recovered_retry_is_warning() {
             let status = restored_status(
                 &[PartitionName::Etc],
+                &[],
                 RestoreResult::Success,
                 &["/p".to_string()],
             );
-            assert_eq!(status.status, FactoryResetStatusCode::Success);
+            assert_eq!(status.status, FactoryResetStatusCode::Warning);
+            assert_eq!(status.error, None);
             assert_eq!(
                 status.context.as_deref(),
                 retry_note(&[PartitionName::Etc]).as_deref()
@@ -800,8 +842,33 @@ mod tests {
         }
 
         #[test]
+        fn restored_status_mkfs_failed_twice_is_error() {
+            let status = restored_status(
+                &[PartitionName::Data],
+                &[PartitionName::Data],
+                RestoreResult::Success,
+                &["/p".to_string()],
+            );
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            assert!(status.data_wiped);
+            assert!(
+                status
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("mkfs failed twice"))
+            );
+            assert!(
+                status
+                    .context
+                    .as_deref()
+                    .is_some_and(|c| c.contains("reformatted twice"))
+            );
+        }
+
+        #[test]
         fn restored_status_partial_failure_no_retry() {
             let status = restored_status(
+                &[],
                 &[],
                 RestoreResult::PartialFailure {
                     context: "etc/hostname:restore".into(),
@@ -824,6 +891,7 @@ mod tests {
         fn restored_status_partial_failure_joins_retry_and_restore_context() {
             let status = restored_status(
                 &[PartitionName::Etc],
+                &[],
                 RestoreResult::PartialFailure {
                     context: "etc/hostname:restore".into(),
                     error: "cp failed".into(),

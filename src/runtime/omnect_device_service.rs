@@ -72,6 +72,7 @@ pub enum FactoryResetStatusCode {
     Invalid = 1,
     Error = 2,
     ConfigError = 3,
+    Warning = 4,
 }
 
 impl serde::Serialize for FactoryResetStatusCode {
@@ -87,6 +88,7 @@ impl fmt::Display for FactoryResetStatusCode {
             Self::Invalid => write!(f, "invalid"),
             Self::Error => write!(f, "error"),
             Self::ConfigError => write!(f, "config_error"),
+            Self::Warning => write!(f, "warning"),
         }
     }
 }

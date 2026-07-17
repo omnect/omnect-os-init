@@ -91,6 +91,25 @@ fn factory_reset_status_code_serializes_as_integer() {
 }
 
 #[test]
+fn factory_reset_warning_status_serializes_as_four() {
+    let status = FactoryResetStatus {
+        status: FactoryResetStatusCode::Warning,
+        error: None,
+        context: Some("etc reformatted twice".into()),
+        paths: vec![],
+        data_wiped: true,
+    };
+    let mut ods = OdsStatus::new();
+    ods.set_factory_reset(status);
+    let json = serde_json::to_string(&ods).unwrap();
+
+    assert!(
+        json.contains("\"status\":4"),
+        "Warning must serialize as 4 (wire contract): {json}"
+    );
+}
+
+#[test]
 fn detect_unsupported_mode_falls_back_to_normal() {
     let mock = MockBootEnv::new().with_env(BootEnvKey::FactoryReset, r#"{"mode":2,"preserve":[]}"#);
     let mode = BootMode::detect(Some(&mock)).unwrap();

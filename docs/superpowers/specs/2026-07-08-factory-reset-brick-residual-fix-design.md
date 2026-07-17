@@ -249,14 +249,20 @@ pre-existing failure mode, not something this fix addresses.
 ### 3.3 `src/runtime/omnect_device_service.rs`
 
 `FactoryResetStatus.context` (existing field, currently used for restore-partial-failure details)
-also carries a short diagnostic note when a retry succeeded. The note is built from
+also carries a short diagnostic note when a `mkfs` was retried. The note is built from
 `RetryReport.retried` (§3.2) — the original draft's `Result<()>` signature had no way to carry this
 out, which is what necessitated the `RetryReport` change above.
+
+The `mkfs` history also drives `status`, so a struggling disk is machine-readable, not free text
+only. When the mount succeeds and restore is clean: a recovered single `mkfs` failure is
+`Warning (4)`; a `mkfs` that failed twice is `Error (2)` (an early sign of failing storage, even
+though the partition mounted). This needs `RetryReport.reformat_failed` (partitions whose `mkfs`
+failed both times) alongside `retried`.
 
 ```json
 {
   "factory_reset": {
-    "status": 0,
+    "status": 4,
     "context": "etc reformatted twice",
     "paths": ["..."],
     "data_wiped": true
@@ -264,9 +270,9 @@ out, which is what necessitated the `RetryReport` change above.
 }
 ```
 
-No new struct field — reuses the existing free-form `context` string. A device that needed a retry
-is worth flagging to fleet monitoring even though the reset otherwise completed normally; this
-would otherwise be indistinguishable from a clean reset.
+`Warning = 4` is a new value on `FactoryResetStatusCode`. `omnect-device-service` must learn it
+before it starts reading this status (tracked separately — see the ODS contract-alignment note);
+today the two sides use different top-level keys, so ODS does not yet read the result at all.
 
 **Collision with `restore_all`'s use of `context`.** `RestoreResult::PartialFailure { context, .. }`
 (defined in `backup_restore.rs`, consumed at `mod.rs:181-187`) already writes its own diagnostic
@@ -454,6 +460,8 @@ testing, same as today.
 | Retry loop: both `data` and `etc` each fail once, both recover | Unit (mock) | `mode/factory_reset/mod.rs` |
 | Retry loop: `OverlayFailed` on `etc` triggers reformat + retry, same as `MountFailed` | Unit (mock) | `mode/factory_reset/mod.rs` |
 | Successful retry sets `context` from `RetryReport.retried` | Unit | `mode/factory_reset/mod.rs` |
+| Recovered single `mkfs` failure (mount + restore ok) → `status: Warning` | Unit | `mode/factory_reset/mod.rs` |
+| `mkfs` failed twice but mount + restore ok → `status: Error`, `error` names the partition | Unit | `mode/factory_reset/mod.rs` |
 | `context` collision: retry note + restore partial-failure joined with `";"` | Unit | `mode/factory_reset/mod.rs` |
 | `run()` calls `save_factory_reset_failure` when the returned status carries an exhausted signal | Unit (`MockBootEnv`) | `mode/factory_reset/mod.rs` |
 | `save_factory_reset_failure` round-trips via `MockBootEnv` | Unit | `bootloader/mod.rs` |

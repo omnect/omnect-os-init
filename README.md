@@ -186,13 +186,15 @@ flowchart TD
 | mkfs | mount | 2nd mkfs? | `warn!` | bootloader signal | ODS status | boot |
 |------|-------|-----------|---------|-------------------|------------|------|
 | ok | ok | no | no | no | `Success` | normal |
-| 1× fail, then ok | ok | yes | yes | no | `Success` + note | normal |
-| 2× fail | ok | yes | yes | no | `Success` + note | normal |
+| 1× fail, then ok | ok | yes | yes | no | `Warning` + note | normal |
+| 2× fail | ok | yes | yes | no | `Error` + note | normal |
 | 2× fail | fails | yes | yes | **yes** | `Error` | halt |
 | ok | fails (data/etc) | no | yes | **yes** | `Error` | halt |
 
 The `mkfs` is retried only on a `mkfs` failure; the mount is always attempted and is the gate;
-a mount failure is recorded as a diagnosable signal rather than re-`mkfs`'d.
+a mount failure is recorded as a diagnosable signal rather than re-`mkfs`'d. The `mkfs` history
+is also reported in the ODS status even when the mount succeeds: a recovered single failure is
+`Warning`, two failures are `Error` — an early sign of failing storage.
 
 
 ## Building
