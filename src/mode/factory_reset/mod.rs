@@ -26,8 +26,7 @@ use crate::mode::factory_reset::{
 
 const FACTORY_RESET_BACKUP_DIR: &str = "/tmp/factory_reset/backup";
 
-/// Shared join separator between the retry note and the restore
-/// partial-failure context (also used by `restore_all` in `backup_restore.rs`).
+/// Shared join separator for the retry note and restore partial-failure context.
 pub(crate) const CONTEXT_SEPARATOR: &str = ";";
 
 /// ext4 volume labels applied by `reformat_ext4` — distinct from the
@@ -54,20 +53,9 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
         Ok(pair) => pair,
         Err(e) => {
             warn!("Factory reset failed: {e}; continuing with Normal boot");
-            let code = match &e {
-                InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_)) => {
-                    FactoryResetStatusCode::Invalid
-                }
-                InitramfsError::FactoryReset(FactoryResetError::MissingField(_)) => {
-                    FactoryResetStatusCode::ConfigError
-                }
-                // Note: RestoreFailed cannot arrive here — restore_all() accumulates
-                // per-path failures as RestoreResult::PartialFailure and always returns Ok.
-                _ => FactoryResetStatusCode::Error,
-            };
             (
                 FactoryResetStatus {
-                    status: code,
+                    status: failure_status_code(&e),
                     error: Some(e.to_string()),
                     context: None,
                     paths: vec![],
@@ -84,7 +72,7 @@ pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
 }
 
 /// Best-effort write of the unrecoverable-failure signal to the bootloader env,
-/// so the outcome survives even if the ensuing Normal boot halts before
+/// so the outcome survives even if the following Normal boot halts before
 /// `create_ods_runtime_files`. A degraded env is a no-op.
 fn persist_exhausted_signal(
     signal: Option<&ResetFailureSignal>,
@@ -205,8 +193,7 @@ fn retry_note(retried: &[PartitionName]) -> Option<String> {
     Some(format!("{} reformatted twice", names.join(",")))
 }
 
-/// Error text for partitions whose `mkfs` failed both times — the reset still
-/// mounted them, but two failures mark the storage as suspect.
+/// Error text for partitions whose `mkfs` failed both times.
 fn mkfs_failed_note(reformat_failed: &[PartitionName]) -> String {
     let names: Vec<String> = reformat_failed.iter().map(|p| p.to_string()).collect();
     format!("{}: mkfs failed twice", names.join(","))
@@ -234,14 +221,16 @@ fn run_destructive_phase(
 
     if let Some(signal) = report.exhausted {
         // The reformatted partition never became usable — restore cannot run.
-        // Report data-loss and carry the typed signal out for run().
         warn!(
             "factory reset: {} could not be prepared; preserved data lost: {}",
             signal.partition, signal.reason
         );
         let _ = unmount_tracked(mounts);
-        let status = exhausted_status(&signal, &report.retried, targets.preserve_list);
-        return Ok((status, Some(signal)));
+        return Ok(exhausted_outcome(
+            signal,
+            &report.retried,
+            targets.preserve_list,
+        ));
     }
 
     let restore_result =
@@ -265,8 +254,7 @@ fn run_destructive_phase(
 }
 
 /// Status for the case where a partition never became usable — restore never
-/// runs, so `data_wiped` is the only evidence the preserved data is lost (the
-/// signal itself is carried separately).
+/// runs, so `data_wiped` is the only evidence the preserved data is lost.
 fn exhausted_status(
     signal: &ResetFailureSignal,
     retried: &[PartitionName],
@@ -281,11 +269,19 @@ fn exhausted_status(
     }
 }
 
-/// Status for the case where mounts succeeded and restore ran. A restore
-/// failure is always `Error`. On a clean restore the `mkfs` history decides:
-/// a `mkfs` that failed twice is `Error`, a recovered single failure is
-/// `Warning`, no retry is `Success`. `data_wiped` is always `true` since the
-/// reformat already happened.
+/// Pair the Error status with the signal to persist, so the exhausted branch
+/// cannot return one without the other.
+fn exhausted_outcome(
+    signal: ResetFailureSignal,
+    retried: &[PartitionName],
+    preserve_list: &[String],
+) -> (FactoryResetStatus, Option<ResetFailureSignal>) {
+    let status = exhausted_status(&signal, retried, preserve_list);
+    (status, Some(signal))
+}
+
+/// Status for the case where mounts succeeded and restore ran.
+/// `data_wiped` is always `true` since the reformat already happened.
 fn restored_status(
     retried: &[PartitionName],
     reformat_failed: &[PartitionName],
@@ -315,13 +311,25 @@ fn restored_status(
             paths: preserve_list.to_vec(),
             data_wiped: true,
         },
-        RestoreResult::PartialFailure { context, error } => FactoryResetStatus {
-            status: FactoryResetStatusCode::Error,
-            error: Some(error),
-            context: join_context(note, Some(context)),
-            paths: preserve_list.to_vec(),
-            data_wiped: true,
-        },
+        RestoreResult::PartialFailure { context, error } => {
+            // A double mkfs failure here would otherwise be hidden behind the
+            // restore error; keep the suspect-storage signal in `error`.
+            let error = if reformat_failed.is_empty() {
+                error
+            } else {
+                format!(
+                    "{}{CONTEXT_SEPARATOR}{error}",
+                    mkfs_failed_note(reformat_failed)
+                )
+            };
+            FactoryResetStatus {
+                status: FactoryResetStatusCode::Error,
+                error: Some(error),
+                context: join_context(note, Some(context)),
+                paths: preserve_list.to_vec(),
+                data_wiped: true,
+            }
+        }
     }
 }
 
@@ -339,6 +347,22 @@ fn destructive_phase_failure_status(e: InitramfsError, paths: Vec<String>) -> Fa
         context: None,
         paths,
         data_wiped: true,
+    }
+}
+
+/// Status code for a reset that failed before the destructive phase — config
+/// problems are distinguished so ODS/cloud can tell a bad trigger from a real
+/// failure. `RestoreFailed` cannot arrive here: `restore_all` accumulates
+/// per-path failures as `PartialFailure` and returns `Ok`.
+fn failure_status_code(e: &InitramfsError) -> FactoryResetStatusCode {
+    match e {
+        InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_)) => {
+            FactoryResetStatusCode::Invalid
+        }
+        InitramfsError::FactoryReset(FactoryResetError::MissingField(_)) => {
+            FactoryResetStatusCode::ConfigError
+        }
+        _ => FactoryResetStatusCode::Error,
     }
 }
 
@@ -402,8 +426,8 @@ fn factory_reset_mount(
 /// Outcome of the reformat + mount, returned so the caller can set the success
 /// `context` note and, on a mount failure, the bootloader-env signal.
 struct RetryReport {
-    /// Partitions whose `mkfs` failed at least once and was retried (empty when
-    /// both reformats succeeded first try). Superset of `reformat_failed`.
+    /// Partitions whose `mkfs` failed at least once and was retried. Superset
+    /// of `reformat_failed`.
     retried: Vec<PartitionName>,
     /// Partitions whose `mkfs` failed both times; the mount was still attempted.
     /// A recovered single failure is a `Warning`, two failures are an `Error`.
@@ -422,18 +446,17 @@ struct ResetFailureSignal {
 
 /// Injectable abstraction over the destructive-phase reformat/mount side
 /// effects, so the control flow is unit-testable without real block devices.
-/// Narrowly scoped here — not a general refactor of the module.
 trait ReformatRetryOps {
     fn reformat(&mut self, device: &Path, label: &str) -> Result<()>;
     fn mount_all(&mut self) -> Result<()>;
 }
 
 /// Resolve a mount/overlay failure back to the reformatted partition it
-/// concerns. `MountFailed` carries the source device (match against the target
-/// device paths); `OverlayFailed` carries the mount point (match against the
-/// etc/data mount points). Any other error, or a path matching neither
-/// reformatted partition (e.g. the read-only `factory` partition), yields None
-/// so the caller propagates the error without retrying.
+/// concerns. For partition mounts `MountFailed.src_path` is the device — match
+/// it against the target device paths; a bind-mount source matches neither and
+/// yields `None`. `OverlayFailed` carries the mount point — match against the
+/// etc/data mount points. Any other error yields `None`, so the caller
+/// propagates it without retrying.
 ///
 /// COUPLING: `src_path` equals `targets.data_dev`/`etc_dev` only because both
 /// come from the same `layout.partitions` lookup. If a future change resolves
@@ -455,11 +478,11 @@ fn resolve_failed_partition(
             }
         }
         InitramfsError::Filesystem(FilesystemError::OverlayFailed { target, .. }) => {
-            // OverlayFailed carries one of two paths, both under the reformatted
-            // partition: the overlay upper/work dir under the partition mount point
-            // (dir-prep failure, e.g. mnt/etc/upper — matched by prefix), or the
-            // overlay mount target itself, rootfs/etc or rootfs/home (mount-syscall
-            // failure — matched by equality).
+            // Match the overlay upper/work dir under the partition mount point
+            // (dir-prep failure, e.g. mnt/etc/upper — by prefix) and the overlay
+            // mount target rootfs/etc / rootfs/home (mount-syscall failure — by
+            // equality). Any other OverlayFailed target (e.g. a bind-mount dir)
+            // yields None.
             if target.starts_with(rootfs.join(mount_points::DATA_PARTITION))
                 || *target == rootfs.join(paths::HOME)
             {
@@ -476,15 +499,13 @@ fn resolve_failed_partition(
     }
 }
 
-/// Reformat `data` and `etc`, then mount. A failed `mkfs` is retried once per
-/// partition, and every `mkfs` failure is logged so a recovered one stays
-/// visible. A `mkfs` that fails twice does not give up — the mount is still
-/// attempted, since the filesystem may be usable and the mount is the real
-/// gate. A mount/overlay failure is not re-`mkfs`'d (re-running a `mkfs` the
-/// kernel already accepted cannot heal it): the mount decides the outcome — on
-/// success `exhausted` is `None`; a failure resolving to `data`/`etc` returns
-/// that partition in `RetryReport.exhausted` (a signal, not `Err`); a failure
-/// resolving to neither partition (e.g. `factory`) propagates as `Err`.
+/// Reformat `data` and `etc`, then mount. Each `mkfs` is retried once on
+/// failure and every failure is logged. The mount is always attempted and
+/// decides the outcome: on success `exhausted` is `None`; a mount/overlay
+/// failure resolving to `data`/`etc` becomes `RetryReport.exhausted` (a signal,
+/// not `Err`), anything else propagates as `Err`. A mount failure is not
+/// re-`mkfs`'d — a repeated `mkfs` would produce the same filesystem the mount
+/// just rejected.
 fn reformat_and_mount_with_retry(
     rootfs: &Path,
     targets: &ReformatTargets,
@@ -538,8 +559,8 @@ mod tests {
         use super::*;
         use crate::error::FilesystemError;
 
-        // Programmable ops: each mount_all()/reformat() call pops the next
-        // scripted result for that method (an empty queue means Ok).
+        // Programmable ops: each call pops the next scripted result for that
+        // method; reformat defaults to Ok on an empty queue, mount_all panics.
         struct ScriptedOps {
             mount_results: std::collections::VecDeque<Result<()>>,
             reformat_results: std::collections::VecDeque<Result<()>>,
@@ -694,7 +715,7 @@ mod tests {
             let sig = report.exhausted.expect("must record exhausted");
             assert_eq!(sig.partition, PartitionName::Etc);
             assert!(report.retried.is_empty());
-            // Only the two initial phase-1 reformats happened — no mount-triggered re-mkfs.
+            // Only the two initial reformats happened — no mount-triggered re-mkfs.
             assert_eq!(ops.reformatted.len(), 2);
         }
 
@@ -808,6 +829,7 @@ mod tests {
             let status = exhausted_status(&sig, &[PartitionName::Etc], &["/p".to_string()]);
             assert_eq!(status.status, FactoryResetStatusCode::Error);
             assert!(status.data_wiped);
+            assert_eq!(status.paths, vec!["/p".to_string()]);
             assert_eq!(status.error.as_deref(), Some("mkfs retry exhausted"));
             assert!(
                 status
@@ -913,6 +935,54 @@ mod tests {
             assert!(status.data_wiped);
             assert!(status.error.is_some());
         }
+
+        #[test]
+        fn failure_status_code_distinguishes_config_errors() {
+            let invalid: InitramfsError = FactoryResetError::InvalidConfig("x".into()).into();
+            let missing: InitramfsError = FactoryResetError::MissingField("x".into()).into();
+            let other: InitramfsError = FactoryResetError::MountError("x".into()).into();
+            assert_eq!(
+                failure_status_code(&invalid),
+                FactoryResetStatusCode::Invalid
+            );
+            assert_eq!(
+                failure_status_code(&missing),
+                FactoryResetStatusCode::ConfigError
+            );
+            assert_eq!(failure_status_code(&other), FactoryResetStatusCode::Error);
+        }
+
+        #[test]
+        fn exhausted_outcome_pairs_status_with_signal() {
+            let sig = ResetFailureSignal {
+                partition: PartitionName::Data,
+                reason: "bad superblock".into(),
+            };
+            let (status, signal) =
+                exhausted_outcome(sig, &[PartitionName::Data], &["/p".to_string()]);
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            assert!(status.data_wiped);
+            let signal = signal.expect("signal must be carried out with the status");
+            assert_eq!(signal.partition, PartitionName::Data);
+            assert_eq!(signal.reason, "bad superblock");
+        }
+
+        #[test]
+        fn restored_status_partial_failure_keeps_mkfs_failed_note() {
+            let status = restored_status(
+                &[PartitionName::Data],
+                &[PartitionName::Data],
+                RestoreResult::PartialFailure {
+                    context: "etc/hostname:restore".into(),
+                    error: "cp failed".into(),
+                },
+                &["/p".to_string()],
+            );
+            assert_eq!(status.status, FactoryResetStatusCode::Error);
+            let error = status.error.expect("error");
+            assert!(error.contains("mkfs failed twice"), "{error}");
+            assert!(error.contains("cp failed"), "{error}");
+        }
     }
 
     #[cfg(feature = "factory-reset")]
@@ -954,7 +1024,17 @@ mod tests {
                 command: "boot-env-tool".into(),
                 reason: "test".into(),
             });
-            // Best-effort: degraded env is a no-op, must not panic.
+            persist_exhausted_signal(Some(&sig), &mut env);
+        }
+
+        #[test]
+        fn no_propagate_when_set_env_fails() {
+            let sig = ResetFailureSignal {
+                partition: PartitionName::Data,
+                reason: "mkfs retry exhausted".into(),
+            };
+            let mut env =
+                BootEnvState::Available(Box::new(MockBootEnv::new().with_set_env_error()));
             persist_exhausted_signal(Some(&sig), &mut env);
         }
     }

@@ -18,30 +18,20 @@ fn factory_reset_success_status_json() {
     };
     let mut ods = OdsStatus::new();
     ods.set_factory_reset(status);
-    let json = serde_json::to_string(&ods).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&ods).unwrap()).unwrap();
+    let fr = &json["factory_reset"];
 
+    assert!(!fr.is_null(), "missing factory_reset key: {json}");
+    assert_eq!(fr["status"], 0, "status must be integer 0: {json}");
+    assert_eq!(fr["data_wiped"], true, "data_wiped must be true: {json}");
+    assert_eq!(fr["paths"][0], "/etc/omnect/factory-reset.d/");
     assert!(
-        json.contains("\"factory_reset\""),
-        "missing factory_reset key: {json}"
-    );
-    assert!(
-        json.contains("\"status\":0"),
-        "status must be bare integer 0: {json}"
-    );
-    assert!(
-        json.contains("\"data_wiped\":true"),
-        "data_wiped missing: {json}"
-    );
-    assert!(
-        json.contains("/etc/omnect/factory-reset.d/"),
-        "preserved path missing: {json}"
-    );
-    assert!(
-        !json.contains("\"error\""),
+        fr.get("error").is_none(),
         "error must be skipped when None: {json}"
     );
     assert!(
-        !json.contains("\"context\""),
+        fr.get("context").is_none(),
         "context must be skipped when None: {json}"
     );
 }
@@ -101,10 +91,11 @@ fn factory_reset_warning_status_serializes_as_four() {
     };
     let mut ods = OdsStatus::new();
     ods.set_factory_reset(status);
-    let json = serde_json::to_string(&ods).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&ods).unwrap()).unwrap();
 
-    assert!(
-        json.contains("\"status\":4"),
+    assert_eq!(
+        json["factory_reset"]["status"], 4,
         "Warning must serialize as 4 (wire contract): {json}"
     );
 }

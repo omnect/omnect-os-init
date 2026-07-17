@@ -77,7 +77,7 @@ flowchart TD
         FCLEAR["clear factory-reset\nbootloader var (best-effort)"] --> FMOUNT["mount factory(ro) + etc(rw) + data(rw)\n+ overlays"]
         FMOUNT --> FBACKUP["build_preserve_list()\nbackup_all() → /tmp/factory_reset/backup"]
         FBACKUP --> FUMOUNT1["umount"]
-        FUMOUNT1 --> FFORMAT["reformat_and_mount_with_retry()\nmkfs data/etc (1 retry each, warn on fail)\nthen mount once — the gate"]
+        FUMOUNT1 --> FFORMAT["reformat_and_mount_with_retry()\nmkfs data/etc (1 retry each, warn on fail)\nthen mount once — the deciding step"]
         FFORMAT -->|"mount ok"| FRESTORE["restore_all()"]
         FFORMAT -->|"mount fails on data/etc"| FSIGNAL["record failure signal\n→ bootloader env (in run())"]
         FRESTORE --> FUMOUNT2["umount"]
@@ -167,12 +167,12 @@ device from booting: `FactoryResetError` is classified as `ContinueDegraded`.
 **Factory reset — reformat/mount retry (`FFORMAT`)**
 
 Inside `reformat_and_mount_with_retry`, each of `data`/`etc` is `mkfs`'d with one retry on
-failure, then the mount is attempted once as the deciding step. A `mkfs` that fails twice
-does not give up — the mount is still tried (the filesystem may be usable, and the mount is
-the real gate). A mount failure on `data`/`etc` is recorded as a bootloader-env signal
-(`omnect_factory_reset_last_error`), so even if the following Normal boot halts on the same
-partition the cause is still readable (`fw_printenv` / `grub-editenv list`). A mount failure
-is not re-`mkfs`'d: re-running a `mkfs` the kernel already accepted cannot heal it.
+failure. The mount is then attempted once and decides the outcome: even after two failed
+`mkfs` attempts the mount is still tried, since the filesystem may be usable. A mount failure
+on `data`/`etc` is recorded as a bootloader-env signal (`omnect_factory_reset_last_error`), so
+even if the following Normal boot halts on the same partition the cause is still readable
+(`fw_printenv` / `grub-editenv list`). A mount failure is not re-`mkfs`'d — a repeated `mkfs`
+would produce the same filesystem the mount just rejected.
 
 ```mermaid
 flowchart TD
@@ -191,10 +191,8 @@ flowchart TD
 | 2× fail | fails | yes | yes | **yes** | `Error` | halt |
 | ok | fails (data/etc) | no | yes | **yes** | `Error` | halt |
 
-The `mkfs` is retried only on a `mkfs` failure; the mount is always attempted and is the gate;
-a mount failure is recorded as a diagnosable signal rather than re-`mkfs`'d. The `mkfs` history
-is also reported in the ODS status even when the mount succeeds: a recovered single failure is
-`Warning`, two failures are `Error` — an early sign of failing storage.
+The `mkfs` history is reported in the ODS status even when the mount succeeds: a recovered
+single failure is `Warning`, two failures are `Error` — an early sign of failing storage.
 
 
 ## Building

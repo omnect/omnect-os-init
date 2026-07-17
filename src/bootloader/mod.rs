@@ -28,7 +28,7 @@ pub type Result<T> = std::result::Result<T, BootEnvError>;
 const MAX_FACTORY_RESET_FAILURE_REASON_LEN: usize = 128;
 
 /// Truncate `s` to at most `max_bytes`, never splitting a multi-byte UTF-8
-/// character (a naive byte slice would panic on a non-ASCII boundary).
+/// character — slicing at a non-boundary panics.
 #[cfg(feature = "factory-reset")]
 fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -493,7 +493,7 @@ mod tests {
 
         #[test]
         fn never_splits_a_multibyte_char() {
-            // "é" is 2 bytes (0xC3 0xA9). Truncating to 1 byte must not split it.
+            // "é" is 2 bytes; a limit of 2 lands inside it, so the result backs off to "a".
             let s = "aé";
             let out = truncate_on_char_boundary(s, 2);
             assert!(s.is_char_boundary(out.len()));

@@ -11,9 +11,9 @@ const PRESERVE_LIST_MANDATORY: &str = "/etc/omnect/factory-reset.d/";
 const KEY_APPLICATIONS: &str = "applications";
 const KEY_PATHS: &str = "paths";
 
-/// Validated factory-reset mode. Only `Mode1` is representable; any other value
-/// is rejected at deserialize time, so an unsupported trigger never reaches the
-/// reset sequence. The discriminant is the on-wire mode number.
+/// Validated factory-reset mode. Any value other than `Mode1` is rejected at
+/// deserialize time, so an unsupported trigger never reaches the reset sequence.
+/// The discriminant is the on-wire mode number.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u32")]
@@ -375,8 +375,6 @@ mod tests {
 
     #[test]
     fn build_preserve_list_read_error_maps_to_io_not_invalid_config() {
-        // A directory where a readable file is expected makes read_to_string fail
-        // with an I/O error (not a JSON parse error).
         let temp = TempDir::new().unwrap();
         let dir = temp.path().join("etc/omnect/factory-reset.d");
         fs::create_dir_all(&dir).unwrap();
@@ -386,6 +384,23 @@ mod tests {
         let cfg = FactoryResetConfig {
             mode: ResetMode::Mode1,
             preserve: vec!["applications".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_missing_config_for_custom_key_maps_to_io() {
+        // A non-application key needs factory-reset.json; when it is absent the
+        // read fails with NotFound, which must map to Io (not InvalidConfig) so
+        // the ODS status is not mislabeled.
+        let temp = TempDir::new().unwrap();
+        let cfg = FactoryResetConfig {
+            mode: ResetMode::Mode1,
+            preserve: vec!["network".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
         assert!(matches!(
