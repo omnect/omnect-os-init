@@ -64,14 +64,14 @@ const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
 
 /// Outcome codes for a factory reset operation.
 ///
-/// Serialized as a plain integer so the JSON wire format that
-/// `omnect-device-service` reads remains unchanged.
+/// Serialized as a plain integer for the `omnect-device-service` JSON contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactoryResetStatusCode {
     Success = 0,
     Invalid = 1,
     Error = 2,
     ConfigError = 3,
+    Warning = 4,
 }
 
 impl serde::Serialize for FactoryResetStatusCode {
@@ -87,6 +87,7 @@ impl fmt::Display for FactoryResetStatusCode {
             Self::Invalid => write!(f, "invalid"),
             Self::Error => write!(f, "error"),
             Self::ConfigError => write!(f, "config_error"),
+            Self::Warning => write!(f, "warning"),
         }
     }
 }

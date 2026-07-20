@@ -22,6 +22,25 @@ pub use self::uboot::UBootBootEnv;
 
 pub type Result<T> = std::result::Result<T, BootEnvError>;
 
+/// Upper bound (bytes) on the failure reason stored via `save_factory_reset_failure`.
+/// The bootloader env block is small and shared by all variables, so keep it short.
+#[cfg(feature = "factory-reset")]
+const MAX_FACTORY_RESET_FAILURE_REASON_LEN: usize = 128;
+
+/// Truncate `s` to at most `max_bytes`, never splitting a multi-byte UTF-8
+/// character — slicing at a non-boundary panics.
+#[cfg(feature = "factory-reset")]
+fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Decoded fsck result stored in the bootloader environment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FsckRecord {
@@ -52,6 +71,12 @@ pub enum BootEnvKey {
     /// Value format: `{"mode":1,"preserve":["applications","network"]}`.
     /// Cleared by the initramfs as the first step of the reset sequence.
     FactoryReset,
+    #[cfg(feature = "factory-reset")]
+    /// `omnect_factory_reset_last_error` — records a partition that stayed
+    /// unmountable after a reformat-and-retry during the factory-reset
+    /// destructive phase, so the failure survives even if the boot that
+    /// follows halts before switch_root. Plain text `"<partition>:<reason>"`.
+    FactoryResetLastError,
 }
 
 impl BootEnvKey {
@@ -64,6 +89,8 @@ impl BootEnvKey {
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
             #[cfg(feature = "factory-reset")]
             Self::FactoryReset => Cow::Borrowed("factory-reset"),
+            #[cfg(feature = "factory-reset")]
+            Self::FactoryResetLastError => Cow::Borrowed("omnect_factory_reset_last_error"),
         }
     }
 }
@@ -118,6 +145,19 @@ pub trait BootEnv: Send + Sync {
     /// Clear fsck status from bootloader environment
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
         self.set_env(BootEnvKey::FsckStatus(partition), None)
+    }
+
+    /// Persist an unrecoverable factory-reset reformat/mount failure.
+    ///
+    /// Stored as plain text `"<partition>:<reason>"`, readable directly with
+    /// `fw_printenv`/`grub-editenv list`.
+    #[cfg(feature = "factory-reset")]
+    fn save_factory_reset_failure(&mut self, partition: PartitionName, reason: &str) -> Result<()> {
+        let reason = truncate_on_char_boundary(reason, MAX_FACTORY_RESET_FAILURE_REASON_LEN);
+        self.set_env(
+            BootEnvKey::FactoryResetLastError,
+            Some(&format!("{partition}:{reason}")),
+        )
     }
 }
 
@@ -435,5 +475,70 @@ mod tests {
         );
         bl.set_env(BootEnvKey::FactoryReset, None).unwrap();
         assert_eq!(bl.get_env(BootEnvKey::FactoryReset).unwrap(), None);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod truncate_tests {
+        use crate::bootloader::truncate_on_char_boundary;
+
+        #[test]
+        fn returns_input_when_within_limit() {
+            assert_eq!(truncate_on_char_boundary("short", 128), "short");
+        }
+
+        #[test]
+        fn truncates_ascii_at_limit() {
+            assert_eq!(truncate_on_char_boundary("abcdef", 3), "abc");
+        }
+
+        #[test]
+        fn never_splits_a_multibyte_char() {
+            // "é" is 2 bytes; a limit of 2 lands inside it, so the result backs off to "a".
+            let s = "aé";
+            let out = truncate_on_char_boundary(s, 2);
+            assert!(s.is_char_boundary(out.len()));
+            assert_eq!(out, "a");
+        }
+    }
+
+    #[cfg(feature = "factory-reset")]
+    mod factory_reset_failure_tests {
+        use crate::bootloader::{
+            BootEnv, BootEnvKey, MAX_FACTORY_RESET_FAILURE_REASON_LEN, MockBootEnv,
+        };
+        use crate::partition::PartitionName;
+
+        #[test]
+        fn key_as_str_is_stable() {
+            assert_eq!(
+                BootEnvKey::FactoryResetLastError.as_str().as_ref(),
+                "omnect_factory_reset_last_error"
+            );
+        }
+
+        #[test]
+        fn save_factory_reset_failure_round_trips() {
+            let mut mock = MockBootEnv::new();
+            mock.save_factory_reset_failure(PartitionName::Etc, "mkfs retry exhausted")
+                .unwrap();
+            assert_eq!(
+                mock.get_env(BootEnvKey::FactoryResetLastError).unwrap(),
+                Some("etc:mkfs retry exhausted".to_string())
+            );
+        }
+
+        #[test]
+        fn save_factory_reset_failure_truncates_long_reason() {
+            let mut mock = MockBootEnv::new();
+            let long = "x".repeat(500);
+            mock.save_factory_reset_failure(PartitionName::Data, &long)
+                .unwrap();
+            let stored = mock
+                .get_env(BootEnvKey::FactoryResetLastError)
+                .unwrap()
+                .unwrap();
+            assert!(stored.len() <= "data:".len() + MAX_FACTORY_RESET_FAILURE_REASON_LEN);
+            assert!(stored.starts_with("data:x"));
+        }
     }
 }

@@ -110,7 +110,10 @@ mod tests {
             let mode = BootMode::detect(Some(&mock)).unwrap();
             assert!(matches!(mode, BootMode::FactoryReset(_)));
             if let BootMode::FactoryReset(config) = mode {
-                assert_eq!(config.mode, 1);
+                assert_eq!(
+                    config.mode,
+                    crate::mode::factory_reset::config::ResetMode::Mode1
+                );
                 assert!(config.preserve.is_empty());
             }
         }

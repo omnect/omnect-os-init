@@ -11,9 +11,30 @@ const PRESERVE_LIST_MANDATORY: &str = "/etc/omnect/factory-reset.d/";
 const KEY_APPLICATIONS: &str = "applications";
 const KEY_PATHS: &str = "paths";
 
+/// Validated factory-reset mode. Any value other than `Mode1` is rejected at
+/// deserialize time, so an unsupported trigger never reaches the reset sequence.
+/// The discriminant is the on-wire mode number.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u32")]
+pub enum ResetMode {
+    Mode1 = 1,
+}
+
+impl TryFrom<u32> for ResetMode {
+    type Error = String;
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        if value == ResetMode::Mode1 as u32 {
+            Ok(ResetMode::Mode1)
+        } else {
+            Err(format!("factory reset mode {value} is not supported"))
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FactoryResetConfig {
-    pub mode: u32,
+    pub mode: ResetMode,
     #[serde(default)]
     pub preserve: Vec<String>,
 }
@@ -56,9 +77,9 @@ pub fn build_preserve_list(config: &FactoryResetConfig, rootfs: &Path) -> Result
     let config_file = rootfs.join(FACTORY_RESET_CONFIG_FILE);
     let key_config: Option<Value> = if has_non_app_keys {
         let content = std::fs::read_to_string(&config_file).map_err(|e| {
-            FactoryResetError::InvalidConfig(format!(
-                "Failed to read {}: {e}",
-                config_file.display()
+            FactoryResetError::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to read {}: {e}", config_file.display()),
             ))
         })?;
         let value: Value = serde_json::from_str(&content).map_err(|e| {
@@ -115,7 +136,10 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
     }
 
     let entries = std::fs::read_dir(&dir).map_err(|e| {
-        FactoryResetError::InvalidConfig(format!("Failed to read {}: {e}", dir.display()))
+        FactoryResetError::Io(std::io::Error::new(
+            e.kind(),
+            format!("Failed to read {}: {e}", dir.display()),
+        ))
     })?;
 
     // Not entries.flatten(): a per-entry read error (I/O error, race) must abort
@@ -123,9 +147,9 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
     // list means its paths are wiped and restore_all still reports Success.
     for entry in entries {
         let entry = entry.map_err(|e| {
-            FactoryResetError::InvalidConfig(format!(
-                "Failed to read entry in {}: {e}",
-                dir.display()
+            FactoryResetError::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to read entry in {}: {e}", dir.display()),
             ))
         })?;
         let path = entry.path();
@@ -134,7 +158,10 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
         }
 
         let content = std::fs::read_to_string(&path).map_err(|e| {
-            FactoryResetError::InvalidConfig(format!("Failed to read {}: {e}", path.display()))
+            FactoryResetError::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to read {}: {e}", path.display()),
+            ))
         })?;
 
         let value: Value = serde_json::from_str(&content).map_err(|e| {
@@ -167,16 +194,27 @@ mod tests {
     #[test]
     fn parse_mode_and_preserve() {
         let cfg = FactoryResetConfig::parse(r#"{"mode":1,"preserve":[]}"#).unwrap();
-        assert_eq!(cfg.mode, 1);
+        assert_eq!(cfg.mode, ResetMode::Mode1);
         assert!(cfg.preserve.is_empty());
     }
 
     #[test]
-    fn parse_with_preserve_keys() {
-        let cfg = FactoryResetConfig::parse(r#"{"mode":2,"preserve":["applications","network"]}"#)
-            .unwrap();
-        assert_eq!(cfg.mode, 2);
-        assert_eq!(cfg.preserve, vec!["applications", "network"]);
+    fn parse_rejects_unsupported_mode() {
+        assert!(FactoryResetConfig::parse(r#"{"mode":2,"preserve":[]}"#).is_err());
+        assert!(FactoryResetConfig::parse(r#"{"mode":0,"preserve":[]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_accepts_mode_1() {
+        let cfg = FactoryResetConfig::parse(r#"{"mode":1,"preserve":["applications"]}"#).unwrap();
+        assert_eq!(cfg.mode, ResetMode::Mode1);
+        assert_eq!(cfg.preserve, vec!["applications"]);
+    }
+
+    #[test]
+    fn reset_mode_try_from_rejects_non_one() {
+        assert!(ResetMode::try_from(2u32).is_err());
+        assert!(ResetMode::try_from(1u32).is_ok());
     }
 
     #[test]
@@ -193,7 +231,7 @@ mod tests {
     fn build_preserve_list_empty_preserve() {
         let temp = TempDir::new().unwrap();
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec![],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -212,7 +250,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["applications".into()],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -233,7 +271,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["network".into()],
         };
         let list = build_preserve_list(&cfg, temp.path()).unwrap();
@@ -253,7 +291,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["network".into()],
         };
         assert!(build_preserve_list(&cfg, temp.path()).is_err());
@@ -289,7 +327,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["network".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -307,7 +345,7 @@ mod tests {
         fs::write(dir.join("app.json"), r#"{"paths":["../outside"]}"#).unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -325,13 +363,49 @@ mod tests {
         fs::write(dir.join("app.json"), "not json").unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
         assert!(matches!(
             error,
             crate::error::InitramfsError::FactoryReset(FactoryResetError::InvalidConfig(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_read_error_maps_to_io_not_invalid_config() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("etc/omnect/factory-reset.d");
+        fs::create_dir_all(&dir).unwrap();
+        // app.json is itself a directory → read_to_string returns Err(io).
+        fs::create_dir_all(dir.join("app.json")).unwrap();
+
+        let cfg = FactoryResetConfig {
+            mode: ResetMode::Mode1,
+            preserve: vec!["applications".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn build_preserve_list_missing_config_for_custom_key_maps_to_io() {
+        // A non-application key needs factory-reset.json; when it is absent the
+        // read fails with NotFound, which must map to Io (not InvalidConfig) so
+        // the ODS status is not mislabeled.
+        let temp = TempDir::new().unwrap();
+        let cfg = FactoryResetConfig {
+            mode: ResetMode::Mode1,
+            preserve: vec!["network".into()],
+        };
+        let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::InitramfsError::FactoryReset(FactoryResetError::Io(_))
         ));
     }
 
@@ -349,7 +423,7 @@ mod tests {
         .unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["network".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();
@@ -367,7 +441,7 @@ mod tests {
         fs::write(dir.join("app.json"), r#"{"paths":["var/app", null]}"#).unwrap();
 
         let cfg = FactoryResetConfig {
-            mode: 1,
+            mode: ResetMode::Mode1,
             preserve: vec!["applications".into()],
         };
         let error = build_preserve_list(&cfg, temp.path()).unwrap_err();

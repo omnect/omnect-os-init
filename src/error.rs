@@ -77,7 +77,15 @@ impl InitramfsError {
             #[cfg(feature = "resize-data")]
             Self::ResizeData(_) => RecoveryClass::ContinueDegraded,
             #[cfg(feature = "factory-reset")]
-            Self::FactoryReset(_) => RecoveryClass::ContinueDegraded,
+            Self::FactoryReset(
+                FactoryResetError::InvalidConfig(_)
+                | FactoryResetError::MissingField(_)
+                | FactoryResetError::BackupFailed { .. }
+                | FactoryResetError::RestoreFailed { .. }
+                | FactoryResetError::ReformatFailed { .. }
+                | FactoryResetError::MountError(_)
+                | FactoryResetError::Io(_),
+            ) => RecoveryClass::ContinueDegraded,
             Self::Io(_) => RecoveryClass::Fatal,
         }
     }
@@ -408,6 +416,23 @@ mod recovery_class_tests {
             path: std::path::PathBuf::from("/etc/hostname"),
             reason: "cp failed".into(),
         });
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_reformat_error_is_continue_degraded() {
+        let err = InitramfsError::FactoryReset(FactoryResetError::ReformatFailed {
+            device: std::path::PathBuf::from("/dev/sda6"),
+            reason: "mkfs failed".into(),
+        });
+        assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
+    }
+
+    #[cfg(feature = "factory-reset")]
+    #[test]
+    fn factory_reset_mount_error_is_continue_degraded() {
+        let err = InitramfsError::FactoryReset(FactoryResetError::MountError("no data".into()));
         assert_eq!(err.recovery_class(), RecoveryClass::ContinueDegraded);
     }
 }

@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{FactoryResetError, Result};
 use crate::filesystem::CP_CMD;
+use crate::mode::factory_reset::CONTEXT_SEPARATOR;
 
 const SYNC_CMD: &str = "/bin/sync";
 
@@ -12,29 +13,45 @@ pub enum RestoreResult {
     PartialFailure { context: String, error: String },
 }
 
-/// Backup all preserve-list paths from rootfs into backup_dir.
-pub fn backup_all(rootfs: &Path, preserve_list: &[String], backup_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(backup_dir)?;
-    for path in preserve_list {
-        backup_path(rootfs, path, backup_dir)?;
-    }
-    Ok(())
-}
-
-/// Restore all preserve-list paths from backup_dir back into rootfs.
-///
-/// Partial restore failures are accumulated and returned as `RestoreResult::PartialFailure`
-/// rather than aborting mid-restore. This ensures as many paths as possible are restored
-/// even when individual files cannot be copied.
-pub fn restore_all(
+/// Backup all preserve-list paths from rootfs into backup_dir. Returns the
+/// subset actually backed up (those whose source existed).
+pub fn backup_all(
     rootfs: &Path,
     preserve_list: &[String],
+    backup_dir: &Path,
+) -> Result<Vec<String>> {
+    std::fs::create_dir_all(backup_dir)?;
+    let mut backed_up = Vec::new();
+    for path in preserve_list {
+        if backup_path(rootfs, path, backup_dir)? {
+            backed_up.push(path.clone());
+        }
+    }
+    Ok(backed_up)
+}
+
+/// Restore all backed-up paths from backup_dir back into rootfs.
+///
+/// `backed_up` is the manifest returned by `backup_all`. A manifest entry whose
+/// backup is missing at restore time is reported as `PartialFailure`. Per-path
+/// restore failures are accumulated rather than aborting mid-restore, so as many
+/// paths as possible are restored.
+pub fn restore_all(
+    rootfs: &Path,
+    backed_up: &[String],
     backup_dir: &Path,
 ) -> Result<RestoreResult> {
     let mut error_context: Vec<String> = Vec::new();
     let mut last_error: Option<String> = None;
 
-    for path in preserve_list {
+    for path in backed_up {
+        let backup_src = backup_source(rootfs, path, backup_dir);
+        if !backup_src.exists() {
+            log::warn!("restore: backup for {path} is missing; preserved data lost");
+            error_context.push(format!("{}:missing-backup", path.trim_start_matches('/')));
+            last_error = Some(format!("backup missing for {path}"));
+            continue;
+        }
         if let Err(e) = restore_path(rootfs, path, backup_dir) {
             log::warn!("restore failed for {path}: {e}");
             error_context.push(format!("{}:restore", path.trim_start_matches('/')));
@@ -44,7 +61,7 @@ pub fn restore_all(
 
     if let Some(error) = last_error {
         Ok(RestoreResult::PartialFailure {
-            context: error_context.join(";"),
+            context: error_context.join(CONTEXT_SEPARATOR),
             error,
         })
     } else {
@@ -52,12 +69,12 @@ pub fn restore_all(
     }
 }
 
-fn backup_path(rootfs: &Path, path: &str, backup_dir: &Path) -> Result<()> {
+fn backup_path(rootfs: &Path, path: &str, backup_dir: &Path) -> Result<bool> {
     let src = rootfs.join(path.trim_start_matches('/'));
 
     if !src.exists() {
         log::info!("backup: {path} does not exist; skipping");
-        return Ok(());
+        return Ok(false);
     }
 
     log::info!("backup: {path}");
@@ -85,14 +102,20 @@ fn backup_path(rootfs: &Path, path: &str, backup_dir: &Path) -> Result<()> {
     }
 
     run_sync()?;
-    Ok(())
+    Ok(true)
+}
+
+/// Path of a preserved entry inside the backup tree. One definition so
+/// `restore_all`'s existence check and `restore_path`'s copy source stay in sync.
+fn backup_source(rootfs: &Path, path: &str, backup_dir: &Path) -> PathBuf {
+    backup_dir
+        .join(rootfs.strip_prefix("/").unwrap_or(rootfs))
+        .join(path.trim_start_matches('/'))
 }
 
 fn restore_path(rootfs: &Path, path: &str, backup_dir: &Path) -> Result<()> {
     let path_stripped = path.trim_start_matches('/');
-    let backup_src = backup_dir
-        .join(rootfs.strip_prefix("/").unwrap_or(rootfs))
-        .join(path_stripped);
+    let backup_src = backup_source(rootfs, path, backup_dir);
 
     if !backup_src.exists() {
         log::info!("restore: {path} does not exist in backup; skipping");
@@ -223,10 +246,42 @@ mod tests {
         fs::create_dir_all(&rootfs).unwrap();
         fs::write(rootfs.join("etc"), "not-a-dir").unwrap();
 
-        let result = restore_all(&rootfs, &["/etc/hostname".to_string()], &backup).unwrap();
+        let manifest = vec!["/etc/hostname".to_string()];
+        let result = restore_all(&rootfs, &manifest, &backup).unwrap();
         assert!(matches!(result, RestoreResult::PartialFailure { .. }));
         if let RestoreResult::PartialFailure { context, .. } = result {
             assert!(context.contains("etc/hostname:restore"));
+        }
+    }
+
+    #[test]
+    fn backup_all_returns_only_paths_that_existed() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = temp.path().join("rootfs");
+        let backup = temp.path().join("backup");
+        fs::create_dir_all(rootfs.join("etc")).unwrap();
+        fs::write(rootfs.join("etc/hostname"), "host").unwrap();
+
+        let preserve = vec!["/etc/hostname".to_string(), "/etc/absent".to_string()];
+        let manifest = backup_all(&rootfs, &preserve, &backup).unwrap();
+        assert_eq!(manifest, vec!["/etc/hostname".to_string()]);
+    }
+
+    #[test]
+    fn restore_all_reports_partial_failure_when_backed_up_file_vanished() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = temp.path().join("rootfs");
+        let backup = temp.path().join("backup");
+        fs::create_dir_all(&rootfs).unwrap();
+        fs::create_dir_all(&backup).unwrap();
+
+        // Manifest claims /etc/hostname was backed up, but the backup dir is empty
+        // (simulates the tmpfs backup lost between backup and restore).
+        let manifest = vec!["/etc/hostname".to_string()];
+        let result = restore_all(&rootfs, &manifest, &backup).unwrap();
+        assert!(matches!(result, RestoreResult::PartialFailure { .. }));
+        if let RestoreResult::PartialFailure { context, .. } = result {
+            assert!(context.contains("etc/hostname:missing-backup"));
         }
     }
 }
