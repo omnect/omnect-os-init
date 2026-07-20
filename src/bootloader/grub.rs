@@ -171,7 +171,7 @@ impl BootEnv for GrubBootEnv {
             | PartitionName::Etc
             | PartitionName::Data => {
                 // Non-boot partitions: write diagnostic to a file on the boot partition
-                // instead of grubenv. grubenv is a fixed 1024-byte block — storing multiple
+                // instead of grubenv. grubenv is a small, fixed-size block — storing multiple
                 // large encoded blobs there would overflow it. Boot is healthy at this point
                 // (its own fsck ran first), so this write is safe regardless of this
                 // partition's exit code.

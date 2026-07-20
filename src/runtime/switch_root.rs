@@ -178,9 +178,8 @@ fn rollback_critical_mounts(moved: &[&str], new_root: &Path) {
 ///
 /// Checking only `is_file()` is insufficient — a non-executable file would cause
 /// `exec` to fail after critical mounts have already been moved to the new root.
-/// Errors from `metadata()` (e.g. permission denied) are propagated immediately
-/// rather than silently collapsing to false, which would produce a misleading
-/// "not found or not executable" message.
+/// Errors from `metadata()` (e.g. permission denied) propagate immediately, so a
+/// failed check reports its real cause.
 fn is_executable_file(path: &Path) -> std::io::Result<bool> {
     let m = path.metadata()?;
     Ok(m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -189,10 +188,9 @@ fn is_executable_file(path: &Path) -> std::io::Result<bool> {
 /// Resolve the init binary path within the new root.
 ///
 /// Validates the path and checks that the binary exists and is executable.
-/// No fallback probing is performed — the caller must supply a valid `init=`
-/// kernel cmdline parameter or the default `/sbin/init`. If the path is wrong,
-/// that is a system configuration error and should surface immediately rather
-/// than silently selecting an unexpected binary.
+/// The caller must supply a valid `init=` kernel cmdline parameter or the
+/// default `/sbin/init`. A wrong path is a system configuration error and
+/// surfaces immediately.
 ///
 /// Returns an absolute path string (starting with `/`) so that `Command::new`
 /// on PID 1 does not fall back to a PATH lookup.

@@ -18,9 +18,7 @@ const FW_SETENV_CMD: &str = "/bin/fw_setenv";
 ///
 /// Uses `fw_printenv` and `fw_setenv` to access environment variables.
 /// Fsck status encoding is handled by the default `BootEnv` trait methods.
-pub struct UBootBootEnv {
-    // No state needed - commands access environment directly
-}
+pub struct UBootBootEnv {}
 
 impl UBootBootEnv {
     /// Create a new U-Boot boot environment accessor.

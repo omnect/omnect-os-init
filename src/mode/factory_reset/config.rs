@@ -142,9 +142,9 @@ fn collect_application_paths(rootfs: &Path, list: &mut Vec<String>) -> Result<()
         ))
     })?;
 
-    // Not entries.flatten(): a per-entry read error (I/O error, race) must abort
-    // the reset, not silently drop an application's preserve list — a dropped
-    // list means its paths are wiped and restore_all still reports Success.
+    // Collect per-entry Results and abort on any read error (I/O error, race):
+    // silently dropping an application's preserve list would wipe its paths while
+    // restore_all still reports Success.
     for entry in entries {
         let entry = entry.map_err(|e| {
             FactoryResetError::Io(std::io::Error::new(

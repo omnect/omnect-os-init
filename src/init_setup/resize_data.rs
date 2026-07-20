@@ -169,7 +169,8 @@ mod tests {
         // Uses empty_layout: resize_if_needed returns Ok immediately (no data
         // partition), so no real sgdisk/parted is invoked. The purpose of this
         // test is to verify the Degraded arm is dispatched correctly — not to
-        // test the resize commands themselves (those are CI/Concourse-only).
+        // test the resize commands themselves (those need real disk tooling and
+        // are not run in unit tests).
         let layout = empty_layout();
         let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
             command: "boot-env-tool".into(),

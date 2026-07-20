@@ -14,12 +14,6 @@ const TUNE2FS_NO_LIMIT: &str = "-1";
 const TUNE2FS_ZERO_INTERVAL: &str = "0";
 
 /// Reformat a partition as ext4 and apply omnect tunables.
-///
-/// Equivalent to:
-/// ```sh
-/// mkfs.ext4 -F -q <device>
-/// tune2fs <device> -c -1 -i 0 -L <label>
-/// ```
 pub fn reformat_ext4(device: &Path, label: &str) -> Result<()> {
     log::info!("Reformatting {} with label={label}", device.display());
 

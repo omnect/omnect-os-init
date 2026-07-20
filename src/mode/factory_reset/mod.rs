@@ -29,8 +29,8 @@ const FACTORY_RESET_BACKUP_DIR: &str = "/tmp/factory_reset/backup";
 /// Shared join separator for the retry note and restore partial-failure context.
 pub(crate) const CONTEXT_SEPARATOR: &str = ";";
 
-/// ext4 volume labels applied by `reformat_ext4` — distinct from the
-/// `mount_points` path constants, which name mount *locations* not labels.
+/// ext4 volume labels applied by `reformat_ext4`. These name the on-disk
+/// volume label; the `mount_points` constants name the mount location.
 const DATA_PARTITION_LABEL: &str = "data";
 const ETC_PARTITION_LABEL: &str = "etc";
 
@@ -39,7 +39,7 @@ const ETC_PARTITION_LABEL: &str = "etc";
 /// Clears the trigger env var, runs the reset sequence, writes status to
 /// `ods_status`, and always delegates to Normal boot — never blocks the device.
 pub fn run(mut ctx: BootContext<'_>, config: FactoryResetConfig) -> Result<()> {
-    // Spec §5: clear failure is non-fatal — log and continue with the reset.
+    // Failing to clear the trigger (set_env) is non-fatal — log and continue with the reset.
     // If set_env consistently fails the trigger persists and the reset will
     // repeat on every boot until set_env succeeds. This is the accepted
     // trade-off per the error-handling table in the design spec.
@@ -430,7 +430,6 @@ struct RetryReport {
     /// of `reformat_failed`.
     retried: Vec<PartitionName>,
     /// Partitions whose `mkfs` failed both times; the mount was still attempted.
-    /// A recovered single failure is a `Warning`, two failures are an `Error`.
     reformat_failed: Vec<PartitionName>,
     /// Set when the mount failed on a `data`/`etc` partition: the signal to persist.
     exhausted: Option<ResetFailureSignal>,

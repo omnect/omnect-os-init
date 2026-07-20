@@ -24,8 +24,8 @@ const SH_CMD: &str = "/bin/sh";
 fn main() {
     // Compile-time image-type discriminator. Read first, before any fallible
     // step, so even the earliest failures (mount_essential_filesystems, logger
-    // init) respect the release/debug split. Spec invariant 1 (§2.6): release
-    // never shells.
+    // init) respect the release/debug split: a release image never drops to a
+    // shell.
     let is_release_image = cfg!(feature = "release-image");
 
     // Mount essential filesystems first (/dev, /proc, /sys, /run). On
@@ -70,7 +70,7 @@ fn main() {
 
 /// Handle a fatal error per the recovery policy.
 ///
-/// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md §2-§3
+/// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md
 fn handle_fatal_error(error: InitramfsError, is_release: bool) -> ! {
     let class = error.recovery_class();
     let update_pending = omnect_os_init::read_update_pending();
@@ -130,8 +130,6 @@ fn halt_with_message(message: &str) -> ! {
 /// `log::*` macros are not yet usable here — only `eprintln!` is safe.
 /// Respawns on exit so PID 1 never returns to the kernel.
 fn spawn_emergency_shell() -> ! {
-    // PID 1 must never exit. Respawn the shell so the operator can retry.
-    // Use eprintln! — the kmsg logger may not be initialised yet at this point.
     loop {
         match process::Command::new(SH_CMD).status() {
             Ok(status) => eprintln!("Emergency shell exited with {status} — respawning"),
@@ -150,8 +148,6 @@ fn spawn_emergency_shell() -> ! {
 /// Respawns on exit (PID 1 must never return to the kernel) and falls
 /// back to `sh` when `bash` is unavailable.
 fn spawn_debug_shell() -> ! {
-    // PID 1 must never exit — the kernel would panic. Respawn the shell
-    // in a loop so the operator can re-enter after an accidental exit.
     loop {
         let status = process::Command::new(BASH_CMD)
             .arg("--init-file")
