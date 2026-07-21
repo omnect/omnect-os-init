@@ -36,8 +36,7 @@ pub enum Action {
 ///
 /// `update_pending` is `true` if `omnect_validate_update` was set in the
 /// boot env at the time it was opened. When the env is unreadable or the
-/// failure occurred before the env was opened, `update_pending` is `false`
-/// per spec §2.5.
+/// failure occurred before the env was opened, `update_pending` is `false`.
 ///
 /// `is_release` is `true` when the `release-image` feature is compiled in.
 #[must_use = "the returned Action must be executed"]

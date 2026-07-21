@@ -20,7 +20,6 @@ const ROOTBLK_SYMLINK_NAME: &str = "rootblk";
 pub fn create_omnect_symlinks(layout: &PartitionLayout) -> Result<()> {
     create_symlink_dir()?;
 
-    // Create symlink to the base block device
     create_symlink(&layout.device.base, &symlink_path(ROOTBLK_SYMLINK_NAME))?;
 
     // Create partition symlinks — rootCurrent is already in layout.partitions
@@ -75,7 +74,6 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
         })?;
     }
 
-    // Create the symlink
     symlink(target, link).map_err(|e| PartitionError::SymlinkFailed {
         link: link.to_path_buf(),
         target: target.to_path_buf(),
@@ -93,11 +91,9 @@ fn create_symlink(target: &Path, link: &Path) -> Result<()> {
 
 /// Verify that all expected symlinks exist and are valid
 pub fn verify_symlinks(layout: &PartitionLayout) -> Result<()> {
-    // Check rootblk
     verify_symlink(&symlink_path(ROOTBLK_SYMLINK_NAME), &layout.device.base)?;
 
-    // Check all partitions — rootCurrent is already in layout.partitions so
-    // no explicit check needed (mirrors create_omnect_symlinks).
+    // rootCurrent is already in layout.partitions, so no explicit check needed.
     for (name, device_path) in &layout.partitions {
         verify_symlink(&symlink_path(name.as_str()), device_path)?;
     }

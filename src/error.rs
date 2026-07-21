@@ -52,7 +52,7 @@ impl InitramfsError {
     /// Classify the error for the recovery policy. The match is exhaustive
     /// so a new variant fails to compile until classified.
     ///
-    /// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md §2.1
+    /// Spec: docs/superpowers/specs/2026-05-27-boot-failure-recovery-policy-design.md
     pub fn recovery_class(&self) -> RecoveryClass {
         match self {
             Self::Bootloader(_) => RecoveryClass::Fatal,
@@ -374,7 +374,7 @@ mod recovery_class_tests {
     fn resize_data_fsck_failed_is_continue_degraded() {
         use crate::filesystem::FsckExitCode;
         // FsckFailed nested in ResizeData must be absorbed (ContinueDegraded),
-        // not Fatal — this is the headline fix for the device brick on first boot.
+        // not Fatal — a resize-data fsck failure must not brick the device.
         let err =
             InitramfsError::ResizeData(ResizeDataError::Filesystem(FilesystemError::FsckFailed {
                 device: std::path::PathBuf::from("/dev/sda5"),
@@ -388,8 +388,9 @@ mod recovery_class_tests {
     #[test]
     fn resize_data_fsck_requires_reboot_is_reboot_to_apply() {
         use crate::filesystem::FsckExitCode;
-        // FsckRequiresReboot nested in ResizeData propagates to a reboot, not
-        // a halt or a ContinueDegraded — matches the §3.1 behavior table.
+        // A reboot-required fsck on data during the resize pre-check maps to a
+        // reboot (RebootToApply), not a resize failure — so a FsckRequiresReboot
+        // nested in ResizeData still resolves to RebootToApply.
         let err = InitramfsError::ResizeData(ResizeDataError::Filesystem(
             FilesystemError::FsckRequiresReboot {
                 device: std::path::PathBuf::from("/dev/sda5"),

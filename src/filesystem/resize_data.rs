@@ -84,10 +84,9 @@ pub fn resize_if_needed(layout: &crate::partition::PartitionLayout) -> Result<()
     )?;
 
     // Run fsck on the (unmounted) data partition before expanding the filesystem.
-    // FsckFailed is absorbed by handle_result (SkippedFsck outcome); boot continues.
-    // FsckRequiresReboot propagates through handle_result to trigger a controlled reboot.
-    // Both require the error to be shaped as ResizeData(Filesystem(...)), achieved here
-    // by mapping through ResizeDataError before the ? lifts to InitramfsError.
+    // Shape the error as ResizeData(Filesystem(...)) here (map through ResizeDataError
+    // before ? lifts to InitramfsError) so the caller can classify an fsck failure
+    // (absorbed) apart from a reboot request (propagated).
     check_filesystem(&data_dev, FsType::Ext4).map_err(ResizeDataError::from)?;
 
     let data_dev_str = data_dev

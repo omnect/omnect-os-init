@@ -138,7 +138,8 @@ pub(crate) fn setup_data_overlay_tracked(
     )?;
     mounts.push(rootfs_dir.join(paths::VAR_LIB));
 
-    // data partition uses a "local" subdir instead of "usr/local"
+    // The data partition holds this content under a top-level "local" subdir,
+    // bind-mounted onto "usr/local".
     bind_mount(
         &data_mount.join(paths::DATA_LOCAL_DIR),
         &rootfs_dir.join(paths::USR_LOCAL),
@@ -165,11 +166,9 @@ fn setup_home_overlay(rootfs: &Path, data_mount: &Path) -> Result<()> {
     let lower_dir = rootfs.join(paths::HOME);
     let target = rootfs.join(paths::HOME);
 
-    // Ensure directories exist
     ensure_dir(&home_data)?;
     ensure_overlay_dirs(&upper_dir, &work_dir)?;
 
-    // Mount the overlay with rootfs/home as lower layer
     mount_overlay(&lower_dir, &upper_dir, &work_dir, &target)?;
 
     log::info!(

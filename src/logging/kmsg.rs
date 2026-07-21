@@ -55,7 +55,7 @@ impl KmsgLogger {
         log::set_boxed_logger(Box::new(self))
     }
 
-    // Kernel syslog level prefixes per Documentation/admin-guide/serial-console.rst
+    // Kernel syslog level prefixes: <3>=err, <4>=warning, <6>=info, <7>=debug/trace.
     fn level_to_kernel_prefix(level: Level) -> &'static str {
         match level {
             Level::Error => "<3>",
@@ -81,7 +81,6 @@ impl Log for KmsgLogger {
         let message = format!("{}{}{}\n", prefix, LOG_PREFIX, record.args());
 
         let mut kmsg = self.kmsg.lock().unwrap_or_else(|p| p.into_inner());
-        // Ignore write errors - nothing we can do if kmsg fails
         let _ = kmsg.write_all(message.as_bytes());
     }
 

@@ -48,9 +48,6 @@ impl RootDevice {
 
 /// Detects the root device from parsed kernel command line parameters.
 pub fn detect_root_device(cmdline: &CmdlineConfig) -> Result<RootDevice> {
-    // GRUB: rootpart=N + bootpart_fsuuid=<uuid>
-    // GRUB sets bootpart_fsuuid= on the kernel cmdline at boot time via
-    // `probe --fs-uuid`, so it is always present on GRUB boots.
     #[cfg(feature = "grub")]
     if let Some(part_str) = cmdline.get("rootpart") {
         let part_num: u32 = part_str.parse().map_err(|_| {
@@ -69,7 +66,6 @@ pub fn detect_root_device(cmdline: &CmdlineConfig) -> Result<RootDevice> {
         return device_from_fsuuid(fsuuid, part_num);
     }
 
-    // U-Boot: root=/dev/<device> (full partition path in bootargs)
     #[cfg(feature = "uboot")]
     if let Some(root) = cmdline.get("root") {
         if !root.starts_with("/dev/") {
@@ -106,8 +102,6 @@ fn device_from_fsuuid(fsuuid: &str, part_num: u32) -> Result<RootDevice> {
         fsuuid
     );
 
-    // Retry blkid until the UUID appears or the timeout expires.
-    // Block devices may not be ready when initramfs first runs blkid.
     let timeout = Duration::from_secs(DEVICE_WAIT_TIMEOUT_SECS);
     let start = Instant::now();
     let boot_part_str = loop {

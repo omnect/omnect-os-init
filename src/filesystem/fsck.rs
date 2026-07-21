@@ -20,7 +20,7 @@ const FSCK_CMD: &str = "/sbin/fsck";
 const FSCK_AUTO_REPAIR_FLAG: &str = "-y";
 
 /// Filesystem type flag: tells the wrapper which backend to dispatch to (fsck.ext4 / fsck.fat).
-/// Without -t, the wrapper falls back to blkid probing which is absent in initramfs.
+/// We pass the type explicitly because the caller already knows it.
 const FSCK_TYPE_FLAG: &str = "-t";
 
 /// Type-safe wrapper for fsck(8) exit codes.
@@ -185,11 +185,7 @@ impl FsckResult {
     }
 }
 
-/// Run fsck on a device
-///
-/// # Arguments
-/// * `device` - Path to the block device to check
-/// * `fstype` - Filesystem type
+/// Run fsck on a device.
 ///
 /// # Returns
 /// * `Ok(FsckResult)` - Result of the check (including exit code 1: errors corrected, safe to mount)

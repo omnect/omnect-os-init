@@ -123,20 +123,17 @@ impl fmt::Display for ValidateUpdateState {
     }
 }
 
-/// Status information for omnect-device-service
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct OdsStatus {
-    /// Fsck results for each partition
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub fsck: HashMap<PartitionName, FsckStatus>,
 
-    /// Factory reset status (if performed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub factory_reset: Option<FactoryResetStatus>,
 
     /// Carries the boot-env error cause when the env was unavailable on this
     /// boot, so ODS consumers can diagnose which tool or file failed rather
-    /// than receiving an opaque signal. `None` on the happy path.
+    /// than receiving an opaque signal. `None` when the env was available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
 
@@ -147,17 +144,15 @@ pub struct OdsStatus {
 
     /// Carries the resize-data failure cause when resize did not complete on
     /// this boot, so ODS consumers can diagnose and notify the cloud. `None`
-    /// on the happy path (resize succeeded or guard already present).
+    /// when resize completed (succeeded or guard already present).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resize_data: Option<ResizeStatus>,
 }
 
-/// Fsck status for a single partition
 #[derive(Debug, Clone, Serialize)]
 pub struct FsckStatus {
-    /// Exit code from fsck
     pub code: i32,
-    /// Output from fsck (may be compressed in bootloader)
+    /// fsck output; may be stored compressed in the bootloader env.
     pub output: String,
 }
 
@@ -199,39 +194,31 @@ pub struct ResizeStatus {
     pub reason: String,
 }
 
-/// Factory reset execution status
 #[derive(Debug, Clone, Serialize)]
 pub struct FactoryResetStatus {
-    /// Outcome of the factory reset operation.
     pub status: FactoryResetStatusCode,
-    /// Error message if failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Additional context
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
-    /// Paths that were preserved
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     /// `true` once the destructive phase (partition reformat) began. On
     /// `status: Error` this distinguishes a safe no-op abort (nothing touched)
     /// from a failure after data was already wiped. Always serialized — absence
-    /// of the key would itself be a bug (mirrors `OdsStatus.first_boot`).
+    /// of the key would itself be a bug.
     pub data_wiped: bool,
 }
 
 impl OdsStatus {
-    /// Create a new empty status
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Add fsck result for a partition
     pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
         self.fsck.insert(partition, FsckStatus { code, output });
     }
 
-    /// Set factory reset status
     pub fn set_factory_reset(&mut self, status: FactoryResetStatus) {
         self.factory_reset = Some(status);
     }
@@ -299,7 +286,6 @@ pub fn create_ods_runtime_files(
     Ok(())
 }
 
-/// Write the main status JSON file
 fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
     let status_path = ods_dir.join(ODS_STATUS_FILE);
     let json = serde_json::to_string_pretty(status).map_err(|e| {
@@ -886,7 +872,7 @@ mod tests {
     #[test]
     fn first_boot_always_serialized() {
         // Plain bool, always in the JSON. Absence of the key would itself
-        // be diagnostic of a bug — see spec §7.
+        // be diagnostic of a bug.
         let s = OdsStatus::new();
         let j = serde_json::to_string(&s).unwrap();
         assert!(

@@ -6,13 +6,11 @@ pub mod device;
 pub mod layout;
 pub mod symlinks;
 
-// Re-export error type from crate::error
 pub use crate::error::PartitionError;
 
 /// Result type for partition operations.
 pub type Result<T> = std::result::Result<T, PartitionError>;
 
-// Re-export main types
 #[cfg(feature = "grub")]
 pub use device::root_device_from_blkid;
 pub use device::{RootDevice, detect_root_device};

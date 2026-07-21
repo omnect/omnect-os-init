@@ -10,20 +10,17 @@ use serde::Deserialize;
 
 use crate::error::{InitramfsError, Result};
 
-/// Configuration file path for fs-link
+/// Main fs-link config file.
 const FS_LINK_CONFIG_PATH: &str = "etc/omnect/fs-link.json";
 
-/// Fallback config path
+/// Drop-in config directory; its `*.json` files are merged with the main config.
 const FS_LINK_CONFIG_PATH_D: &str = "etc/omnect/fs-link.d";
 
-/// Configuration for fs-link
 #[derive(Debug, Clone, Deserialize)]
 pub struct FsLinkConfig {
-    /// List of links to create
     pub links: Vec<LinkEntry>,
 }
 
-/// A single link entry
 #[derive(Debug, Clone, Deserialize)]
 pub struct LinkEntry {
     /// Target of the symlink (what it points to)
@@ -32,7 +29,6 @@ pub struct LinkEntry {
     pub link: String,
 }
 
-/// Create symbolic links based on fs-link configuration
 pub fn create_fs_links(rootfs_dir: &Path) -> Result<()> {
     let config = load_fs_link_config(rootfs_dir)?;
 
@@ -47,18 +43,15 @@ pub fn create_fs_links(rootfs_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load fs-link configuration from all sources
 fn load_fs_link_config(rootfs_dir: &Path) -> Result<FsLinkConfig> {
     let mut all_links = Vec::new();
 
-    // Load main config file
     let main_config_path = rootfs_dir.join(FS_LINK_CONFIG_PATH);
     if main_config_path.exists() {
         let config = load_config_file(&main_config_path)?;
         all_links.extend(config.links);
     }
 
-    // Load config.d directory
     let config_d_path = rootfs_dir.join(FS_LINK_CONFIG_PATH_D);
     if config_d_path.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(&config_d_path)?
@@ -84,7 +77,6 @@ fn load_fs_link_config(rootfs_dir: &Path) -> Result<FsLinkConfig> {
     Ok(FsLinkConfig { links: all_links })
 }
 
-/// Load a single config file
 fn load_config_file(path: &Path) -> Result<FsLinkConfig> {
     let content = fs::read_to_string(path)?;
     let config: FsLinkConfig = serde_json::from_str(&content).map_err(|e| {
@@ -140,14 +132,12 @@ fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
     let link_path = rootfs_dir.join(&entry.link);
     let target = PathBuf::from(&entry.target);
 
-    // Ensure parent directory exists
     if let Some(parent) = link_path.parent()
         && !parent.exists()
     {
         fs::create_dir_all(parent)?;
     }
 
-    // Remove existing link/file if present
     if link_path.exists() || link_path.is_symlink() {
         // A plain directory cannot be replaced by a symlink — flag it clearly.
         // Symlinks pointing to directories are fine and must be replaceable.
@@ -166,7 +156,6 @@ fn create_link(rootfs_dir: &Path, entry: &LinkEntry) -> Result<()> {
         })?;
     }
 
-    // Create the symlink
     symlink(&target, &link_path).map_err(|e| {
         InitramfsError::Io(std::io::Error::other(format!(
             "Failed to create symlink {} -> {}: {}",

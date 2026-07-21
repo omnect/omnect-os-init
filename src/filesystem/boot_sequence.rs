@@ -25,13 +25,12 @@ const FSCK_LOG_SUBDIR: &str = "var/log/fsck";
 
 /// Run fsck on a partition and record the result (including output) in `ods_status`.
 ///
-/// Mounts the partition even when fsck reports errors (exit ≥ 4): the errors
-/// are recorded and the caller proceeds with the mount. Proceeding despite
-/// fsck errors is preferable to an unrecoverable brick on an embedded device
-/// without physical access. The full fsck result is persisted via `OdsStatus`
-/// (→ boot env + `/data/var/log/fsck/<partition>.log`) so ODS can act on it
-/// at runtime — independent of `OdsStatus.degraded_boot`, which is reserved
-/// for the env-unavailable condition.
+/// Records the result even when fsck reports errors (exit ≥ 4) and does not fail
+/// the boot: proceeding despite fsck errors is preferable to an unrecoverable
+/// brick on an embedded device without physical access. The full fsck result is
+/// persisted via `OdsStatus` (→ boot env + `/data/var/log/fsck/<partition>.log`)
+/// so ODS can act on it at runtime — independent of `OdsStatus.degraded_boot`,
+/// which is reserved for the env-unavailable condition.
 ///
 /// Intercepts `FsckRequiresReboot` to save the output before propagating, ensuring
 /// it is available for persistence even when mounting is aborted early.
@@ -76,8 +75,7 @@ pub fn fsck_and_record(
 /// In that case `ods_status` already holds the fsck diagnostic (recorded by
 /// `fsck_and_record`). The caller must persist `ods_status` to the bootloader
 /// environment before propagating this error, or the diagnostic is lost on
-/// the subsequent reboot. `apply_boot_env_decision` in `run_init` owns this
-/// contract: it calls `persist_fsck_results` before propagating `core_result`.
+/// the subsequent reboot.
 pub fn mount_core_partitions(
     layout: &PartitionLayout,
     rootfs: &Path,
@@ -113,7 +111,6 @@ pub fn mount_core_partitions(
     ))?;
     log::info!("Mounted rootfs at {}", rootfs.display());
 
-    // Mount boot partition.
     // vfat is mounted read-write without noatime/nodiratime: GRUB needs to write
     // grubenv on the boot partition; atime writes are acceptable on vfat.
     if let Some(boot_dev) = layout.partitions.get(&PartitionName::Boot) {
@@ -258,10 +255,10 @@ pub fn mount_remaining_partitions(
     let var_volatile = rootfs.join(mount_points::VAR_VOLATILE);
     mount_tmpfs(&var_volatile, MsFlags::empty(), None)?;
 
-    // /run is NOT mounted here: the initramfs /run tmpfs (mounted by
-    // mount_essential_filesystems) is moved into the new root by switch_root
-    // using MS_MOVE. Mounting a second tmpfs at /rootfs/run would cause EBUSY
-    // and lose any files written there (e.g. ODS runtime state).
+    // The initramfs /run tmpfs (mounted by mount_essential_filesystems) is moved
+    // into the new root by switch_root using MS_MOVE, so /run is left alone here:
+    // mounting a second tmpfs at /rootfs/run would cause EBUSY and lose any files
+    // written there (e.g. ODS runtime state).
 
     Ok(())
 }

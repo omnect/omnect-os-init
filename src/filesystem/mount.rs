@@ -71,11 +71,8 @@ impl AsRef<str> for FsType {
 /// Options for mounting a filesystem
 #[derive(Debug, Clone)]
 pub struct MountOptions {
-    /// Filesystem type
     pub fstype: Option<FsType>,
-    /// Mount flags
     pub flags: MsFlags,
-    /// Additional mount data/options string
     pub data: Option<String>,
 }
 
@@ -138,37 +135,31 @@ impl MountOptions {
         }
     }
 
-    /// Add read-only flag
     pub fn readonly(mut self) -> Self {
         self.flags |= flags::RDONLY;
         self
     }
 
-    /// Add noatime flag
     pub fn noatime(mut self) -> Self {
         self.flags |= flags::NOATIME;
         self
     }
 
-    /// Add nodiratime flag
     pub fn nodiratime(mut self) -> Self {
         self.flags |= flags::NODIRATIME;
         self
     }
 
-    /// Add nosuid flag
     pub fn nosuid(mut self) -> Self {
         self.flags |= flags::NOSUID;
         self
     }
 
-    /// Add nodev flag
     pub fn nodev(mut self) -> Self {
         self.flags |= flags::NODEV;
         self
     }
 
-    /// Add noexec flag
     pub fn noexec(mut self) -> Self {
         self.flags |= flags::NOEXEC;
         self
@@ -184,11 +175,8 @@ impl MountOptions {
 /// Represents a mounted filesystem
 #[derive(Debug, Clone)]
 pub struct MountPoint {
-    /// Source device or path
     pub source: PathBuf,
-    /// Target mount point
     pub target: PathBuf,
-    /// Mount options used
     pub options: MountOptions,
 }
 
