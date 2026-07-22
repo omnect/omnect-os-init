@@ -68,15 +68,22 @@ logged, recorded in ODS status, and the boot continues without a reboot.
 
 The sync runs only when all hold:
 
-- `first_boot == true` — the primary condition. `first_boot` is derived from the
-  absence of `BootEnvKey::FirstBootDone`, which omnect-os-init writes once at the
-  end of `normal::run` and never clears. It survives OTA and factory reset, so
-  it is `false` on every boot after the first successful one — including OTA
-  validation boots. This alone restricts the sync to fresh flash.
-- `update_pending == false` — defence-in-depth against an OTA validation boot,
-  read once into the process-global `UPDATE_PENDING` in `run_init`.
-- The bootloader env is `Available`. On `Degraded` the step skips, logs a
-  warning, and records a `SkippedDegraded` ODS status.
+- `first_boot == true`. `first_boot` is derived from the absence of
+  `BootEnvKey::FirstBootDone`, which omnect-os-init writes once at the end of
+  `normal::run` and never clears. For a device that already ran the Rust init at
+  least once, the marker is present, so `first_boot` is `false` on every later
+  boot — including OTA validation boots on such devices.
+- `update_pending == false`. This is **load-bearing, not defence-in-depth**.
+  A device migrating from the legacy bash init via OTA boots its first Rust-init
+  boot — the update validation boot — with `omnect_first_boot_done` absent (the
+  legacy image never set it), so `first_boot == true` there. In that boot only
+  `update_pending` stops the step from persisting bootargs mid-validation, which
+  would defeat the rollback safety §1 describes. Do not remove this check. Read
+  once into the process-global `UPDATE_PENDING` in `run_init`.
+- The bootloader env being `Available` is implied by `first_boot == true`, not a
+  separate gate: `compute_first_boot` returns `false` on a degraded env, so a
+  degraded env never reaches the write. `run()` keeps a defensive `available_mut`
+  check that logs and returns, but it cannot occur in production.
 
 `first_boot` stays `true` across the sync reboot: the marker is written only in
 `normal::run`, which runs after `init_setup`, so a reboot in `init_setup`
@@ -87,10 +94,12 @@ until the value converges. The gate is therefore **not** the loop protection
 ## 5. Building the value
 
 Read `omnect_extra_bootargs_omnect` and the optional
-`omnect_extra_bootargs_custom` from the mounted boot partition
-(`rootfs/boot`), join with a single space, and trim. Missing or empty files
-contribute nothing; both absent yields the empty string. This matches the
-legacy script and the userspace tool.
+`omnect_extra_bootargs_custom` from the mounted boot partition (`rootfs/boot`),
+join them, and squeeze whitespace runs to single spaces (matching the legacy
+`awk '{$1=$1};1'`, not only trimming the ends). Missing or empty files
+contribute nothing; both absent yields the empty string. Exact-match matters:
+the value is compared byte-for-byte against the stored env value, so a device
+carrying a legacy-squeezed value must produce the same normalization.
 
 ## 6. Change flow
 
@@ -125,6 +134,16 @@ Two independent guards, both required:
 Read-back verify alone is not enough: it reads the page cache and can succeed
 while nothing is on disk yet. Durability comes from `sync()`.
 
+These two guards **mitigate** the loop; they do not **bound** it. They remove
+two specific loop causes (normalization mismatch, lost page-cache write). One
+residual remains: if storage acks `sync()` but silently drops the write (worn
+eMMC/SD, vfat corruption), the device rewrites-verifies-syncs-reboots forever.
+Legacy did not loop here — its first-boot gate closed after one attempt
+regardless of the write outcome. This design trades "give up after one try" for
+"retry until the value converges" and accepts the residual unbounded-reboot
+risk, the same class of accepted risk as the fsck reboot loop. A hard bound
+(e.g. a reboot counter in the env) is out of scope here.
+
 ## 8. Reboot signaling
 
 The step does not reboot directly — the reboot convention keeps that in
@@ -140,15 +159,31 @@ The step does not reboot directly — the reboot convention keeps that in
 verified and synced write, `Ok(())` otherwise. `init_setup::run` and `run_init`
 propagate it.
 
-Unlike the fsck `RebootToApply` case, this reboot is bounded by read-back verify
-plus `sync()`, not by the bootloader (a fresh-flash device has no rollback slot
-to bound reboot count). The `RebootToApply` doc comment should note both reboot
-reasons and their respective bounds.
+Unlike the fsck `RebootToApply` case, the bootloader does not bound this reboot
+(a fresh-flash device has no rollback slot). Read-back verify plus `sync()`
+mitigate the loop but do not bound it (§7). The `RebootToApply` doc comment
+notes all reboot reasons and that this one carries an accepted residual loop
+risk.
 
-## 9. Failure handling
+## 9. Failure handling — security-first, retry on failure
 
-Every outcome except the intended reboot is best-effort — logged, recorded in
-ODS status, boot continues without a reboot. A failed sync never blocks boot.
+The arguments are security-critical (§1), so a failed sync must not silently
+close the first-boot gate and leave the device running without them forever.
+
+On a `Failed` outcome (`set_env` error, read-back mismatch, or read error):
+- the step logs, records `Failed` in ODS, and returns `Ok(())` (no reboot,
+  boot continues so the device is reachable for diagnosis/reflash), **and**
+- `normal::run` does **not** write the `FirstBootDone` marker on this boot, so
+  `first_boot` stays `true` and the sync **retries on the next boot**.
+
+This is how the degraded-env case already behaves (the marker write itself fails
+on a degraded env), so `Failed` just extends the same retry behavior.
+
+Accepted cost: if the failure never clears (persistent env-write fault), the
+device retries the sync every boot and never completes first-boot setup (resize
+also stays pending). It stays reachable and reports `Failed` in ODS on every
+boot, which is the signal for the cloud to reflash or alert. This is the
+deliberate security-over-availability tradeoff for these arguments.
 
 ## 10. ODS status — new entry
 
@@ -166,33 +201,41 @@ pub struct ExtraBootArgsStatus {
 pub enum ExtraBootArgsOutcome {
     Applied,        // value written and verified; reboot follows
     AlreadyCurrent, // no change needed
-    Failed,         // set_env or read-back verify failed; no reboot
-    SkippedDegraded,// boot env unavailable
+    Failed,         // set_env or read-back verify failed; no reboot, retried next boot
 }
 ```
 
 Setter `set_extra_bootargs_status`. `Applied` records that a reboot is imminent.
+There is no `SkippedDegraded`: a degraded env cannot reach the step (§4), so it
+would be a status that never appears.
 
 ## 11. Testing
 
-- `read_extra_bootargs`: none / omnect-only / custom-only / both / empty
-  (existing tests, kept).
-- Gate: `first_boot == false` → skip; `update_pending == true` → skip; degraded
-  env → skip and record `SkippedDegraded`.
+- `read_extra_bootargs`: none / omnect-only / custom-only / both / empty; plus
+  internal-whitespace squeeze (`"a   b"` → `"a b"`).
+- Gate: `first_boot == false` → skip; `update_pending == true` → skip.
 - Change path: differing value → `set_env` + read-back + `Err(ExtraBootArgsUpdated)`.
 - Read-back mismatch (mock returns a different value) → no `Err`, ODS `Failed`,
   no reboot.
 - `current == new` → no-op, no `Err`, ODS `AlreadyCurrent`.
 - `recovery_class`: `ExtraBootArgsUpdated → RebootToApply` (exhaustive-match test).
+- Marker skip: with ODS `extra_bootargs = Failed`, `normal::run` does not write
+  `FirstBootDone`; with `Applied`/`AlreadyCurrent`/absent it does (when
+  `first_boot` and resize allow).
 
 ## 12. Comparison to legacy
 
 | Aspect | Legacy (bash) | This design |
 |---|---|---|
-| Value build | omnect + optional custom, trimmed | same |
+| Value build | omnect + optional custom, whitespace squeezed | same |
 | When | first boot only (`/mnt/etc/upper` missing) | first boot only (`first_boot` env marker) |
-| OTA validation boot | not run (first-boot gate) | not run (`first_boot` false + `!update_pending`) |
+| OTA validation boot | not run (first-boot gate) | not run (`!update_pending`; also `first_boot` false on non-migrated devices) |
 | On change | `set_env` + `sync` + `reboot -f` | `set_env` + verify + `sync` + `RebootToApply` |
 | Durability | `sync` before reboot | `sync` before reboot |
-| Loop protection | first-boot gate closed after reboot | read-back verify + `sync` |
-| Failure | logged | logged + ODS status |
+| Loop protection | first-boot gate closed after reboot (gives up) | read-back verify + `sync` (mitigate, retry until converged; accepted residual) |
+| Failure | logged | logged + ODS `Failed`; marker not written, retried next boot |
+
+Note: on a fresh flash the env starts empty while the boot files carry the
+arguments, so the first boot always costs one extra reboot to apply them. Same
+as legacy. This could be removed later by pre-seeding the env at flash time
+(omnect-cli); out of scope here.

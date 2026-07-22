@@ -31,7 +31,7 @@
 - Modify: `src/runtime/mod.rs` (re-export the new public types)
 
 **Interfaces:**
-- Produces: `ExtraBootArgsOutcome` enum (`Applied`, `AlreadyCurrent`, `Failed`, `SkippedDegraded`); `ExtraBootArgsStatus { outcome: ExtraBootArgsOutcome, reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>`; `OdsStatus::set_extra_bootargs_status(&mut self, status: ExtraBootArgsStatus)`. All re-exported from `crate::runtime`.
+- Produces: `ExtraBootArgsOutcome` enum (`Applied`, `AlreadyCurrent`, `Failed`); `ExtraBootArgsStatus { outcome: ExtraBootArgsOutcome, reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>`; `OdsStatus::set_extra_bootargs_status(&mut self, status: ExtraBootArgsStatus)`. All re-exported from `crate::runtime`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -78,10 +78,9 @@ pub enum ExtraBootArgsOutcome {
     Applied,
     /// Env already matched the boot files — nothing to do.
     AlreadyCurrent,
-    /// Read, write, or read-back verify failed; no reboot was triggered.
+    /// Read, write, or read-back verify failed; no reboot. `normal::run` skips
+    /// the first-boot marker on this outcome, so the sync retries next boot.
     Failed,
-    /// Boot env unavailable (degraded) on the boot where a sync was due.
-    SkippedDegraded,
 }
 
 /// Result of the extra-bootargs sync step, for ODS diagnosis.
@@ -183,13 +182,14 @@ In `recovery_class`, add an arm before `Self::Io(_)`:
 
 - [ ] **Step 4: Update the `Action::Reboot` doc comment**
 
-In `src/recovery.rs`, replace the `Action::Reboot` doc comment so it names all reboot reasons and their bounds:
+In `src/recovery.rs`, replace the `Action::Reboot` doc comment so it names all reboot reasons and is honest about the loop bounds:
 
 ```rust
     /// Reboot the device. Reasons: OTA-rollback (Fatal + update_pending),
     /// fsck reboot-required, or extra-bootargs applied on first boot. The OTA
-    /// case is bounded by the bootloader; fsck is an accepted-risk loop; the
-    /// extra-bootargs case is bounded by read-back verify + sync in the step.
+    /// case is bounded by the bootloader; fsck and extra-bootargs are
+    /// accepted-risk loops — extra-bootargs mitigates the loop with read-back
+    /// verify + sync in the step but does not bound it.
     Reboot,
 ```
 
@@ -324,7 +324,18 @@ Confirm it builds: `cargo build --features grub,gpt,test-utils`.
 
 - [ ] **Step 2: Extend `InitSetupCtx` and wire lib.rs**
 
-In `src/init_setup/mod.rs`: add the module declaration, the import, the two fields (and the `'r` lifetime), and call the step first.
+In `src/init_setup/mod.rs`: fix the stale module doc, add the module declaration, the import, the two fields (and the `'r` lifetime), and call the step first.
+
+Fix the module doc — `extra_bootargs` is unconditional, so "each step is independently feature-gated" is no longer true:
+
+```rust
+//! Init setup: conditional one-time prep steps that run after core mount
+//! and the bootloader env is open, but before mode dispatch.
+//!
+//! Steps are idempotent — guarded by bootloader env or filesystem state so each
+//! runs at most once per trigger. Some steps are feature-gated (`resize_data`),
+//! others always run (`extra_bootargs`).
+```
 
 Add near the top, after the doc comment:
 
@@ -411,7 +422,6 @@ const BOOTARGS_CUSTOM_FILE: &str = "omnect_extra_bootargs_custom";
 mod tests {
     use super::*;
     use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
-    use crate::error::BootEnvError;
     use crate::partition::{PartitionLayout, RootDevice};
     use crate::runtime::OdsStatus;
     use std::collections::HashMap;
@@ -482,6 +492,14 @@ mod tests {
         assert_eq!(read_extra_bootargs(tmp.path()), "");
     }
 
+    #[test]
+    fn internal_whitespace_is_squeezed() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet    loglevel=3");
+        write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "a\tb");
+        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3 a b");
+    }
+
     // ---- should_sync ---------------------------------------------------
 
     #[test]
@@ -526,27 +544,6 @@ mod tests {
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, true);
         assert!(run(&mut ctx).is_ok());
         assert!(ctx.ods_status.extra_bootargs.is_none());
-    }
-
-    #[test]
-    fn degraded_env_records_skipped_degraded() {
-        let tmp = TempDir::new().unwrap();
-        let boot_dir = tmp.path().join("boot");
-        std::fs::create_dir_all(&boot_dir).unwrap();
-        write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet");
-
-        let layout = empty_layout();
-        let mut env = BootEnvState::Degraded(BootEnvError::CommandFailed {
-            command: "boot-env-tool".into(),
-            reason: "test".into(),
-        });
-        let mut ods = OdsStatus::new();
-        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
-        assert!(run(&mut ctx).is_ok());
-        assert_eq!(
-            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
-            ExtraBootArgsOutcome::SkippedDegraded
-        );
     }
 
     #[test]
@@ -644,20 +641,24 @@ fn should_sync(first_boot: bool, update_pending: bool) -> bool {
     first_boot && !update_pending
 }
 
-/// Build the combined bootargs value from the two boot-partition files:
-/// the distro file plus the optional custom file, joined with a space.
+/// Build the combined bootargs value from the two boot-partition files: the
+/// distro file plus the optional custom file. Whitespace runs are squeezed to
+/// single spaces (matching the legacy `awk '{$1=$1};1'`) so the value matches
+/// byte-for-byte what a legacy-migrated device stored.
 fn read_extra_bootargs(boot_dir: &Path) -> String {
     let omnect = read_bootargs_file(&boot_dir.join(BOOTARGS_OMNECT_FILE));
     let custom = read_bootargs_file(&boot_dir.join(BOOTARGS_CUSTOM_FILE));
-    match (omnect.as_deref(), custom.as_deref()) {
+    let combined = match (omnect.as_deref(), custom.as_deref()) {
         (Some(a), Some(b)) => format!("{a} {b}"),
         (Some(a), None) => a.to_string(),
         (None, Some(b)) => b.to_string(),
         (None, None) => String::new(),
-    }
+    };
+    combined.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Read one bootargs file, trimmed. `None` if empty or absent.
+/// Read one bootargs file. `None` if empty or absent. Trimming/squeezing of the
+/// combined value happens in `read_extra_bootargs`.
 fn read_bootargs_file(path: &Path) -> Option<String> {
     match std::fs::read_to_string(path) {
         Ok(s) => {
@@ -690,14 +691,13 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     let boot_dir = ctx.rootfs.join(mount_points::BOOT);
     let new_args = read_extra_bootargs(&boot_dir);
 
+    // `first_boot == true` implies the env is available (`compute_first_boot`
+    // returns false on a degraded env), so this None arm cannot occur in
+    // production. Kept as a defensive no-op rather than an unwrap.
     let bl = match ctx.boot_env.available_mut() {
         Some(bl) => bl,
         None => {
-            log::warn!("extra-bootargs: skipping (degraded boot env)");
-            ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-                outcome: ExtraBootArgsOutcome::SkippedDegraded,
-                reason: "boot environment unavailable".to_string(),
-            });
+            log::warn!("extra-bootargs: unexpected degraded env despite first_boot; skipping");
             return Ok(());
         }
     };
@@ -799,7 +799,94 @@ Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
 
 ---
 
-### Task 5: Verify across the feature matrix
+### Task 5: Skip the first-boot marker on a failed sync
+
+Security-first: a `Failed` sync must not close the first-boot gate, so it retries
+next boot instead of leaving the device running without the security args forever.
+
+**Files:**
+- Modify: `src/mode/normal.rs`
+
+**Interfaces:**
+- Consumes: `OdsStatus.extra_bootargs`, `ExtraBootArgsStatus`, `ExtraBootArgsOutcome::Failed` (Task 1).
+- Produces: `extra_bootargs_applied_ok(&OdsStatus) -> bool`, folded into the `write_first_boot_marker` condition.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `mod marker_writer_tests` in `src/mode/normal.rs`:
+
+```rust
+#[test]
+fn extra_bootargs_ok_unless_failed() {
+    use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus, OdsStatus};
+    let mut ods = OdsStatus::new();
+    assert!(extra_bootargs_applied_ok(&ods)); // absent → ok
+
+    ods.set_extra_bootargs_status(ExtraBootArgsStatus {
+        outcome: ExtraBootArgsOutcome::AlreadyCurrent,
+        reason: String::new(),
+    });
+    assert!(extra_bootargs_applied_ok(&ods));
+
+    ods.set_extra_bootargs_status(ExtraBootArgsStatus {
+        outcome: ExtraBootArgsOutcome::Failed,
+        reason: "boom".into(),
+    });
+    assert!(!extra_bootargs_applied_ok(&ods));
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test --features grub,gpt,test-utils extra_bootargs_ok_unless_failed -- --nocapture`
+Expected: FAIL to compile — `extra_bootargs_applied_ok` not defined.
+
+- [ ] **Step 3: Add the helper and fold it into the marker condition**
+
+Add the helper near `resize_succeeded` in `src/mode/normal.rs`:
+
+```rust
+/// A failed extra-bootargs sync must not close the first-boot gate: withhold
+/// the marker so `first_boot` stays true and the sync retries on the next boot.
+fn extra_bootargs_applied_ok(ods_status: &crate::runtime::OdsStatus) -> bool {
+    !matches!(
+        ods_status.extra_bootargs,
+        Some(crate::runtime::ExtraBootArgsStatus {
+            outcome: crate::runtime::ExtraBootArgsOutcome::Failed,
+            ..
+        })
+    )
+}
+```
+
+Update the `write_first_boot_marker` call in `run`:
+
+```rust
+    write_first_boot_marker(
+        ods_status.first_boot
+            && resize_succeeded(&ods_status)
+            && extra_bootargs_applied_ok(&ods_status),
+        &mut boot_env,
+    );
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test --features grub,gpt,test-utils -- --nocapture normal`
+Expected: PASS (new test plus the existing `marker_writer_tests`).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mode/normal.rs
+git commit -m "feat(mode): retry extra-bootargs sync by withholding first-boot marker on failure
+
+Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
+```
+
+---
+
+### Task 6: Verify across the feature matrix
 
 **Files:** none (verification only).
 
