@@ -105,8 +105,8 @@ When the built value differs from the current env value:
 When the value is already current: no-op, no reboot.
 
 The boot partition is mounted read-write before init-setup runs
-(`mount_core_partitions` mounts boot read-write, with vfat group-write options),
-so `grub-editenv` can update the grubenv file.
+(`mount_core_partitions`), and `grub-editenv` runs as root, so it can update the
+grubenv file.
 
 ## 7. Loop and brick protection
 

@@ -4,9 +4,11 @@
 
 **Goal:** Sync `omnect_extra_bootargs` from the boot-partition files to the bootloader env on the fresh-flash boot only, then reboot to apply — without breaking OTA rollback or risking a reboot loop.
 
-**Architecture:** Rework the existing best-effort `init_setup::extra_bootargs` step. It now gates on `first_boot && !update_pending`, writes the env, verifies the write by reading it back, flushes it with `sync()`, records an ODS status entry, and signals a reboot by returning a new `InitramfsError::ExtraBootArgsUpdated` (classified `RebootToApply`). All other outcomes are best-effort: logged, recorded in ODS, boot continues.
+**Architecture:** A new `init_setup::extra_bootargs` step (created from scratch) runs first among the init-setup steps. It gates on `first_boot && !update_pending`, writes the env, verifies the write by reading it back, flushes it with `sync()`, records an ODS status entry, and signals a reboot by returning a new `InitramfsError::ExtraBootArgsUpdated` (classified `RebootToApply`). All other outcomes are best-effort: logged, recorded in ODS, boot continues.
 
 **Tech Stack:** Rust, `nix` (0.29, `fs` feature already enabled for `sync()`), `thiserror`, `serde`. Bootloader env via the `BootEnv` trait; tests via `MockBootEnv` (`test-utils`).
+
+**Baseline:** This plan targets the current `main`. On `main` there is **no** `src/init_setup/extra_bootargs.rs`, **no** `BootEnvKey::ExtraBootArgs`, and `InitSetupCtx` has no `rootfs`/`update_pending` fields — all are created here. Present on `main` already: the first-boot marker (`compute_first_boot`), the ODS `resize_data`/`ResizeStatus` pattern, the `RebootToApply` recovery class, the `update_pending` infra (`read_update_pending`), and a read-write boot mount.
 
 **Spec:** `docs/superpowers/specs/2026-07-21-extra-bootargs-sync-design.md`
 
@@ -18,7 +20,7 @@
 - **Comments explain why, not what.** No PR/issue/commit references.
 - **`recovery_class()` stays an exhaustive match** — a new `InitramfsError` variant must get its own arm.
 - **Commits:** Conventional Commits; every commit ends with `Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>` (matches the repo-local git identity). No AI co-author trailer.
-- **Test feature combo for this work:** `--features grub,gpt,test-utils` (the step is not bootloader-specific; U-Boot behaves the same). Full CI matrix still applies.
+- **Test feature combo for this work:** `--features grub,gpt,test-utils` (the step is not bootloader-specific; U-Boot behaves the same). Full CI matrix still applies (Task 5).
 
 ---
 
@@ -33,7 +35,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the existing `#[cfg(test)] mod tests` in `src/runtime/omnect_device_service.rs` (create the module if none exists; use `use super::*;`):
+Add to the `#[cfg(test)] mod tests` in `src/runtime/omnect_device_service.rs` (`use super::*;` is already present):
 
 ```rust
 #[test]
@@ -61,7 +63,7 @@ fn extra_bootargs_absent_is_not_serialized() {
 Run: `cargo test --features grub,gpt,test-utils extra_bootargs_status_serializes_snake_case -- --nocapture`
 Expected: FAIL to compile — `ExtraBootArgsStatus`, `ExtraBootArgsOutcome`, `set_extra_bootargs_status` not found.
 
-- [ ] **Step 3: Add the types, field and setter**
+- [ ] **Step 3: Add the types, field, setter, and re-export**
 
 Add the enum and struct next to `ResizeOutcome` / `ResizeStatus`:
 
@@ -112,9 +114,7 @@ Add the setter inside `impl OdsStatus` (after `set_resize_status`):
     }
 ```
 
-Then re-export the new types from `src/runtime/mod.rs`. Extend the existing
-`pub use self::omnect_device_service::{ ... };` list to include
-`ExtraBootArgsOutcome` and `ExtraBootArgsStatus`:
+Extend the re-export in `src/runtime/mod.rs`:
 
 ```rust
 pub use self::omnect_device_service::{
@@ -131,7 +131,7 @@ Expected: PASS (both new tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/omnect_device_service.rs
+git add src/runtime/omnect_device_service.rs src/runtime/mod.rs
 git commit -m "feat(runtime): add extra_bootargs ODS status entry
 
 Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
@@ -146,12 +146,12 @@ Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
 - Modify: `src/recovery.rs` (doc comment on `Action::Reboot`)
 
 **Interfaces:**
-- Consumes: `RecoveryClass::RebootToApply` (existing).
+- Consumes: `RecoveryClass::RebootToApply` (existing on `main`).
 - Produces: `InitramfsError::ExtraBootArgsUpdated` (unit variant) classified as `RecoveryClass::RebootToApply`.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `mod recovery_class_tests` in `src/error.rs` (the module already asserts `RebootToApply` for `FsckRequiresReboot`; follow that style):
+Add to `mod recovery_class_tests` in `src/error.rs` (it already asserts `RebootToApply` for `FsckRequiresReboot`):
 
 ```rust
 #[test]
@@ -183,7 +183,7 @@ In `recovery_class`, add an arm before `Self::Io(_)`:
 
 - [ ] **Step 4: Update the `Action::Reboot` doc comment**
 
-In `src/recovery.rs`, replace the `Action::Reboot` doc comment so it names both reboot reasons and their bounds:
+In `src/recovery.rs`, replace the `Action::Reboot` doc comment so it names all reboot reasons and their bounds:
 
 ```rust
     /// Reboot the device. Reasons: OTA-rollback (Fatal + update_pending),
@@ -196,7 +196,7 @@ In `src/recovery.rs`, replace the `Action::Reboot` doc comment so it names both 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test --features grub,gpt,test-utils recovery_class -- --nocapture`
-Expected: PASS. Also confirm the exhaustive match still compiles: `cargo build --features grub`.
+Expected: PASS. Confirm the exhaustive match still builds: `cargo build --features grub`.
 
 - [ ] **Step 6: Commit**
 
@@ -209,24 +209,81 @@ Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
 
 ---
 
-### Task 3: Rework the `extra_bootargs` init-setup step
+### Task 3: Add `BootEnvKey::ExtraBootArgs`
 
 **Files:**
-- Modify: `src/init_setup/extra_bootargs.rs` (rewrite `run`, add `should_sync`, rewrite tests; keep `read_extra_bootargs` / `read_bootargs_file`)
-- Modify: `src/init_setup/mod.rs` (add `update_pending` to `InitSetupCtx`; propagate the step's `Result`)
-- Modify: `src/lib.rs` (populate `update_pending` when building `InitSetupCtx`)
-- Modify: `src/bootloader/mod.rs` (add a `MockBootEnv` knob to simulate a normalizing bootloader tool, for the read-back mismatch test)
+- Modify: `src/bootloader/mod.rs` (`BootEnvKey` enum + `as_str` + test)
 
 **Interfaces:**
-- Consumes: `ExtraBootArgsStatus`, `ExtraBootArgsOutcome`, `OdsStatus::set_extra_bootargs_status` (Task 1); `InitramfsError::ExtraBootArgsUpdated` (Task 2); `crate::read_update_pending()`; `BootEnvKey::ExtraBootArgs`; `mount_points::BOOT`.
-- Produces: `extra_bootargs::run(ctx: &mut InitSetupCtx) -> crate::Result<()>`; `InitSetupCtx.update_pending: bool`; `should_sync(first_boot: bool, update_pending: bool) -> bool`; `MockBootEnv::with_set_env_normalize(&str)`.
+- Produces: `BootEnvKey::ExtraBootArgs`, mapping to the env-var name `omnect_extra_bootargs`.
 
-- [ ] **Step 0: Add a `MockBootEnv` knob to simulate a normalizing tool**
+- [ ] **Step 1: Write the failing test**
 
-The read-back verify only triggers when the stored value differs from what was
-written. `MockBootEnv` stores exactly what it is given, so add a knob that
-forces `set_env` to store a fixed value instead — simulating a bootloader tool
-that normalizes quoting/whitespace.
+Add to the bootloader tests module (near `first_boot_done_key_string`):
+
+```rust
+#[test]
+fn extra_bootargs_key_string() {
+    assert_eq!(
+        BootEnvKey::ExtraBootArgs.as_str().as_ref(),
+        "omnect_extra_bootargs"
+    );
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test --features grub,gpt,test-utils extra_bootargs_key_string -- --nocapture`
+Expected: FAIL to compile — no variant `ExtraBootArgs`.
+
+- [ ] **Step 3: Add the variant and mapping**
+
+In `enum BootEnvKey`, add after `FirstBootDone` (not feature-gated):
+
+```rust
+    /// `omnect_extra_bootargs` — extra kernel cmdline arguments the bootloader
+    /// appends. Synced from the boot-partition files by the extra-bootargs
+    /// init-setup step.
+    ExtraBootArgs,
+```
+
+In `as_str`, add the arm after `FirstBootDone`:
+
+```rust
+            Self::ExtraBootArgs => Cow::Borrowed("omnect_extra_bootargs"),
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cargo test --features grub,gpt,test-utils extra_bootargs_key_string -- --nocapture`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/bootloader/mod.rs
+git commit -m "feat(bootloader): add BootEnvKey::ExtraBootArgs
+
+Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
+```
+
+---
+
+### Task 4: Create the extra-bootargs init-setup step and wire it
+
+**Files:**
+- Create: `src/init_setup/extra_bootargs.rs`
+- Modify: `src/init_setup/mod.rs` (add `pub mod extra_bootargs;`; add `rootfs` + `update_pending` to `InitSetupCtx`; call the step first)
+- Modify: `src/lib.rs` (populate `rootfs` + `update_pending` when building `InitSetupCtx`)
+- Modify: `src/bootloader/mod.rs` (add a `MockBootEnv` knob for the read-back mismatch test)
+
+**Interfaces:**
+- Consumes: `ExtraBootArgsStatus`, `ExtraBootArgsOutcome`, `OdsStatus::set_extra_bootargs_status` (Task 1); `InitramfsError::ExtraBootArgsUpdated` (Task 2); `BootEnvKey::ExtraBootArgs` (Task 3); `crate::read_update_pending()`; `mount_points::BOOT`.
+- Produces: `extra_bootargs::run(ctx: &mut InitSetupCtx) -> crate::Result<()>`; `should_sync(first_boot: bool, update_pending: bool) -> bool`; `InitSetupCtx` gains `rootfs: &'r Path` and `update_pending: bool` (now `InitSetupCtx<'l, 'b, 's, 'r>`); `MockBootEnv::with_set_env_normalize(&str)`.
+
+- [ ] **Step 1: Add a `MockBootEnv` knob to simulate a normalizing tool**
+
+The read-back verify only triggers when the stored value differs from what was written. `MockBootEnv` stores exactly what it is given, so add a knob that forces `set_env` to store a fixed value instead.
 
 In `src/bootloader/mod.rs`, add a field to `MockBootEnv`:
 
@@ -245,8 +302,7 @@ Add the builder in `impl MockBootEnv`:
     }
 ```
 
-In `set_env`, after `self.set_env_calls.push(key);`, replace the `match value`
-block so the normalized value wins when present:
+In `set_env`, after `self.set_env_calls.push(key);`, replace the `match value` block so the normalized value wins when present:
 
 ```rust
         let to_store = match &self.set_env_normalize {
@@ -264,13 +320,28 @@ block so the normalized value wins when present:
         Ok(())
 ```
 
-Confirm it compiles: `cargo build --features grub,gpt,test-utils`.
+Confirm it builds: `cargo build --features grub,gpt,test-utils`.
 
-- [ ] **Step 1: Add `update_pending` to `InitSetupCtx` and wire it**
+- [ ] **Step 2: Extend `InitSetupCtx` and wire lib.rs**
 
-In `src/init_setup/mod.rs`, add the field to the struct:
+In `src/init_setup/mod.rs`: add the module declaration, the import, the two fields (and the `'r` lifetime), and call the step first.
+
+Add near the top, after the doc comment:
 
 ```rust
+pub mod extra_bootargs;
+#[cfg(feature = "resize-data")]
+pub mod resize_data;
+
+use std::path::Path;
+
+use crate::{Result, bootloader::BootEnvState, partition::PartitionLayout, runtime::OdsStatus};
+```
+
+Replace the struct:
+
+```rust
+/// Context passed to each init setup step.
 #[non_exhaustive]
 pub struct InitSetupCtx<'l, 'b, 's, 'r> {
     pub layout: &'l PartitionLayout,
@@ -283,9 +354,13 @@ pub struct InitSetupCtx<'l, 'b, 's, 'r> {
 }
 ```
 
-Change the step call in `init_setup::run` to propagate the reboot signal:
+Replace `run` (the `extra_bootargs` step always runs, so the old `#[cfg_attr(...)]` allow is no longer needed):
 
 ```rust
+/// Run all enabled init setup steps in order.
+///
+/// Steps are independent and idempotent. Order is intentional: extra-bootargs
+/// may reboot before resize-data touches any partition read-write.
 pub fn run(mut ctx: InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
     extra_bootargs::run(&mut ctx)?;
     #[cfg(feature = "resize-data")]
@@ -294,7 +369,13 @@ pub fn run(mut ctx: InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
 }
 ```
 
-In `src/lib.rs`, set the new field where `InitSetupCtx` is built (right before `init_setup::run(ctx)?;`):
+Update the `resize_data::run` signature in `src/init_setup/resize_data.rs` to the 4-lifetime form:
+
+```rust
+pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
+```
+
+In `src/lib.rs`, set the two new fields where `InitSetupCtx` is built (the `rootfs` binding already exists in `run_init`; `read_update_pending` is defined in this module):
 
 ```rust
         let ctx = init_setup::InitSetupCtx {
@@ -307,16 +388,47 @@ In `src/lib.rs`, set the new field where `InitSetupCtx` is built (right before `
         init_setup::run(ctx)?;
 ```
 
-(`read_update_pending` is already defined in `lib.rs`; reference it directly.)
+- [ ] **Step 3: Write the failing tests (the new step file)**
 
-- [ ] **Step 2: Write the failing tests**
-
-Replace the `run()` integration tests in `src/init_setup/extra_bootargs.rs` with the set below, and add a `should_sync` unit test. Keep the `read_extra_bootargs` tests unchanged. The `make_ctx` helper must set the new field.
-
-Update `make_ctx` to take `first_boot` and `update_pending`:
+Create `src/init_setup/extra_bootargs.rs` containing only the `use` block, the two consts, and the full `#[cfg(test)] mod tests` below — no `run`/helpers yet, so the tests fail to compile first.
 
 ```rust
-    #[allow(clippy::too_many_arguments)]
+use std::io::ErrorKind;
+use std::path::Path;
+
+use crate::bootloader::BootEnvKey;
+use crate::error::InitramfsError;
+use crate::filesystem::mount_points;
+use crate::init_setup::InitSetupCtx;
+use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus};
+
+/// Boot-partition file for distro-managed extra boot arguments.
+const BOOTARGS_OMNECT_FILE: &str = "omnect_extra_bootargs_omnect";
+/// Boot-partition file for user-managed extra boot arguments.
+const BOOTARGS_CUSTOM_FILE: &str = "omnect_extra_bootargs_custom";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootloader::{BootEnvKey, BootEnvState, MockBootEnv};
+    use crate::error::BootEnvError;
+    use crate::partition::{PartitionLayout, RootDevice};
+    use crate::runtime::OdsStatus;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn empty_layout() -> PartitionLayout {
+        PartitionLayout {
+            partitions: HashMap::new(),
+            device: RootDevice {
+                base: PathBuf::from("/dev/sda"),
+                partition_sep: "",
+                root_partition: PathBuf::from("/dev/sda2"),
+            },
+        }
+    }
+
     fn make_ctx<'l, 'b, 's, 'r>(
         layout: &'l PartitionLayout,
         env: &'b mut BootEnvState,
@@ -334,11 +446,44 @@ Update `make_ctx` to take `first_boot` and `update_pending`:
             update_pending,
         }
     }
-```
 
-Tests:
+    fn write_file(dir: &Path, name: &str, content: &str) {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
 
-```rust
+    // ---- read_extra_bootargs -------------------------------------------
+
+    #[test]
+    fn no_files_yields_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(read_extra_bootargs(tmp.path()), "");
+    }
+
+    #[test]
+    fn omnect_only_returns_its_content() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet loglevel=3\n");
+        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3");
+    }
+
+    #[test]
+    fn both_files_are_joined_with_space() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
+        write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "myarg=1");
+        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3 myarg=1");
+    }
+
+    #[test]
+    fn empty_files_yield_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "   \n");
+        write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "\n");
+        assert_eq!(read_extra_bootargs(tmp.path()), "");
+    }
+
+    // ---- should_sync ---------------------------------------------------
+
     #[test]
     fn should_sync_only_on_first_boot_without_update() {
         assert!(should_sync(true, false));
@@ -346,6 +491,8 @@ Tests:
         assert!(!should_sync(true, true));
         assert!(!should_sync(false, true));
     }
+
+    // ---- run() ---------------------------------------------------------
 
     #[test]
     fn skips_when_not_first_boot() {
@@ -355,12 +502,11 @@ Tests:
         write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
 
         let layout = empty_layout();
-        let mock = MockBootEnv::new(); // no ExtraBootArgs
+        let mock = MockBootEnv::new();
         let mut env = BootEnvState::Available(Box::new(mock));
         let mut ods = OdsStatus::new();
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), false, false);
         assert!(run(&mut ctx).is_ok());
-        // env untouched, no status recorded
         assert!(ctx.ods_status.extra_bootargs.is_none());
         let bl = ctx.boot_env.available_mut().unwrap();
         assert_eq!(bl.get_env(BootEnvKey::ExtraBootArgs).unwrap(), None);
@@ -430,15 +576,12 @@ Tests:
         write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
 
         let layout = empty_layout();
-        let mock = MockBootEnv::new(); // no ExtraBootArgs yet
+        let mock = MockBootEnv::new();
         let mut env = BootEnvState::Available(Box::new(mock));
         let mut ods = OdsStatus::new();
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
         let result = run(&mut ctx);
-        assert!(matches!(
-            result,
-            Err(crate::error::InitramfsError::ExtraBootArgsUpdated)
-        ));
+        assert!(matches!(result, Err(InitramfsError::ExtraBootArgsUpdated)));
         assert_eq!(
             ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
             ExtraBootArgsOutcome::Applied
@@ -458,7 +601,6 @@ Tests:
         write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
 
         let layout = empty_layout();
-        // Tool stores a mangled value → read-back will not match new_args.
         let mock = MockBootEnv::new().with_set_env_normalize("mangled");
         let mut env = BootEnvState::Available(Box::new(mock));
         let mut ods = OdsStatus::new();
@@ -470,27 +612,29 @@ Tests:
             ExtraBootArgsOutcome::Failed
         );
     }
+}
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 4: Run tests to verify they fail**
 
 Run: `cargo test --features grub,gpt,test-utils extra_bootargs -- --nocapture`
-Expected: FAIL to compile — `run` returns `()` not `Result`, `should_sync` missing, `make_ctx` arity changed.
+Expected: FAIL to compile — `read_extra_bootargs`, `should_sync`, `run` not defined.
 
-- [ ] **Step 4: Rewrite `run` and add `should_sync`**
+- [ ] **Step 5: Add the implementation**
 
-Replace the top-of-file `use` block and `run`/helpers in `src/init_setup/extra_bootargs.rs`. Keep `read_extra_bootargs` and `read_bootargs_file` as they are. The full new `use` block (keeps `ErrorKind` and `Path`, which `read_bootargs_file` needs):
+In `src/init_setup/extra_bootargs.rs`, above the test module, add the module doc, helpers, `should_sync`, and `run`:
 
 ```rust
-use std::io::ErrorKind;
-use std::path::Path;
-
-use crate::bootloader::BootEnvKey;
-use crate::error::InitramfsError;
-use crate::filesystem::mount_points;
-use crate::init_setup::InitSetupCtx;
-use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus};
+//! Init setup step: sync `omnect_extra_bootargs` to the bootloader env.
+//!
+//! On the fresh-flash boot only, this reads the boot-partition argument files
+//! and, if they differ from the stored value, writes the value, verifies it,
+//! flushes it to disk, and requests a reboot so the bootloader applies the
+//! arguments from the next boot. OTA argument changes are handled by the
+//! swupdate handler and the bootloader validate mechanism, not here.
 ```
+
+(Place the doc at the very top of the file, before the `use` block.)
 
 ```rust
 /// Gate: the sync runs only on the fresh-flash boot and never during an OTA
@@ -500,8 +644,39 @@ fn should_sync(first_boot: bool, update_pending: bool) -> bool {
     first_boot && !update_pending
 }
 
-/// Sync `omnect_extra_bootargs` from the boot-partition files to the bootloader
-/// env on the fresh-flash boot, then request a reboot so the arguments apply.
+/// Build the combined bootargs value from the two boot-partition files:
+/// the distro file plus the optional custom file, joined with a space.
+fn read_extra_bootargs(boot_dir: &Path) -> String {
+    let omnect = read_bootargs_file(&boot_dir.join(BOOTARGS_OMNECT_FILE));
+    let custom = read_bootargs_file(&boot_dir.join(BOOTARGS_CUSTOM_FILE));
+    match (omnect.as_deref(), custom.as_deref()) {
+        (Some(a), Some(b)) => format!("{a} {b}"),
+        (Some(a), None) => a.to_string(),
+        (None, Some(b)) => b.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+/// Read one bootargs file, trimmed. `None` if empty or absent.
+fn read_bootargs_file(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => {
+            log::warn!("extra-bootargs: failed to read {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Sync `omnect_extra_bootargs` on the fresh-flash boot, then request a reboot.
 ///
 /// Returns `Err(InitramfsError::ExtraBootArgsUpdated)` when the value changed
 /// and was written, verified and flushed — the caller reboots. Every other
@@ -598,35 +773,33 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
 }
 ```
 
-The `use` block above is the complete replacement — the old block's `log`/`ErrorKind`/`Path` usage is covered (`log::` is called fully-qualified, so no `use log;` is needed).
-
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `cargo test --features grub,gpt,test-utils extra_bootargs -- --nocapture`
 Expected: PASS (all `read_extra_bootargs`, `should_sync`, and `run` tests).
 
-- [ ] **Step 6: Verify lints and the wider build**
+- [ ] **Step 7: Verify lints and the wider build**
 
 Run:
 ```bash
 cargo fmt -- --check
-cargo clippy --tests --features grub,gpt,test-utils -- -D warnings
+cargo clippy --tests --features grub,gpt,test-utils -- -D warnings -W clippy::items_after_statements
 cargo build --features grub
 ```
 Expected: no warnings, clean build.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/init_setup/extra_bootargs.rs src/init_setup/mod.rs src/lib.rs
-git commit -m "feat(init-setup): gate extra-bootargs sync to first boot and reboot to apply
+git add src/init_setup/extra_bootargs.rs src/init_setup/mod.rs src/init_setup/resize_data.rs src/lib.rs src/bootloader/mod.rs
+git commit -m "feat(init-setup): sync extra-bootargs on first boot and reboot to apply
 
 Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
 ```
 
 ---
 
-### Task 4: Verify across the feature matrix
+### Task 5: Verify across the feature matrix
 
 **Files:** none (verification only).
 
@@ -640,16 +813,17 @@ cargo test --features grub,gpt,resize-data,test-utils
 cargo test --features grub,gpt,release-image,test-utils
 cargo test --features grub,gpt,resize-data,release-image,test-utils
 ```
-Expected: PASS in all combos. The step is not feature-gated, so `resize-data` off/on and `release-image` off/on must all build and pass. `release-image` matters because `ExtraBootArgsUpdated → RebootToApply → Action::Reboot` must hold on release images too.
+Expected: PASS in all combos. The step is not feature-gated, so `resize-data` off/on and `release-image` off/on must all build and pass. `release-image` matters because `ExtraBootArgsUpdated → RebootToApply → Action::Reboot` must hold there too.
 
-- [ ] **Step 2: Confirm no accidental behavior change to resize ordering**
+- [ ] **Step 2: Confirm ordering**
 
-Confirm `extra_bootargs::run` runs before `resize_data::run` in `init_setup::run`, and that a reboot in `extra_bootargs` returns before resize touches the disk. This is a read-only check of `src/init_setup/mod.rs`.
+Read `src/init_setup/mod.rs` and confirm `extra_bootargs::run` runs before `resize_data::run`, so a reboot returns before resize touches the disk read-write.
 
 ---
 
 ## Notes for the implementer
 
 - `first_boot` is read from `ctx.ods_status.first_boot`, set in `lib.rs` before `init_setup` runs. It stays `true` across the sync reboot (the marker is written later, in `normal::run`), so convergence relies on `current == new_args`, not on the marker. Do not add a marker write here.
-- The boot partition is mounted read-write before `init_setup` (`mount_core_partitions`), so `grub-editenv` can write the grubenv file. Do not mount it here.
+- The boot partition is mounted read-write before `init_setup` (`mount_core_partitions`), and `grub-editenv` runs as root, so it can write the grubenv file. Do not mount it here.
 - Do not call `reboot(2)` from this step — return the error and let `main::handle_fatal_error` reboot. That keeps the single reboot path.
+- Adding `rootfs`/`update_pending` to `InitSetupCtx` is additive; `resize_data` ignores them. Only its `run` signature needs the extra elided lifetime.
