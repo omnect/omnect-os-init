@@ -196,26 +196,32 @@ security-over-availability tradeoff for these arguments.
 
 ## 10. ODS status — new entry
 
-Following the `resize_data` pattern: the entry is recorded **only on failure**
-(`None` on the happy path). Success and no-op leave it `None` — legacy reported
-nothing here either (it only logged), and the actionable signal for the cloud is
-the failure.
+Following the `resize_data` pattern in both respects: recorded **only on
+failure** (`None` on success/no-op/not-run), and carrying a typed failure kind
+plus a free-text reason so cloud consumers can match the kind exactly.
 
 ```rust
 #[serde(skip_serializing_if = "Option::is_none")]
 pub extra_bootargs: Option<ExtraBootArgsStatus>,
 
 pub struct ExtraBootArgsStatus {
-    pub reason: String, // one-line failure cause for operator diagnosis
+    pub outcome: ExtraBootArgsOutcome,
+    pub reason: String, // one-line detail for operator diagnosis
+}
+
+// snake_case; failure kinds only — the struct exists only on failure.
+pub enum ExtraBootArgsOutcome {
+    ReadFailed,       // reading the env value failed
+    SetEnvFailed,     // writing the env value failed
+    ReadBackMismatch, // stored value read back different from what was written
 }
 ```
 
-Setter `set_extra_bootargs_status`. No outcome enum: `Some` always means the sync
-failed on this boot; `reason` carries the cause (set_env error, read-back
-mismatch, read error). The successful apply is not recorded — it reboots before
-`normal::run` writes the JSON, and the next boot is a no-op (`None`) anyway; the
-reboot is visible only in kmsg. A degraded env cannot reach the step (§4), so
-there is no degraded status either.
+Setter `set_extra_bootargs_status`. `Some` always means the sync failed on this
+boot. The successful apply is not recorded — it reboots before `normal::run`
+writes the JSON, and the next boot is a no-op (`None`) anyway; the reboot is
+visible only in kmsg. A degraded env cannot reach the step (§4), so there is no
+degraded status either.
 
 ## 11. Testing
 
@@ -225,7 +231,7 @@ there is no degraded status either.
 - Change path: differing value → `set_env` + read-back + `Err(ExtraBootArgsUpdated)`,
   ODS `extra_bootargs` stays `None`.
 - Read-back mismatch (mock stores a different value) → no `Err`, `extra_bootargs`
-  is `Some` (failure recorded), no reboot.
+  outcome is `ReadBackMismatch`, no reboot.
 - `current == new` → no-op, no `Err`, `extra_bootargs` stays `None`.
 - `recovery_class`: `ExtraBootArgsUpdated → RebootToApply` (exhaustive-match test).
 - Marker skip: with `extra_bootargs = Some` (failure), `normal::run` does not
