@@ -18,7 +18,7 @@ use crate::error::{FilesystemError, InitramfsError, ResizeDataError, Result};
 use crate::init_setup::InitSetupCtx;
 use crate::runtime::{OdsStatus, ResizeOutcome, ResizeStatus};
 
-pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
+pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
     handle_result(attempt(ctx), ctx.ods_status)
 }
 
@@ -45,7 +45,7 @@ fn handle_result(result: Result<()>, ods_status: &mut OdsStatus) -> Result<()> {
     }
 }
 
-fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_>) -> Result<()> {
+fn attempt(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
     // Use the already-computed flag rather than re-reading the boot env.
     // A redundant get_env call here could brick on a transient error
     // (Bootloader → Fatal) while compute_first_boot already rode through it.
@@ -89,7 +89,7 @@ mod tests {
     use crate::partition::{PartitionLayout, RootDevice};
     use crate::runtime::OdsStatus;
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn empty_layout() -> PartitionLayout {
         PartitionLayout {
@@ -130,6 +130,8 @@ mod tests {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
+            rootfs: Path::new("/rootfs"),
+            update_pending: false,
         };
         assert!(run(&mut ctx).is_ok());
         assert!(
@@ -152,6 +154,8 @@ mod tests {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
+            rootfs: Path::new("/rootfs"),
+            update_pending: false,
         };
         let result = run(&mut ctx);
         assert!(
@@ -181,6 +185,8 @@ mod tests {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
+            rootfs: Path::new("/rootfs"),
+            update_pending: false,
         };
         assert!(run(&mut ctx).is_ok());
     }
@@ -201,6 +207,8 @@ mod tests {
             layout: &layout,
             boot_env: &mut env,
             ods_status: &mut ods,
+            rootfs: Path::new("/rootfs"),
+            update_pending: false,
         };
         // With a data partition present and no real tooling, resize_if_needed
         // will fail. The absorb logic turns the error into Ok + indicator.

@@ -255,6 +255,9 @@ pub struct MockBootEnv {
     get_env_errors: bool,
     /// When true, `set_env` returns an error instead of setting the key.
     set_env_errors: bool,
+    /// When set, `set_env` stores this fixed value instead of the given one,
+    /// simulating a bootloader tool that normalizes the written value.
+    set_env_normalize: Option<String>,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -275,6 +278,11 @@ impl MockBootEnv {
 
     pub fn with_set_env_error(mut self) -> Self {
         self.set_env_errors = true;
+        self
+    }
+
+    pub fn with_set_env_normalize(mut self, stored: &str) -> Self {
+        self.set_env_normalize = Some(stored.to_string());
         self
     }
 }
@@ -299,9 +307,13 @@ impl BootEnv for MockBootEnv {
             });
         }
         self.set_env_calls.push(key);
-        match value {
+        let to_store = match &self.set_env_normalize {
+            Some(forced) => Some(forced.clone()),
+            None => value.map(|v| v.to_string()),
+        };
+        match to_store {
             Some(v) => {
-                self.env.insert(key.as_str().to_string(), v.to_string());
+                self.env.insert(key.as_str().to_string(), v);
             }
             None => {
                 self.env.remove(key.as_str().as_ref());
