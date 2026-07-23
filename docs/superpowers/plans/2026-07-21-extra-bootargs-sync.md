@@ -31,7 +31,7 @@
 - Modify: `src/runtime/mod.rs` (re-export the new public types)
 
 **Interfaces:**
-- Produces: `ExtraBootArgsOutcome` enum (failure kinds: `ReadFailed`, `SetEnvFailed`, `ReadBackMismatch`); `ExtraBootArgsStatus { outcome: ExtraBootArgsOutcome, reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>` (set only on failure, `None` otherwise); `OdsStatus::set_extra_bootargs_status(...)`. All re-exported from `crate::runtime`.
+- Produces: `ExtraBootArgsOutcome` enum (failure kinds: `ReadFailed`, `SetEnvFailed`, `ReadBackFailed`, `ReadBackMismatch`); `ExtraBootArgsStatus { outcome: ExtraBootArgsOutcome, reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>` (set only on failure, `None` otherwise); `OdsStatus::set_extra_bootargs_status(...)`. All re-exported from `crate::runtime`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -76,10 +76,13 @@ Add the enum and struct next to `ResizeOutcome` / `ResizeStatus`:
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtraBootArgsOutcome {
-    /// Reading the current/stored env value failed.
+    /// Reading the current value failed (before any write).
     ReadFailed,
     /// Writing the env value failed.
     SetEnvFailed,
+    /// The read-back after a successful write failed — the value is persisted
+    /// but unverified.
+    ReadBackFailed,
     /// The stored value read back different from what was written.
     ReadBackMismatch,
 }
@@ -745,7 +748,7 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
         Err(e) => {
             log::warn!("extra-bootargs: read-back failed: {e}; not rebooting");
             ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-                outcome: ExtraBootArgsOutcome::ReadFailed,
+                outcome: ExtraBootArgsOutcome::ReadBackFailed,
                 reason: format!("read-back failed: {e}"),
             });
             return Ok(());

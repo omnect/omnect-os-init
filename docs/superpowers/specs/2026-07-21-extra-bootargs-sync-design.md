@@ -211,8 +211,9 @@ pub struct ExtraBootArgsStatus {
 
 // snake_case; failure kinds only — the struct exists only on failure.
 pub enum ExtraBootArgsOutcome {
-    ReadFailed,       // reading the env value failed
+    ReadFailed,       // reading the current value failed (before any write)
     SetEnvFailed,     // writing the env value failed
+    ReadBackFailed,   // the read-back after a successful write failed (unverified)
     ReadBackMismatch, // stored value read back different from what was written
 }
 ```
