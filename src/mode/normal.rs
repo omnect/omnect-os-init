@@ -22,6 +22,13 @@ fn resize_succeeded(_ods_status: &crate::runtime::OdsStatus) -> bool {
     true
 }
 
+/// A failed extra-bootargs sync must not close the first-boot gate: withhold
+/// the marker so `first_boot` stays true and the sync retries on the next boot.
+/// `extra_bootargs` is `Some` only on failure (set only in that case).
+fn extra_bootargs_applied_ok(ods_status: &crate::runtime::OdsStatus) -> bool {
+    ods_status.extra_bootargs.is_none()
+}
+
 fn write_first_boot_marker(first_boot: bool, bootloader: &mut crate::bootloader::BootEnvState) {
     if first_boot
         && let Some(bl) = bootloader.available_mut()
@@ -70,9 +77,12 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     // Single write point for the unified first-boot sentinel. Best-effort:
     // failure is logged and does not abort the boot — the next boot retries.
-    // Suppress the write when resize failed so the next boot retries resize.
+    // Suppress the write when resize or the extra-bootargs sync failed, so the
+    // next boot retries them.
     write_first_boot_marker(
-        ods_status.first_boot && resize_succeeded(&ods_status),
+        ods_status.first_boot
+            && resize_succeeded(&ods_status)
+            && extra_bootargs_applied_ok(&ods_status),
         &mut boot_env,
     );
 
@@ -97,6 +107,19 @@ mod marker_writer_tests {
             bl.get_env(BootEnvKey::FirstBootDone).unwrap(),
             Some("1".to_string())
         );
+    }
+
+    #[test]
+    fn extra_bootargs_ok_unless_failed() {
+        use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus, OdsStatus};
+        let mut ods = OdsStatus::new();
+        assert!(extra_bootargs_applied_ok(&ods)); // absent → ok
+
+        ods.set_extra_bootargs_status(ExtraBootArgsStatus {
+            outcome: ExtraBootArgsOutcome::SetEnvFailed,
+            reason: "boom".into(),
+        });
+        assert!(!extra_bootargs_applied_ok(&ods)); // failure recorded → not ok
     }
 
     #[test]
