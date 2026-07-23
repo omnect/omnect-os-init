@@ -147,6 +147,11 @@ pub struct OdsStatus {
     /// when resize completed (succeeded or guard already present).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resize_data: Option<ResizeStatus>,
+
+    /// Extra-bootargs sync failure on this boot. `None` on success, no-op, or
+    /// when the step did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_bootargs: Option<ExtraBootArgsStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,6 +199,36 @@ pub struct ResizeStatus {
     pub reason: String,
 }
 
+/// Why the extra-bootargs sync failed on this boot.
+///
+/// Serialized as snake_case so ODS and cloud consumers can match exact strings.
+/// Failure kinds only — the status exists only on failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtraBootArgsOutcome {
+    /// Reading the current value failed (before any write).
+    ReadFailed,
+    /// Writing the env value failed.
+    SetEnvFailed,
+    /// The read-back after a successful write failed — the value is persisted
+    /// but unverified.
+    ReadBackFailed,
+    /// The stored value read back different from what was written.
+    ReadBackMismatch,
+}
+
+/// Extra-bootargs sync failure, for ODS diagnosis.
+///
+/// Present only when the sync failed on this boot. `None` on success, no-op, or
+/// when the step did not run.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtraBootArgsStatus {
+    /// The failure kind, for exact matching by consumers.
+    pub outcome: ExtraBootArgsOutcome,
+    /// One-line detail for operator diagnosis.
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FactoryResetStatus {
     pub status: FactoryResetStatusCode,
@@ -232,6 +267,11 @@ impl OdsStatus {
     /// Record a resize-data failure indicator for ODS.
     pub fn set_resize_status(&mut self, status: ResizeStatus) {
         self.resize_data = Some(status);
+    }
+
+    /// Record an extra-bootargs sync failure for ODS.
+    pub fn set_extra_bootargs_status(&mut self, status: ExtraBootArgsStatus) {
+        self.extra_bootargs = Some(status);
     }
 }
 
@@ -478,6 +518,26 @@ mod tests {
     use super::*;
     use crate::partition::PartitionName;
     use tempfile::TempDir;
+
+    #[test]
+    fn extra_bootargs_failure_serializes_kind_and_reason() {
+        let mut ods = OdsStatus::new();
+        ods.set_extra_bootargs_status(ExtraBootArgsStatus {
+            outcome: ExtraBootArgsOutcome::SetEnvFailed,
+            reason: "boom".to_string(),
+        });
+        let json = serde_json::to_string(&ods).unwrap();
+        assert!(json.contains(r#""extra_bootargs""#));
+        assert!(json.contains(r#""outcome":"set_env_failed""#));
+        assert!(json.contains(r#""reason":"boom""#));
+    }
+
+    #[test]
+    fn extra_bootargs_absent_is_not_serialized() {
+        let ods = OdsStatus::new();
+        let json = serde_json::to_string(&ods).unwrap();
+        assert!(!json.contains("extra_bootargs"));
+    }
 
     fn current_uid() -> Uid {
         nix::unistd::getuid()
