@@ -218,9 +218,6 @@ pub enum ExtraBootArgsOutcome {
 }
 
 /// Extra-bootargs sync failure, for ODS diagnosis.
-///
-/// Present only when the sync failed on this boot. `None` on success, no-op, or
-/// when the step did not run.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtraBootArgsStatus {
     /// The failure kind, for exact matching by consumers.
