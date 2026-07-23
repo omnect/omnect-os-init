@@ -22,9 +22,11 @@ pub enum RecoveryClass {
 pub enum Action {
     /// Error was already handled by the caller; no further action needed.
     Continue,
-    /// Reboot the device. Either OTA-rollback (Fatal + update_pending) or
-    /// fsck reboot-required (RebootToApply). Bounded by the bootloader for
-    /// the OTA case; unconditional otherwise (documented accepted risk).
+    /// Reboot the device. Reasons: OTA-rollback (Fatal + update_pending),
+    /// fsck reboot-required, or extra-bootargs applied on first boot. The OTA
+    /// case is bounded by the bootloader; fsck and extra-bootargs are
+    /// accepted-risk loops — extra-bootargs mitigates the loop with read-back
+    /// verify + sync in the step but does not bound it.
     Reboot,
     /// Infinite loop with kmsg logging; never exits PID 1.
     Halt,
