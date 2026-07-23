@@ -66,6 +66,10 @@ pub enum BootEnvKey {
     /// `run_init`. Unified first-boot sentinel; read by the resize-data init
     /// setup step and the first-boot detection in `run_init`.
     FirstBootDone,
+    /// `omnect_extra_bootargs` — extra kernel cmdline arguments the bootloader
+    /// appends. Synced from the boot-partition files by the extra-bootargs
+    /// init-setup step.
+    ExtraBootArgs,
     #[cfg(feature = "factory-reset")]
     /// `factory-reset` — JSON trigger set by ODS to request a factory reset.
     /// Value format: `{"mode":1,"preserve":["applications","network"]}`.
@@ -87,6 +91,7 @@ impl BootEnvKey {
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
+            Self::ExtraBootArgs => Cow::Borrowed("omnect_extra_bootargs"),
             #[cfg(feature = "factory-reset")]
             Self::FactoryReset => Cow::Borrowed("factory-reset"),
             #[cfg(feature = "factory-reset")]
@@ -454,6 +459,14 @@ mod tests {
         assert_eq!(
             BootEnvKey::FirstBootDone.as_str().as_ref(),
             "omnect_first_boot_done"
+        );
+    }
+
+    #[test]
+    fn extra_bootargs_key_string() {
+        assert_eq!(
+            BootEnvKey::ExtraBootArgs.as_str().as_ref(),
+            "omnect_extra_bootargs"
         );
     }
 
