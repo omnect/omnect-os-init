@@ -31,7 +31,7 @@
 - Modify: `src/runtime/mod.rs` (re-export the new public types)
 
 **Interfaces:**
-- Produces: `ExtraBootArgsOutcome` enum (`Applied`, `AlreadyCurrent`, `Failed`); `ExtraBootArgsStatus { outcome: ExtraBootArgsOutcome, reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>`; `OdsStatus::set_extra_bootargs_status(&mut self, status: ExtraBootArgsStatus)`. All re-exported from `crate::runtime`.
+- Produces: `ExtraBootArgsStatus { reason: String }`; `OdsStatus.extra_bootargs: Option<ExtraBootArgsStatus>` (set only on failure, `None` otherwise); `OdsStatus::set_extra_bootargs_status(&mut self, status: ExtraBootArgsStatus)`. Both re-exported from `crate::runtime`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -39,15 +39,14 @@ Add to the `#[cfg(test)] mod tests` in `src/runtime/omnect_device_service.rs` (`
 
 ```rust
 #[test]
-fn extra_bootargs_status_serializes_snake_case() {
+fn extra_bootargs_failure_serializes_with_reason() {
     let mut ods = OdsStatus::new();
     ods.set_extra_bootargs_status(ExtraBootArgsStatus {
-        outcome: ExtraBootArgsOutcome::Applied,
-        reason: String::new(),
+        reason: "set_env failed".to_string(),
     });
     let json = serde_json::to_string(&ods).unwrap();
     assert!(json.contains(r#""extra_bootargs""#));
-    assert!(json.contains(r#""outcome":"applied""#));
+    assert!(json.contains(r#""reason":"set_env failed""#));
 }
 
 #[test]
@@ -60,37 +59,22 @@ fn extra_bootargs_absent_is_not_serialized() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --features grub,gpt,test-utils extra_bootargs_status_serializes_snake_case -- --nocapture`
-Expected: FAIL to compile — `ExtraBootArgsStatus`, `ExtraBootArgsOutcome`, `set_extra_bootargs_status` not found.
+Run: `cargo test --features grub,gpt,test-utils extra_bootargs_failure_serializes_with_reason -- --nocapture`
+Expected: FAIL to compile — `ExtraBootArgsStatus`, `set_extra_bootargs_status` not found.
 
 - [ ] **Step 3: Add the types, field, setter, and re-export**
 
 Add the enum and struct next to `ResizeOutcome` / `ResizeStatus`:
 
 ```rust
-/// Outcome of the extra-bootargs sync on this boot.
+/// Extra-bootargs sync failure, for ODS diagnosis.
 ///
-/// Serialized as snake_case so ODS and cloud consumers can match exact strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExtraBootArgsOutcome {
-    /// New value written and verified; a reboot follows to apply it.
-    Applied,
-    /// Env already matched the boot files — nothing to do.
-    AlreadyCurrent,
-    /// Read, write, or read-back verify failed; no reboot. `normal::run` skips
-    /// the first-boot marker on this outcome, so the sync retries next boot.
-    Failed,
-}
-
-/// Result of the extra-bootargs sync step, for ODS diagnosis.
-///
-/// Present only on the fresh-flash boot where the step actually ran.
+/// Recorded only when the sync failed on this boot (`None` otherwise, like
+/// `resize_data`). `normal::run` withholds the first-boot marker while this is
+/// `Some`, so the sync retries on the next boot.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtraBootArgsStatus {
-    /// What the step did.
-    pub outcome: ExtraBootArgsOutcome,
-    /// One-line detail for operator diagnosis; empty on the happy path.
+    /// One-line failure cause for operator diagnosis.
     pub reason: String,
 }
 ```
@@ -98,8 +82,8 @@ pub struct ExtraBootArgsStatus {
 Add the field to `OdsStatus` (after `resize_data`):
 
 ```rust
-    /// Outcome of the extra-bootargs sync. `None` when the step did not run
-    /// (not the fresh-flash boot).
+    /// Extra-bootargs sync failure on this boot. `None` on success, no-op, or
+    /// when the step did not run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_bootargs: Option<ExtraBootArgsStatus>,
 ```
@@ -117,8 +101,8 @@ Extend the re-export in `src/runtime/mod.rs`:
 
 ```rust
 pub use self::omnect_device_service::{
-    ExtraBootArgsOutcome, ExtraBootArgsStatus, FactoryResetStatus, FactoryResetStatusCode,
-    ODS_RUNTIME_DIR, OdsStatus, ResizeOutcome, ResizeStatus, create_ods_runtime_files,
+    ExtraBootArgsStatus, FactoryResetStatus, FactoryResetStatusCode, ODS_RUNTIME_DIR, OdsStatus,
+    ResizeOutcome, ResizeStatus, create_ods_runtime_files,
 };
 ```
 
@@ -278,7 +262,7 @@ Signed-off-by: Joerg Zeidler <62105035+JoergZeidler@users.noreply.github.com>"
 - Modify: `src/bootloader/mod.rs` (add a `MockBootEnv` knob for the read-back mismatch test)
 
 **Interfaces:**
-- Consumes: `ExtraBootArgsStatus`, `ExtraBootArgsOutcome`, `OdsStatus::set_extra_bootargs_status` (Task 1); `InitramfsError::ExtraBootArgsUpdated` (Task 2); `BootEnvKey::ExtraBootArgs` (Task 3); `crate::read_update_pending()`; `mount_points::BOOT`.
+- Consumes: `ExtraBootArgsStatus`, `OdsStatus::set_extra_bootargs_status` (Task 1); `InitramfsError::ExtraBootArgsUpdated` (Task 2); `BootEnvKey::ExtraBootArgs` (Task 3); `crate::read_update_pending()`; `mount_points::BOOT`.
 - Produces: `extra_bootargs::run(ctx: &mut InitSetupCtx) -> crate::Result<()>`; `should_sync(first_boot: bool, update_pending: bool) -> bool`; `InitSetupCtx` gains `rootfs: &'r Path` and `update_pending: bool` (now `InitSetupCtx<'l, 'b, 's, 'r>`); `MockBootEnv::with_set_env_normalize(&str)`.
 
 - [ ] **Step 1: Add a `MockBootEnv` knob to simulate a normalizing tool**
@@ -411,7 +395,7 @@ use crate::bootloader::BootEnvKey;
 use crate::error::InitramfsError;
 use crate::filesystem::mount_points;
 use crate::init_setup::InitSetupCtx;
-use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus};
+use crate::runtime::ExtraBootArgsStatus;
 
 /// Boot-partition file for distro-managed extra boot arguments.
 const BOOTARGS_OMNECT_FILE: &str = "omnect_extra_bootargs_omnect";
@@ -559,9 +543,9 @@ mod tests {
         let mut ods = OdsStatus::new();
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
         assert!(run(&mut ctx).is_ok());
-        assert_eq!(
-            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
-            ExtraBootArgsOutcome::AlreadyCurrent
+        assert!(
+            ctx.ods_status.extra_bootargs.is_none(),
+            "no-op must not record an ODS entry"
         );
     }
 
@@ -579,9 +563,9 @@ mod tests {
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
         let result = run(&mut ctx);
         assert!(matches!(result, Err(InitramfsError::ExtraBootArgsUpdated)));
-        assert_eq!(
-            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
-            ExtraBootArgsOutcome::Applied
+        assert!(
+            ctx.ods_status.extra_bootargs.is_none(),
+            "success is not recorded in ODS (reboot before JSON write)"
         );
         let bl = ctx.boot_env.available_mut().unwrap();
         assert_eq!(
@@ -604,9 +588,9 @@ mod tests {
         let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
         let result = run(&mut ctx);
         assert!(result.is_ok(), "must not request reboot on read-back mismatch");
-        assert_eq!(
-            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
-            ExtraBootArgsOutcome::Failed
+        assert!(
+            ctx.ods_status.extra_bootargs.is_some(),
+            "a read-back mismatch must record a failure entry"
         );
     }
 }
@@ -643,8 +627,8 @@ fn should_sync(first_boot: bool, update_pending: bool) -> bool {
 
 /// Build the combined bootargs value from the two boot-partition files: the
 /// distro file plus the optional custom file. Whitespace runs are squeezed to
-/// single spaces (matching the legacy `awk '{$1=$1};1'`) so the value matches
-/// byte-for-byte what a legacy-migrated device stored.
+/// single spaces (matching the legacy `awk '{$1=$1};1'`) to normalize irregular
+/// whitespace in hand-edited files, so the built value is stable across boots.
 fn read_extra_bootargs(boot_dir: &Path) -> String {
     let omnect = read_bootargs_file(&boot_dir.join(BOOTARGS_OMNECT_FILE));
     let custom = read_bootargs_file(&boot_dir.join(BOOTARGS_CUSTOM_FILE));
@@ -657,8 +641,7 @@ fn read_extra_bootargs(boot_dir: &Path) -> String {
     combined.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Read one bootargs file. `None` if empty or absent. Trimming/squeezing of the
-/// combined value happens in `read_extra_bootargs`.
+/// Read one bootargs file, trimmed. `None` if empty or absent.
 fn read_bootargs_file(path: &Path) -> Option<String> {
     match std::fs::read_to_string(path) {
         Ok(s) => {
@@ -681,7 +664,8 @@ fn read_bootargs_file(path: &Path) -> Option<String> {
 ///
 /// Returns `Err(InitramfsError::ExtraBootArgsUpdated)` when the value changed
 /// and was written, verified and flushed — the caller reboots. Every other
-/// outcome returns `Ok(())`: the step is best-effort and never blocks boot.
+/// path returns `Ok(())`: the step is best-effort and never blocks boot. ODS
+/// status is set only on failure (`None` otherwise), matching `resize_data`.
 pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     if !should_sync(ctx.ods_status.first_boot, ctx.update_pending) {
         log::debug!("extra-bootargs: skipping (not first boot or update pending)");
@@ -707,7 +691,6 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
         Err(e) => {
             log::warn!("extra-bootargs: read current value failed: {e}");
             ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-                outcome: ExtraBootArgsOutcome::Failed,
                 reason: format!("read current value failed: {e}"),
             });
             return Ok(());
@@ -716,10 +699,6 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
 
     if current == new_args {
         log::debug!("extra-bootargs: already up to date");
-        ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-            outcome: ExtraBootArgsOutcome::AlreadyCurrent,
-            reason: String::new(),
-        });
         return Ok(());
     }
 
@@ -731,21 +710,20 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     if let Err(e) = bl.set_env(BootEnvKey::ExtraBootArgs, value) {
         log::warn!("extra-bootargs: set_env failed: {e}");
         ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-            outcome: ExtraBootArgsOutcome::Failed,
             reason: format!("set_env failed: {e}"),
         });
         return Ok(());
     }
 
-    // Read-back verify: the bootloader tool may normalize quoting/whitespace,
-    // so the stored value can differ from what we wrote. If it does not
-    // round-trip, rebooting would loop forever (current never equals new_args).
+    // Read-back verify: if the stored value reads back different from what was
+    // written, rebooting could never converge (current never equals new_args).
+    // The value is not rolled back — the tools store verbatim, so a mismatch is
+    // a genuine write fault and the old value is no better (see spec §7).
     let readback = match bl.get_env(BootEnvKey::ExtraBootArgs) {
         Ok(v) => v.unwrap_or_default(),
         Err(e) => {
             log::warn!("extra-bootargs: read-back failed: {e}; not rebooting");
             ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-                outcome: ExtraBootArgsOutcome::Failed,
                 reason: format!("read-back failed: {e}"),
             });
             return Ok(());
@@ -754,7 +732,6 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     if readback != new_args {
         log::warn!("extra-bootargs: read-back mismatch; not rebooting");
         ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-            outcome: ExtraBootArgsOutcome::Failed,
             reason: "read-back verify mismatch".to_string(),
         });
         return Ok(());
@@ -764,11 +741,9 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     // so without this the write can be lost across the reboot and loop forever.
     nix::unistd::sync();
 
+    // Success is not recorded in ODS: we reboot before normal::run writes the
+    // JSON, and the next boot is a no-op. The reboot is visible in kmsg.
     log::info!("extra-bootargs: applied {new_args:?}; rebooting to apply");
-    ctx.ods_status.set_extra_bootargs_status(ExtraBootArgsStatus {
-        outcome: ExtraBootArgsOutcome::Applied,
-        reason: String::new(),
-    });
     Err(InitramfsError::ExtraBootArgsUpdated)
 }
 ```
@@ -808,7 +783,7 @@ next boot instead of leaving the device running without the security args foreve
 - Modify: `src/mode/normal.rs`
 
 **Interfaces:**
-- Consumes: `OdsStatus.extra_bootargs`, `ExtraBootArgsStatus`, `ExtraBootArgsOutcome::Failed` (Task 1).
+- Consumes: `OdsStatus.extra_bootargs` (Task 1) — `Some` means the sync failed on this boot.
 - Produces: `extra_bootargs_applied_ok(&OdsStatus) -> bool`, folded into the `write_first_boot_marker` condition.
 
 - [ ] **Step 1: Write the failing test**
@@ -818,21 +793,14 @@ Add to `mod marker_writer_tests` in `src/mode/normal.rs`:
 ```rust
 #[test]
 fn extra_bootargs_ok_unless_failed() {
-    use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus, OdsStatus};
+    use crate::runtime::{ExtraBootArgsStatus, OdsStatus};
     let mut ods = OdsStatus::new();
     assert!(extra_bootargs_applied_ok(&ods)); // absent → ok
 
     ods.set_extra_bootargs_status(ExtraBootArgsStatus {
-        outcome: ExtraBootArgsOutcome::AlreadyCurrent,
-        reason: String::new(),
-    });
-    assert!(extra_bootargs_applied_ok(&ods));
-
-    ods.set_extra_bootargs_status(ExtraBootArgsStatus {
-        outcome: ExtraBootArgsOutcome::Failed,
         reason: "boom".into(),
     });
-    assert!(!extra_bootargs_applied_ok(&ods));
+    assert!(!extra_bootargs_applied_ok(&ods)); // failure recorded → not ok
 }
 ```
 
@@ -848,14 +816,9 @@ Add the helper near `resize_succeeded` in `src/mode/normal.rs`:
 ```rust
 /// A failed extra-bootargs sync must not close the first-boot gate: withhold
 /// the marker so `first_boot` stays true and the sync retries on the next boot.
+/// `extra_bootargs` is `Some` only on failure (set only in that case).
 fn extra_bootargs_applied_ok(ods_status: &crate::runtime::OdsStatus) -> bool {
-    !matches!(
-        ods_status.extra_bootargs,
-        Some(crate::runtime::ExtraBootArgsStatus {
-            outcome: crate::runtime::ExtraBootArgsOutcome::Failed,
-            ..
-        })
-    )
+    ods_status.extra_bootargs.is_none()
 }
 ```
 

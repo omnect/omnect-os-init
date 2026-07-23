@@ -97,9 +97,9 @@ Read `omnect_extra_bootargs_omnect` and the optional
 `omnect_extra_bootargs_custom` from the mounted boot partition (`rootfs/boot`),
 join them, and squeeze whitespace runs to single spaces (matching the legacy
 `awk '{$1=$1};1'`, not only trimming the ends). Missing or empty files
-contribute nothing; both absent yields the empty string. Exact-match matters:
-the value is compared byte-for-byte against the stored env value, so a device
-carrying a legacy-squeezed value must produce the same normalization.
+contribute nothing; both absent yields the empty string. The squeeze normalizes
+irregular whitespace in hand-edited files so the built value is stable across
+boots and the change comparison is reliable.
 
 ## 6. Change flow
 
@@ -121,10 +121,15 @@ grubenv file.
 
 Two independent guards, both required:
 
-- **Read-back verify** guards against a normalization mismatch — if the
-  bootloader tool stores a value that reads back differently (quoting,
-  whitespace), `current != new` would stay true forever. If the read-back does
-  not match, the step does **not** reboot; it logs and records `Failed`.
+- **Read-back verify** guards against the reboot loop — if the stored value
+  reads back different from what was written, rebooting could never converge
+  (`current != new` forever). On a mismatch the step does **not** reboot; it
+  records the failure (§9) and returns without a reboot. It does **not** roll
+  back the write: `grub-editenv`/`fw_setenv` store the value verbatim, so a
+  mismatch means a genuine write fault where the previous value is no better,
+  and rolling back would only add a second write per boot. A persistent mismatch
+  therefore rewrites every boot and reports the failure until reflash — the same
+  accepted retry cost as §9.
 - **`sync()`** guards against a lost write. `reboot(2)` with `RB_AUTOBOOT` is a
   hard reboot and does not flush filesystem buffers; without `sync()` the
   grubenv write could be lost across the reboot, so the next boot would see the
@@ -170,58 +175,61 @@ risk.
 The arguments are security-critical (§1), so a failed sync must not silently
 close the first-boot gate and leave the device running without them forever.
 
-On a `Failed` outcome (`set_env` error, read-back mismatch, or read error):
-- the step logs, records `Failed` in ODS, and returns `Ok(())` (no reboot,
+On a failure (`set_env` error, read-back mismatch, or read error):
+- the step logs, records the failure in ODS, and returns `Ok(())` (no reboot,
   boot continues so the device is reachable for diagnosis/reflash), **and**
 - `normal::run` does **not** write the `FirstBootDone` marker on this boot, so
   `first_boot` stays `true` and the sync **retries on the next boot**.
 
 This is how the degraded-env case already behaves (the marker write itself fails
-on a degraded env), so `Failed` just extends the same retry behavior.
+on a degraded env), so a failed sync just extends the same retry behavior.
+
+The rest of the boot proceeds: the step returns `Ok(())`, so `resize_data` still
+runs and completes on this boot. Only the first-boot marker is withheld; on the
+retry boots resize re-runs and no-ops (it is idempotent).
 
 Accepted cost: if the failure never clears (persistent env-write fault), the
-device retries the sync every boot and never completes first-boot setup (resize
-also stays pending). It stays reachable and reports `Failed` in ODS on every
-boot, which is the signal for the cloud to reflash or alert. This is the
-deliberate security-over-availability tradeoff for these arguments.
+device retries the sync every boot and never completes first-boot marking. It
+stays reachable and reports the failure in ODS on every boot, which is the
+signal for the cloud to reflash or alert. This is the deliberate
+security-over-availability tradeoff for these arguments.
 
 ## 10. ODS status — new entry
 
-New field in `OdsStatus`, following the `resize_data` pattern:
+Following the `resize_data` pattern: the entry is recorded **only on failure**
+(`None` on the happy path). Success and no-op leave it `None` — legacy reported
+nothing here either (it only logged), and the actionable signal for the cloud is
+the failure.
 
 ```rust
 #[serde(skip_serializing_if = "Option::is_none")]
 pub extra_bootargs: Option<ExtraBootArgsStatus>,
 
 pub struct ExtraBootArgsStatus {
-    pub outcome: ExtraBootArgsOutcome, // serde snake_case
-    pub reason: String,
-}
-
-pub enum ExtraBootArgsOutcome {
-    Applied,        // value written and verified; reboot follows
-    AlreadyCurrent, // no change needed
-    Failed,         // set_env or read-back verify failed; no reboot, retried next boot
+    pub reason: String, // one-line failure cause for operator diagnosis
 }
 ```
 
-Setter `set_extra_bootargs_status`. `Applied` records that a reboot is imminent.
-There is no `SkippedDegraded`: a degraded env cannot reach the step (§4), so it
-would be a status that never appears.
+Setter `set_extra_bootargs_status`. No outcome enum: `Some` always means the sync
+failed on this boot; `reason` carries the cause (set_env error, read-back
+mismatch, read error). The successful apply is not recorded — it reboots before
+`normal::run` writes the JSON, and the next boot is a no-op (`None`) anyway; the
+reboot is visible only in kmsg. A degraded env cannot reach the step (§4), so
+there is no degraded status either.
 
 ## 11. Testing
 
 - `read_extra_bootargs`: none / omnect-only / custom-only / both / empty; plus
   internal-whitespace squeeze (`"a   b"` → `"a b"`).
 - Gate: `first_boot == false` → skip; `update_pending == true` → skip.
-- Change path: differing value → `set_env` + read-back + `Err(ExtraBootArgsUpdated)`.
-- Read-back mismatch (mock returns a different value) → no `Err`, ODS `Failed`,
-  no reboot.
-- `current == new` → no-op, no `Err`, ODS `AlreadyCurrent`.
+- Change path: differing value → `set_env` + read-back + `Err(ExtraBootArgsUpdated)`,
+  ODS `extra_bootargs` stays `None`.
+- Read-back mismatch (mock stores a different value) → no `Err`, `extra_bootargs`
+  is `Some` (failure recorded), no reboot.
+- `current == new` → no-op, no `Err`, `extra_bootargs` stays `None`.
 - `recovery_class`: `ExtraBootArgsUpdated → RebootToApply` (exhaustive-match test).
-- Marker skip: with ODS `extra_bootargs = Failed`, `normal::run` does not write
-  `FirstBootDone`; with `Applied`/`AlreadyCurrent`/absent it does (when
-  `first_boot` and resize allow).
+- Marker skip: with `extra_bootargs = Some` (failure), `normal::run` does not
+  write `FirstBootDone`; with `None` it does (when `first_boot` and resize allow).
 
 ## 12. Comparison to legacy
 
@@ -233,7 +241,7 @@ would be a status that never appears.
 | On change | `set_env` + `sync` + `reboot -f` | `set_env` + verify + `sync` + `RebootToApply` |
 | Durability | `sync` before reboot | `sync` before reboot |
 | Loop protection | first-boot gate closed after reboot (gives up) | read-back verify + `sync` (mitigate, retry until converged; accepted residual) |
-| Failure | logged | logged + ODS `Failed`; marker not written, retried next boot |
+| Failure | logged | logged + ODS entry (failure only); marker not written, retried next boot |
 
 Note: on a fresh flash the env starts empty while the boot files carry the
 arguments, so the first boot always costs one extra reboot to apply them. Same
