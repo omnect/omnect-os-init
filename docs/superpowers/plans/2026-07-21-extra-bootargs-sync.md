@@ -641,8 +641,9 @@ In `src/init_setup/extra_bootargs.rs`, above the test module, add the module doc
 
 ```rust
 /// Gate: the sync runs only on the fresh-flash boot and never during an OTA
-/// validation boot. `first_boot` alone already excludes OTA (the marker
-/// survives updates); `update_pending` is defence-in-depth.
+/// validation boot. `first_boot` alone already excludes OTA on devices that
+/// already ran the Rust init; `update_pending` covers the legacy-migration
+/// validation boot, where the marker is still absent.
 fn should_sync(first_boot: bool, update_pending: bool) -> bool {
     first_boot && !update_pending
 }

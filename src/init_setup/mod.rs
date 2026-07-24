@@ -2,8 +2,7 @@
 //! and the bootloader env is open, but before mode dispatch.
 //!
 //! Steps are idempotent — guarded by bootloader env or filesystem state so each
-//! runs at most once per trigger. Some steps are feature-gated (`resize_data`),
-//! others always run (`extra_bootargs`).
+//! runs at most once per trigger. Steps may be feature-gated.
 
 pub mod extra_bootargs;
 #[cfg(feature = "resize-data")]
@@ -20,8 +19,7 @@ pub struct InitSetupCtx<'l, 'b, 's, 'r> {
     pub boot_env: &'b mut BootEnvState,
     pub ods_status: &'s mut OdsStatus,
     pub rootfs: &'r Path,
-    /// OTA update in flight (`omnect_validate_update` set). The extra-bootargs
-    /// step must not persist bootargs during an update validation boot.
+    /// OTA update in flight (`omnect_validate_update` set).
     pub update_pending: bool,
 }
 

@@ -123,6 +123,28 @@ mod marker_writer_tests {
     }
 
     #[test]
+    fn skips_marker_when_extra_bootargs_failed() {
+        use crate::runtime::{ExtraBootArgsOutcome, ExtraBootArgsStatus, OdsStatus};
+
+        let mock = MockBootEnv::new();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        ods.first_boot = true;
+        ods.set_extra_bootargs_status(ExtraBootArgsStatus {
+            outcome: ExtraBootArgsOutcome::SetEnvFailed,
+            reason: "test failure".into(),
+        });
+
+        write_first_boot_marker(ods.first_boot && extra_bootargs_applied_ok(&ods), &mut env);
+        let bl = env.available().unwrap();
+        assert_eq!(
+            bl.get_env(BootEnvKey::FirstBootDone).unwrap(),
+            None,
+            "marker must not be written when extra-bootargs failed"
+        );
+    }
+
+    #[test]
     fn does_not_write_when_not_first_boot() {
         let mock = MockBootEnv::new();
         let mut env = BootEnvState::Available(Box::new(mock));

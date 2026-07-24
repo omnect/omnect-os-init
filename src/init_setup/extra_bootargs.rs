@@ -3,12 +3,11 @@
 //! On the fresh-flash boot only, this reads the boot-partition argument files
 //! and, if they differ from the stored value, writes the value, verifies it,
 //! flushes it to disk, and requests a reboot so the bootloader applies the
-//! arguments from the next boot. OTA argument changes are handled by the
-//! swupdate handler and the bootloader validate mechanism, not here.
+//! arguments from the next boot.
 
-use std::io::ErrorKind;
-use std::path::Path;
+use std::{io::ErrorKind, path::Path};
 
+use crate::Result;
 use crate::bootloader::BootEnvKey;
 use crate::error::InitramfsError;
 use crate::filesystem::mount_points;
@@ -30,36 +29,35 @@ fn should_sync(first_boot: bool, update_pending: bool) -> bool {
 
 /// Build the combined bootargs value from the two boot-partition files: the
 /// distro file plus the optional custom file. Whitespace runs are squeezed to
-/// single spaces (matching the legacy `awk '{$1=$1};1'`) to normalize irregular
-/// whitespace in hand-edited files, so the built value is stable across boots.
-fn read_extra_bootargs(boot_dir: &Path) -> String {
-    let omnect = read_bootargs_file(&boot_dir.join(BOOTARGS_OMNECT_FILE));
-    let custom = read_bootargs_file(&boot_dir.join(BOOTARGS_CUSTOM_FILE));
+/// single spaces to normalize irregular whitespace in hand-edited files, so the
+/// built value is stable across boots.
+fn read_extra_bootargs(boot_dir: &Path) -> std::io::Result<String> {
+    let omnect = read_bootargs_file(&boot_dir.join(BOOTARGS_OMNECT_FILE))?;
+    let custom = read_bootargs_file(&boot_dir.join(BOOTARGS_CUSTOM_FILE))?;
     let combined = match (omnect.as_deref(), custom.as_deref()) {
         (Some(a), Some(b)) => format!("{a} {b}"),
         (Some(a), None) => a.to_string(),
         (None, Some(b)) => b.to_string(),
         (None, None) => String::new(),
     };
-    combined.split_whitespace().collect::<Vec<_>>().join(" ")
+    Ok(combined.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// Read one bootargs file, trimmed. `None` if empty or absent.
-fn read_bootargs_file(path: &Path) -> Option<String> {
+/// Read one bootargs file, trimmed. `Ok(None)` if empty or absent. A real read
+/// error (not NotFound) propagates: the args are security-relevant, so the
+/// caller must treat it as a failure, not as "no args".
+fn read_bootargs_file(path: &Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(s) => {
             let trimmed = s.trim().to_string();
-            if trimmed.is_empty() {
+            Ok(if trimmed.is_empty() {
                 None
             } else {
                 Some(trimmed)
-            }
+            })
         }
-        Err(e) if e.kind() == ErrorKind::NotFound => None,
-        Err(e) => {
-            log::warn!("extra-bootargs: failed to read {}: {e}", path.display());
-            None
-        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -68,15 +66,26 @@ fn read_bootargs_file(path: &Path) -> Option<String> {
 /// Returns `Err(InitramfsError::ExtraBootArgsUpdated)` when the value changed
 /// and was written, verified and flushed — the caller reboots. Every other
 /// path returns `Ok(())`: the step is best-effort and never blocks boot. ODS
-/// status is set only on failure (`None` otherwise), matching `resize_data`.
-pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
+/// status is set only on failure (`None` otherwise).
+pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
     if !should_sync(ctx.ods_status.first_boot, ctx.update_pending) {
         log::debug!("extra-bootargs: skipping (not first boot or update pending)");
         return Ok(());
     }
 
     let boot_dir = ctx.rootfs.join(mount_points::BOOT);
-    let new_args = read_extra_bootargs(&boot_dir);
+    let new_args = match read_extra_bootargs(&boot_dir) {
+        Ok(args) => args,
+        Err(e) => {
+            log::warn!("extra-bootargs: reading bootargs files failed: {e}");
+            ctx.ods_status
+                .set_extra_bootargs_status(ExtraBootArgsStatus {
+                    outcome: ExtraBootArgsOutcome::FileReadFailed,
+                    reason: format!("reading bootargs files failed: {e}"),
+                });
+            return Ok(());
+        }
+    };
 
     // `first_boot == true` implies the env is available (`compute_first_boot`
     // returns false on a degraded env), so this None arm cannot occur in
@@ -124,8 +133,7 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
 
     // Read-back verify: if the stored value reads back different from what was
     // written, rebooting could never converge (current never equals new_args).
-    // The value is not rolled back — the tools store verbatim, so a mismatch is
-    // a genuine write fault and the old value is no better.
+    // The value is not rolled back — a mismatch is a genuine write fault.
     let readback = match bl.get_env(BootEnvKey::ExtraBootArgs) {
         Ok(v) => v.unwrap_or_default(),
         Err(e) => {
@@ -153,7 +161,7 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> crate::Result<()> {
     nix::unistd::sync();
 
     // Success is not recorded in ODS: we reboot before normal::run writes the
-    // JSON, and the next boot is a no-op. The reboot is visible in kmsg.
+    // JSON, and the next boot is a no-op.
     log::info!("extra-bootargs: applied {new_args:?}; rebooting to apply");
     Err(InitramfsError::ExtraBootArgsUpdated)
 }
@@ -206,14 +214,14 @@ mod tests {
     #[test]
     fn no_files_yields_empty_string() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(read_extra_bootargs(tmp.path()), "");
+        assert_eq!(read_extra_bootargs(tmp.path()).unwrap(), "");
     }
 
     #[test]
     fn omnect_only_returns_its_content() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet loglevel=3\n");
-        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3");
+        assert_eq!(read_extra_bootargs(tmp.path()).unwrap(), "quiet loglevel=3");
     }
 
     #[test]
@@ -221,7 +229,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
         write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "myarg=1");
-        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3 myarg=1");
+        assert_eq!(
+            read_extra_bootargs(tmp.path()).unwrap(),
+            "quiet loglevel=3 myarg=1"
+        );
     }
 
     #[test]
@@ -229,7 +240,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "   \n");
         write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "\n");
-        assert_eq!(read_extra_bootargs(tmp.path()), "");
+        assert_eq!(read_extra_bootargs(tmp.path()).unwrap(), "");
     }
 
     #[test]
@@ -237,7 +248,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), BOOTARGS_OMNECT_FILE, "quiet    loglevel=3");
         write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "a\tb");
-        assert_eq!(read_extra_bootargs(tmp.path()), "quiet loglevel=3 a b");
+        assert_eq!(
+            read_extra_bootargs(tmp.path()).unwrap(),
+            "quiet loglevel=3 a b"
+        );
     }
 
     // ---- should_sync ---------------------------------------------------
@@ -350,6 +364,152 @@ mod tests {
         assert_eq!(
             ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
             ExtraBootArgsOutcome::ReadBackMismatch
+        );
+    }
+
+    #[test]
+    fn file_read_error_records_failed_without_touching_env() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        // A directory where a bootargs file is expected makes read_to_string
+        // fail with a non-NotFound error, standing in for flaky boot media.
+        std::fs::create_dir(boot_dir.join(BOOTARGS_OMNECT_FILE)).unwrap();
+
+        let layout = empty_layout();
+        let mock = MockBootEnv::new().with_env(BootEnvKey::ExtraBootArgs, "quiet loglevel=3");
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(result.is_ok(), "read error must not request a reboot");
+        assert_eq!(
+            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
+            ExtraBootArgsOutcome::FileReadFailed
+        );
+        // The stored value must not be deleted or changed on a read error.
+        let bl = ctx.boot_env.available_mut().unwrap();
+        assert_eq!(
+            bl.get_env(BootEnvKey::ExtraBootArgs).unwrap().as_deref(),
+            Some("quiet loglevel=3")
+        );
+    }
+
+    #[test]
+    fn read_extra_bootargs_propagates_read_error() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(BOOTARGS_OMNECT_FILE)).unwrap();
+        assert!(read_extra_bootargs(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn custom_only_returns_its_content() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), BOOTARGS_CUSTOM_FILE, "myarg=1\n");
+        assert_eq!(read_extra_bootargs(tmp.path()).unwrap(), "myarg=1");
+    }
+
+    #[test]
+    fn get_env_error_records_read_failed_without_reboot() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
+
+        let layout = empty_layout();
+        let mock = MockBootEnv::new().with_get_env_error();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(result.is_ok(), "get_env failure must not block boot");
+        assert_eq!(
+            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
+            ExtraBootArgsOutcome::ReadFailed
+        );
+    }
+
+    #[test]
+    fn empty_config_is_noop_without_reboot() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        // No bootargs files, env unset — the common fresh-flash case.
+
+        let layout = empty_layout();
+        let mock = MockBootEnv::new();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "empty config must not reboot on fresh flash"
+        );
+        assert!(ctx.ods_status.extra_bootargs.is_none());
+        let bl = ctx.boot_env.available_mut().unwrap();
+        assert_eq!(bl.get_env(BootEnvKey::ExtraBootArgs).unwrap(), None);
+    }
+
+    #[test]
+    fn empty_args_delete_stale_value_and_request_reboot() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        // No bootargs files → new args empty, but the env holds a stale value.
+
+        let layout = empty_layout();
+        let mock = MockBootEnv::new().with_env(BootEnvKey::ExtraBootArgs, "stale=1");
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(matches!(result, Err(InitramfsError::ExtraBootArgsUpdated)));
+        let bl = ctx.boot_env.available_mut().unwrap();
+        assert_eq!(bl.get_env(BootEnvKey::ExtraBootArgs).unwrap(), None);
+    }
+
+    #[test]
+    fn set_env_error_records_failed_without_reboot() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
+
+        let layout = empty_layout();
+        let mock = MockBootEnv::new().with_set_env_error();
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "transient set_env failure must not block boot"
+        );
+        assert_eq!(
+            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
+            ExtraBootArgsOutcome::SetEnvFailed
+        );
+    }
+
+    #[test]
+    fn read_back_error_records_read_back_failed_without_reboot() {
+        let tmp = TempDir::new().unwrap();
+        let boot_dir = tmp.path().join("boot");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        write_file(&boot_dir, BOOTARGS_OMNECT_FILE, "quiet loglevel=3");
+
+        let layout = empty_layout();
+        // First get_env (read current) succeeds; the read-back call fails.
+        let mock = MockBootEnv::new().with_get_env_error_after(1);
+        let mut env = BootEnvState::Available(Box::new(mock));
+        let mut ods = OdsStatus::new();
+        let mut ctx = make_ctx(&layout, &mut env, &mut ods, tmp.path(), true, false);
+        let result = run(&mut ctx);
+        assert!(result.is_ok(), "read-back failure must not reboot");
+        assert_eq!(
+            ctx.ods_status.extra_bootargs.as_ref().unwrap().outcome,
+            ExtraBootArgsOutcome::ReadBackFailed
         );
     }
 }

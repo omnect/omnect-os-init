@@ -202,15 +202,16 @@ pub struct ResizeStatus {
 /// Why the extra-bootargs sync failed on this boot.
 ///
 /// Serialized as snake_case so ODS and cloud consumers can match exact strings.
-/// Failure kinds only — the status exists only on failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtraBootArgsOutcome {
+    /// Reading a boot-partition argument file failed (not "absent").
+    FileReadFailed,
     /// Reading the current value failed (before any write).
     ReadFailed,
     /// Writing the env value failed.
     SetEnvFailed,
-    /// The read-back after a successful write failed — the value is persisted
+    /// The read-back after a successful write failed — the value is written
     /// but unverified.
     ReadBackFailed,
     /// The stored value read back different from what was written.
