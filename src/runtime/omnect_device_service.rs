@@ -205,7 +205,7 @@ pub struct ResizeStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtraBootArgsOutcome {
-    /// Reading a boot-partition argument file failed (not "absent").
+    /// Reading a boot-partition argument file failed.
     FileReadFailed,
     /// Reading the current value failed (before any write).
     ReadFailed,

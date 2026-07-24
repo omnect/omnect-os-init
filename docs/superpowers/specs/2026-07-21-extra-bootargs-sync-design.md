@@ -164,18 +164,24 @@ The step does not reboot directly — the reboot convention keeps that in
 verified and synced write, `Ok(())` otherwise. `init_setup::run` and `run_init`
 propagate it.
 
-Unlike the fsck `RebootToApply` case, the bootloader does not bound this reboot
-(a fresh-flash device has no rollback slot). Read-back verify plus `sync()`
-mitigate the loop but do not bound it (§7). The `RebootToApply` doc comment
-notes all reboot reasons and that this one carries an accepted residual loop
-risk.
+The bootloader does not bound this reboot (a fresh-flash device has no rollback
+slot). This matches the existing fsck `RebootToApply` case, which is also
+unbounded — only the OTA-rollback reboot is bounded. Read-back verify plus
+`sync()` mitigate the loop but do not bound it (§7). The `RebootToApply` doc
+comment notes all reboot reasons and that this one carries an accepted residual
+loop risk.
 
 ## 9. Failure handling — security-first, retry on failure
 
 The arguments are security-critical (§1), so a failed sync must not silently
 close the first-boot gate and leave the device running without them forever.
 
-On a failure (`set_env` error, read-back mismatch, or read error):
+A read error on a boot-partition argument file (any error other than "file
+absent") is a failure too: the args are security-relevant, so a flaky read must
+not be treated as "no args" and silently drop them.
+
+On a failure (bootargs-file read error, `set_env` error, read-back mismatch, or
+current-value read error):
 - the step logs, records the failure in ODS, and returns `Ok(())` (no reboot,
   boot continues so the device is reachable for diagnosis/reflash), **and**
 - `normal::run` does **not** write the `FirstBootDone` marker on this boot, so

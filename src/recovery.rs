@@ -12,9 +12,8 @@ pub enum RecoveryClass {
     /// Non-fatal; the caller should warn and proceed.
     ContinueDegraded,
     /// A reboot is expected to change the outcome (e.g. fsck applied a fix, or
-    /// extra-bootargs was written on first boot). The extra-bootargs case
-    /// carries an accepted residual reboot loop: unlike the fsck and OTA cases
-    /// it is not bounded by the bootloader.
+    /// extra-bootargs was written on first boot). Not bounded by the bootloader:
+    /// a cause that never clears reboot-loops, an accepted residual risk.
     RebootToApply,
     /// Boot cannot proceed.
     Fatal,
@@ -27,8 +26,8 @@ pub enum Action {
     Continue,
     /// Reboot the device. Reasons: OTA-rollback (Fatal + update_pending),
     /// fsck reboot-required, or extra-bootargs applied on first boot. The OTA
-    /// and fsck cases are bounded by the bootloader; extra-bootargs is an
-    /// accepted-risk loop that is not bounded.
+    /// case is bounded by the bootloader; fsck and extra-bootargs are
+    /// unconditional accepted-risk reboot loops.
     Reboot,
     /// Infinite loop with kmsg logging; never exits PID 1.
     Halt,
