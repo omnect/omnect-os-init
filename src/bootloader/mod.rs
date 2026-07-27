@@ -66,6 +66,10 @@ pub enum BootEnvKey {
     /// `run_init`. Unified first-boot sentinel; read by the resize-data init
     /// setup step and the first-boot detection in `run_init`.
     FirstBootDone,
+    /// `omnect_extra_bootargs` — extra kernel cmdline arguments the bootloader
+    /// appends. Synced from the boot-partition files by the extra-bootargs
+    /// init-setup step.
+    ExtraBootArgs,
     #[cfg(feature = "factory-reset")]
     /// `factory-reset` — JSON trigger set by ODS to request a factory reset.
     /// Value format: `{"mode":1,"preserve":["applications","network"]}`.
@@ -87,6 +91,7 @@ impl BootEnvKey {
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
+            Self::ExtraBootArgs => Cow::Borrowed("omnect_extra_bootargs"),
             #[cfg(feature = "factory-reset")]
             Self::FactoryReset => Cow::Borrowed("factory-reset"),
             #[cfg(feature = "factory-reset")]
@@ -248,8 +253,16 @@ pub struct MockBootEnv {
     pub set_env_calls: Vec<BootEnvKey>,
     /// When true, `get_env` returns an error instead of looking up the key.
     get_env_errors: bool,
+    /// When set, `get_env` succeeds for this many calls, then errors. Lets a
+    /// test reach the read-back path: first read ok, read-back fails.
+    get_env_ok_calls: Option<usize>,
+    /// Count of `get_env` calls seen, for `get_env_ok_calls`.
+    get_env_seen: std::sync::atomic::AtomicUsize,
     /// When true, `set_env` returns an error instead of setting the key.
     set_env_errors: bool,
+    /// When set, `set_env` stores this fixed value instead of the given one,
+    /// simulating a bootloader tool that normalizes the written value.
+    set_env_normalize: Option<String>,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -268,8 +281,18 @@ impl MockBootEnv {
         self
     }
 
+    pub fn with_get_env_error_after(mut self, ok_calls: usize) -> Self {
+        self.get_env_ok_calls = Some(ok_calls);
+        self
+    }
+
     pub fn with_set_env_error(mut self) -> Self {
         self.set_env_errors = true;
+        self
+    }
+
+    pub fn with_set_env_normalize(mut self, stored: &str) -> Self {
+        self.set_env_normalize = Some(stored.to_string());
         self
     }
 }
@@ -277,7 +300,10 @@ impl MockBootEnv {
 #[cfg(any(test, feature = "test-utils"))]
 impl BootEnv for MockBootEnv {
     fn get_env(&self, key: BootEnvKey) -> Result<Option<String>> {
-        if self.get_env_errors {
+        let seen = self
+            .get_env_seen
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.get_env_errors || self.get_env_ok_calls.is_some_and(|ok| seen >= ok) {
             return Err(crate::error::BootEnvError::CommandFailed {
                 command: "mock".into(),
                 reason: "injected error".into(),
@@ -294,9 +320,13 @@ impl BootEnv for MockBootEnv {
             });
         }
         self.set_env_calls.push(key);
-        match value {
+        let to_store = match &self.set_env_normalize {
+            Some(forced) => Some(forced.clone()),
+            None => value.map(|v| v.to_string()),
+        };
+        match to_store {
             Some(v) => {
-                self.env.insert(key.as_str().to_string(), v.to_string());
+                self.env.insert(key.as_str().to_string(), v);
             }
             None => {
                 self.env.remove(key.as_str().as_ref());
@@ -454,6 +484,14 @@ mod tests {
         assert_eq!(
             BootEnvKey::FirstBootDone.as_str().as_ref(),
             "omnect_first_boot_done"
+        );
+    }
+
+    #[test]
+    fn extra_bootargs_key_string() {
+        assert_eq!(
+            BootEnvKey::ExtraBootArgs.as_str().as_ref(),
+            "omnect_extra_bootargs"
         );
     }
 

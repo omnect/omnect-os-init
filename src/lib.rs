@@ -187,6 +187,8 @@ pub fn run_init() -> Result<()> {
             layout: &layout,
             boot_env: &mut bootloader_env,
             ods_status: &mut ods_status,
+            rootfs,
+            update_pending: read_update_pending(),
         };
         init_setup::run(ctx)?;
     }

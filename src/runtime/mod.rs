@@ -11,7 +11,7 @@ mod switch_root;
 
 pub use self::fs_link::create_fs_links;
 pub use self::omnect_device_service::{
-    FactoryResetStatus, FactoryResetStatusCode, ODS_RUNTIME_DIR, OdsStatus, ResizeOutcome,
-    ResizeStatus, create_ods_runtime_files,
+    ExtraBootArgsOutcome, ExtraBootArgsStatus, FactoryResetStatus, FactoryResetStatusCode,
+    ODS_RUNTIME_DIR, OdsStatus, ResizeOutcome, ResizeStatus, create_ods_runtime_files,
 };
 pub use self::switch_root::switch_root;

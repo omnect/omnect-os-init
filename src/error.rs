@@ -44,6 +44,9 @@ pub enum InitramfsError {
     #[error("Factory reset error: {0}")]
     FactoryReset(#[from] FactoryResetError),
 
+    #[error("extra bootargs updated; reboot required to apply")]
+    ExtraBootArgsUpdated,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -86,6 +89,7 @@ impl InitramfsError {
                 | FactoryResetError::MountError(_)
                 | FactoryResetError::Io(_),
             ) => RecoveryClass::ContinueDegraded,
+            Self::ExtraBootArgsUpdated => RecoveryClass::RebootToApply,
             Self::Io(_) => RecoveryClass::Fatal,
         }
     }
@@ -283,6 +287,12 @@ mod recovery_class_tests {
             code: FsckExitCode::REBOOT_REQUIRED,
             output: String::new(),
         });
+        assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
+    }
+
+    #[test]
+    fn extra_bootargs_updated_reboots_to_apply() {
+        let err = InitramfsError::ExtraBootArgsUpdated;
         assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
     }
 
