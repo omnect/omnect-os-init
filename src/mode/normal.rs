@@ -5,8 +5,8 @@ use log::info;
 use crate::{
     Result,
     filesystem::{
-        mount_remaining_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
-        setup_raw_rootfs_mount,
+        drain_fsck_env, mount_remaining_partitions, persist_fsck_results, setup_data_overlay,
+        setup_etc_overlay, setup_raw_rootfs_mount,
     },
     mode::BootContext,
     runtime::{ODS_RUNTIME_DIR, create_fs_links, create_ods_runtime_files, switch_root},
@@ -67,6 +67,10 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     setup_etc_overlay(rootfs)?;
     setup_data_overlay(rootfs)?;
     create_fs_links(rootfs)?;
+
+    // Brings back this boot's core-partition records (moved to the env by
+    // apply_boot_env_decision) plus anything a previous aborted boot left there.
+    drain_fsck_env(&mut ods_status, boot_env.available_mut());
 
     create_ods_runtime_files(
         &ods_status,

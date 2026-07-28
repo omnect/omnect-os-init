@@ -90,7 +90,7 @@ flowchart TD
     MREM -->|Fatal| FEB
     MREM -->|OK| OVL["setup_raw_rootfs_mount()\nsetup_etc_overlay()\nsetup_data_overlay()"]
 
-    OVL -->|OK| LINKS["create_fs_links()\ncreate_ods_runtime_files()"]
+    OVL -->|OK| LINKS["create_fs_links()\ndrain_fsck_env() — env → JSON, then clear\ncreate_ods_runtime_files()"]
     OVL -->|Fail| FEB
 
     LINKS -->|OK| FBM["write_first_boot_marker()\nif first_boot ∧ resize_ok ∧ env_available\nbest-effort — warn on fail"]

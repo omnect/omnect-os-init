@@ -23,6 +23,15 @@ use crate::runtime::OdsStatus;
 /// Subdirectory within the data partition where fsck logs are written.
 const FSCK_LOG_SUBDIR: &str = "var/log/fsck";
 
+/// Partitions this crate runs fsck on — the boot-env keys `drain_fsck_env` looks for.
+const FSCK_PARTITIONS: [PartitionName; 5] = [
+    PartitionName::Boot,
+    PartitionName::Factory,
+    PartitionName::Cert,
+    PartitionName::Etc,
+    PartitionName::Data,
+];
+
 /// Run fsck on a partition and record the result (including output) in `ods_status`.
 ///
 /// Records the result even when fsck reports errors (exit ≥ 4) and does not fail
@@ -267,7 +276,8 @@ pub fn mount_remaining_partitions(
 ///
 /// For each partition with a non-zero fsck exit code:
 /// - Stores the gzip+base64 encoded exit code and full output in the bootloader
-///   environment (grubenv / uboot-env) for inspection after the next boot.
+///   environment (grubenv / uboot-env), so the record survives a reboot that
+///   happens before the ODS status JSON is written. `drain_fsck_env` consumes it.
 ///   Skipped when `boot_env` is `None` (degraded boot — env unavailable).
 /// - Writes the full output to `/data/var/log/fsck/<partition>.log` (written
 ///   to /rootfs/mnt/data/var/log/fsck/; visible as `/data/var/log/fsck/`
@@ -324,6 +334,39 @@ pub fn persist_fsck_results(
                     log::info!("Wrote fsck log: {}", log_path.display());
                 }
             }
+        }
+    }
+}
+
+/// Move fsck records from the boot env into `ods_status` and clear them there.
+///
+/// The boot env is the carrier across a reboot: a boot that aborts between fsck
+/// and the ODS status write leaves its record there, and this is what brings it
+/// into the JSON on the boot that follows. Clearing keeps the fixed-size env
+/// block from filling up with records that were already reported.
+///
+/// Call after `persist_fsck_results` and before the ODS status JSON is written.
+/// A no-op in degraded boot, where `ods_status` still holds this boot's records.
+pub fn drain_fsck_env(ods_status: &mut OdsStatus, bootloader: Option<&mut dyn BootEnv>) {
+    let Some(bl) = bootloader else {
+        return;
+    };
+
+    for partition in FSCK_PARTITIONS {
+        let record = match bl.get_fsck_status(partition) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("Failed to read fsck record for {partition} from boot env: {e}");
+                continue;
+            }
+        };
+        let Some(record) = record else {
+            continue;
+        };
+
+        ods_status.add_fsck_result(partition, record.exit_code.bits(), record.output);
+        if let Err(e) = bl.clear_fsck_status(partition) {
+            log::warn!("Failed to clear fsck record for {partition} in boot env: {e}");
         }
     }
 }
@@ -407,6 +450,24 @@ mod tests {
         }
     }
 
+    /// Mock that always fails on get_fsck_status.
+    struct FsckReadFailsBootEnv;
+
+    impl BootEnv for FsckReadFailsBootEnv {
+        fn get_env(&self, _key: BootEnvKey) -> BootEnvResult<Option<String>> {
+            Ok(None)
+        }
+        fn set_env(&mut self, _key: BootEnvKey, _value: Option<&str>) -> BootEnvResult<()> {
+            Ok(())
+        }
+        fn get_fsck_status(&self, _partition: PartitionName) -> BootEnvResult<Option<FsckRecord>> {
+            Err(BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected failure".into(),
+            })
+        }
+    }
+
     // ---- tests ---------------------------------------------------------
 
     #[test]
@@ -471,6 +532,71 @@ mod tests {
         assert!(saved_partitions.contains(&PartitionName::Cert));
         assert!(!saved_partitions.contains(&PartitionName::Boot));
         assert!(!saved_partitions.contains(&PartitionName::Etc));
+    }
+
+    #[test]
+    fn test_drain_moves_record_from_env_into_ods_and_clears_it() {
+        // The round trip that gets a core-partition record into the JSON:
+        // apply_boot_env_decision persists it to the env and drops it from
+        // ods_status; the drain brings it back.
+        let mut bl = crate::bootloader::MockBootEnv::new();
+        bl.save_fsck_status(
+            PartitionName::Boot,
+            FsckExitCode::from(1),
+            "errors corrected on pass 1",
+        )
+        .unwrap();
+        let mut ods = OdsStatus::new();
+
+        drain_fsck_env(&mut ods, Some(&mut bl));
+
+        let record = ods.fsck.get(&PartitionName::Boot).unwrap();
+        assert_eq!(record.code, 1);
+        assert_eq!(record.output, "errors corrected on pass 1");
+        assert_eq!(
+            bl.get_fsck_status(PartitionName::Boot).unwrap(),
+            None,
+            "a reported record must not be drained again on the next boot"
+        );
+    }
+
+    #[test]
+    fn test_drain_keeps_this_boot_results_and_adds_stale_ones() {
+        let mut bl = crate::bootloader::MockBootEnv::new();
+        bl.save_fsck_status(
+            PartitionName::Boot,
+            FsckExitCode::from(1),
+            "stale from a reboot",
+        )
+        .unwrap();
+        let mut ods = make_ods_with(PartitionName::Data, 4, "uncorrected errors");
+
+        drain_fsck_env(&mut ods, Some(&mut bl));
+
+        assert_eq!(ods.fsck.len(), 2);
+        assert_eq!(ods.fsck.get(&PartitionName::Data).unwrap().code, 4);
+        assert_eq!(ods.fsck.get(&PartitionName::Boot).unwrap().code, 1);
+    }
+
+    #[test]
+    fn test_drain_without_bootloader_is_a_no_op() {
+        // Degraded boot: this boot's records stay in ods_status for the JSON.
+        let mut ods = make_ods_with(PartitionName::Data, 1, "errors corrected");
+
+        drain_fsck_env(&mut ods, None);
+
+        assert_eq!(ods.fsck.len(), 1);
+    }
+
+    #[test]
+    fn test_drain_read_failure_does_not_abort() {
+        let mut ods = OdsStatus::new();
+        let mut bl = FsckReadFailsBootEnv;
+
+        // Must not panic.
+        drain_fsck_env(&mut ods, Some(&mut bl));
+
+        assert!(ods.fsck.is_empty());
     }
 
     #[test]

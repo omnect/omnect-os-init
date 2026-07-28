@@ -15,7 +15,8 @@ pub mod resize_data;
 #[cfg(feature = "factory-reset")]
 pub(crate) use self::boot_sequence::{PartitionMountSpec, mount_tracked_partition};
 pub use self::boot_sequence::{
-    fsck_and_record, mount_core_partitions, mount_remaining_partitions, persist_fsck_results,
+    drain_fsck_env, fsck_and_record, mount_core_partitions, mount_remaining_partitions,
+    persist_fsck_results,
 };
 pub use self::fsck::{FsckExitCode, FsckResult, check_filesystem, check_filesystem_lenient};
 #[cfg(feature = "factory-reset")]

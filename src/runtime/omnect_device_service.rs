@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::bootloader::{BootEnv, BootEnvKey};
 use crate::error::{InitramfsError, Result};
+use crate::filesystem::FsckExitCode;
 use crate::partition::PartitionName;
 
 /// Directory for ODS runtime files.
@@ -215,7 +216,12 @@ impl OdsStatus {
         Self::default()
     }
 
+    /// Record a fsck result. Clean results carry no diagnostic value and are
+    /// left out, so the JSON names only the partitions that needed attention.
     pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
+        if FsckExitCode::from(code).is_clean() {
+            return;
+        }
         self.fsck.insert(partition, FsckStatus { code, output });
     }
 
@@ -569,19 +575,29 @@ mod tests {
         status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
         status.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
 
-        assert_eq!(status.fsck.len(), 2);
-        assert_eq!(status.fsck.get(&PartitionName::Boot).unwrap().code, 0);
+        assert_eq!(status.fsck.len(), 1, "clean results must not be recorded");
+        assert!(!status.fsck.contains_key(&PartitionName::Boot));
         assert_eq!(status.fsck.get(&PartitionName::Data).unwrap().code, 1);
     }
 
     #[test]
     fn test_ods_status_serialization() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 1, "errors corrected".to_string());
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"boot\""));
-        assert!(json.contains("\"code\":0"));
+        assert!(json.contains("\"code\":1"));
+        assert!(json.contains("\"errors corrected\""));
+    }
+
+    #[test]
+    fn test_ods_status_serialization_omits_clean_fsck() {
+        let mut status = OdsStatus::new();
+        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(!json.contains("fsck"), "got: {json}");
     }
 
     #[test]
@@ -843,7 +859,7 @@ mod tests {
         let ods_dir = TempDir::new().unwrap();
 
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, 1, "errors corrected".to_string());
 
         let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
