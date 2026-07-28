@@ -139,6 +139,10 @@ impl BootEnv for GrubBootEnv {
                 self.run_grub_editenv(&["unset", key_str.as_ref()])?;
             }
         }
+        // grub-editenv leaves the write in the page cache. Every fatal path from
+        // here ends in reboot(2) or halt, neither of which syncs, so an unsynced
+        // grubenv write is lost exactly when it matters most.
+        nix::unistd::sync();
         Ok(())
     }
 
