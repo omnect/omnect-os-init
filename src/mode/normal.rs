@@ -70,7 +70,7 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
 
     create_ods_runtime_files(
         &ods_status,
-        boot_env.available(),
+        boot_env.available_mut(),
         rootfs,
         Path::new(ODS_RUNTIME_DIR),
     )?;

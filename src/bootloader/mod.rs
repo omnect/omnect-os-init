@@ -58,6 +58,10 @@ pub struct FsckRecord {
 pub enum BootEnvKey {
     /// `omnect_validate_update` — OTA update validation state.
     ValidateUpdate,
+    /// `omnect_validate_update_failed` — set by the bootloader when it rolled
+    /// back to the previous slot because update validation did not complete.
+    /// The bootloader clears `omnect_validate_update` when it sets this key.
+    ValidateUpdateFailed,
     /// `omnect_bootloader_updated` — whether the bootloader itself was updated.
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
@@ -88,6 +92,7 @@ impl BootEnvKey {
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
+            Self::ValidateUpdateFailed => Cow::Borrowed("omnect_validate_update_failed"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),

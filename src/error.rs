@@ -47,6 +47,9 @@ pub enum InitramfsError {
     #[error("extra bootargs updated; reboot required to apply")]
     ExtraBootArgsUpdated,
 
+    #[error("omnect_validate_update and omnect_validate_update_failed are both set")]
+    ConflictingUpdateFlags,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -90,6 +93,7 @@ impl InitramfsError {
                 | FactoryResetError::Io(_),
             ) => RecoveryClass::ContinueDegraded,
             Self::ExtraBootArgsUpdated => RecoveryClass::RebootToApply,
+            Self::ConflictingUpdateFlags => RecoveryClass::Fatal,
             Self::Io(_) => RecoveryClass::Fatal,
         }
     }
@@ -294,6 +298,12 @@ mod recovery_class_tests {
     fn extra_bootargs_updated_reboots_to_apply() {
         let err = InitramfsError::ExtraBootArgsUpdated;
         assert_eq!(err.recovery_class(), RecoveryClass::RebootToApply);
+    }
+
+    #[test]
+    fn conflicting_update_flags_is_fatal() {
+        let err = InitramfsError::ConflictingUpdateFlags;
+        assert_eq!(err.recovery_class(), RecoveryClass::Fatal);
     }
 
     #[test]

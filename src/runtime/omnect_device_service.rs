@@ -56,11 +56,9 @@ impl FilePermission {
     }
 }
 
-/// BootEnv env value meaning the flag is set / requested
-const BOOTLOADER_FLAG_SET: &str = "1";
-
-/// BootEnv env value meaning update validation previously failed
-const VALIDATE_UPDATE_FAILED_VALUE: &str = "failed";
+/// Content of the trigger files. Consumers only test for existence, so the
+/// value carries no meaning.
+const TRIGGER_FILE_CONTENT: &str = "1";
 
 /// Outcome codes for a factory reset operation.
 ///
@@ -88,37 +86,6 @@ impl fmt::Display for FactoryResetStatusCode {
             Self::Error => write!(f, "error"),
             Self::ConfigError => write!(f, "config_error"),
             Self::Warning => write!(f, "warning"),
-        }
-    }
-}
-
-/// Parsed value of the `omnect_validate_update` bootloader env variable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ValidateUpdateState {
-    /// Value `"1"` — update validation was requested before this boot.
-    Requested,
-    /// Value `"failed"` — the previous update validation failed.
-    Failed,
-    /// Any other value — no action required.
-    Other,
-}
-
-impl From<&str> for ValidateUpdateState {
-    fn from(s: &str) -> Self {
-        match s {
-            BOOTLOADER_FLAG_SET => Self::Requested,
-            VALIDATE_UPDATE_FAILED_VALUE => Self::Failed,
-            _ => Self::Other,
-        }
-    }
-}
-
-impl fmt::Display for ValidateUpdateState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Requested => write!(f, "requested"),
-            Self::Failed => write!(f, "failed"),
-            Self::Other => write!(f, "other"),
         }
     }
 }
@@ -286,7 +253,7 @@ impl OdsStatus {
 /// - bootloader_updated: 600
 pub fn create_ods_runtime_files(
     status: &OdsStatus,
-    bootloader: Option<&dyn BootEnv>,
+    bootloader: Option<&mut dyn BootEnv>,
     rootfs_dir: &Path,
     ods_dir: &Path,
 ) -> Result<()> {
@@ -345,79 +312,102 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
     Ok(())
 }
 
-/// Handle update validation workflow; applies ownership and permissions to any
-/// trigger files it creates.
-fn handle_update_validation(
+/// Read a boot-env flag. Any non-empty value counts as set — the writers use
+/// `"1"`, but the flags carry their meaning in presence, not in value.
+fn read_flag(bootloader: &dyn BootEnv, key: BootEnvKey) -> Result<bool> {
+    let value = bootloader.get_env(key).map_err(|e| {
+        InitramfsError::Io(std::io::Error::other(format!(
+            "failed to read {} from bootloader: {e}",
+            key.as_str()
+        )))
+    })?;
+    Ok(value.is_some_and(|v| !v.is_empty()))
+}
+
+/// Clear a boot-env flag whose trigger file was just created.
+///
+/// Best-effort: on failure the trigger file reappears on the next boot, which
+/// is not worth aborting a boot that is otherwise complete.
+fn clear_flag(bootloader: &mut dyn BootEnv, key: BootEnvKey) {
+    if let Err(e) = bootloader.set_env(key, None) {
+        log::warn!("failed to clear {}: {e}", key.as_str());
+    }
+}
+
+/// Create a trigger file with ODS ownership and the given mode.
+fn write_trigger_file(
     ods_dir: &Path,
-    bootloader: &dyn BootEnv,
+    name: &str,
+    mode: FilePermission,
     uid: Uid,
     gid: Gid,
 ) -> Result<()> {
-    let validate_update = bootloader
-        .get_env(BootEnvKey::ValidateUpdate)
-        .map_err(|e| {
-            InitramfsError::Io(std::io::Error::other(format!(
-                "failed to read omnect_validate_update from bootloader: {e}"
-            )))
-        })?;
+    let path = ods_dir.join(name);
+    fs::write(&path, TRIGGER_FILE_CONTENT).map_err(|e| {
+        InitramfsError::Io(std::io::Error::other(format!(
+            "Failed to write {}: {}",
+            path.display(),
+            e
+        )))
+    })?;
+    set_ownership(&path, uid, gid)?;
+    set_mode(&path, mode)
+}
 
-    if let Some(value) = validate_update {
-        let state = ValidateUpdateState::from(value.as_str());
-        log::debug!("omnect_validate_update: {state}");
-        match state {
-            ValidateUpdateState::Requested => {
-                let trigger_path = ods_dir.join(UPDATE_VALIDATE_FILE);
-                fs::write(&trigger_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                    InitramfsError::Io(std::io::Error::other(format!(
-                        "Failed to write {}: {}",
-                        trigger_path.display(),
-                        e
-                    )))
-                })?;
-                set_ownership(&trigger_path, uid, gid)?;
-                set_mode(&trigger_path, FilePermission::FileReadable)?;
-                log::info!("Update validation requested - created trigger file");
-            }
-            ValidateUpdateState::Failed => {
-                let failed_path = ods_dir.join(UPDATE_VALIDATE_FAILED_FILE);
-                fs::write(&failed_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-                    InitramfsError::Io(std::io::Error::other(format!(
-                        "Failed to write {}: {}",
-                        failed_path.display(),
-                        e
-                    )))
-                })?;
-                set_ownership(&failed_path, uid, gid)?;
-                set_mode(&failed_path, FilePermission::FileReadable)?;
-                log::warn!("Update validation failed marker created");
-            }
-            ValidateUpdateState::Other => {
-                log::warn!("omnect_validate_update: unexpected value {value:?}");
-            }
-        }
+/// Handle update validation workflow; applies ownership and permissions to any
+/// trigger files it creates.
+///
+/// `omnect_validate_update_failed` and `omnect_bootloader_updated` are cleared
+/// once their trigger file exists. No other component resets them, so without
+/// this the file would reappear on every later boot.
+fn handle_update_validation(
+    ods_dir: &Path,
+    bootloader: &mut dyn BootEnv,
+    uid: Uid,
+    gid: Gid,
+) -> Result<()> {
+    let validate_update = read_flag(bootloader, BootEnvKey::ValidateUpdate)?;
+    let validate_update_failed = read_flag(bootloader, BootEnvKey::ValidateUpdateFailed)?;
+
+    // The bootloader clears omnect_validate_update when it sets the failed flag,
+    // so both at once means the env is inconsistent. Either trigger file would
+    // send ODS down the wrong update path, so refuse to guess.
+    if validate_update && validate_update_failed {
+        return Err(InitramfsError::ConflictingUpdateFlags);
     }
 
-    let bootloader_updated = bootloader
-        .get_env(BootEnvKey::BootloaderUpdated)
-        .map_err(|e| {
-            InitramfsError::Io(std::io::Error::other(format!(
-                "failed to read omnect_bootloader_updated from bootloader: {e}"
-            )))
-        })?;
+    if validate_update {
+        write_trigger_file(
+            ods_dir,
+            UPDATE_VALIDATE_FILE,
+            FilePermission::FileReadable,
+            uid,
+            gid,
+        )?;
+        log::info!("Update validation requested - created trigger file");
+    }
 
-    if let Some(value) = bootloader_updated
-        && value == BOOTLOADER_FLAG_SET
-    {
-        let marker_path = ods_dir.join(BOOTLOADER_UPDATED_FILE);
-        fs::write(&marker_path, BOOTLOADER_FLAG_SET).map_err(|e| {
-            InitramfsError::Io(std::io::Error::other(format!(
-                "Failed to write {}: {}",
-                marker_path.display(),
-                e
-            )))
-        })?;
-        set_ownership(&marker_path, uid, gid)?;
-        set_mode(&marker_path, FilePermission::FileRestricted)?;
+    if validate_update_failed {
+        write_trigger_file(
+            ods_dir,
+            UPDATE_VALIDATE_FAILED_FILE,
+            FilePermission::FileReadable,
+            uid,
+            gid,
+        )?;
+        clear_flag(bootloader, BootEnvKey::ValidateUpdateFailed);
+        log::warn!("Update validation failed marker created");
+    }
+
+    if read_flag(bootloader, BootEnvKey::BootloaderUpdated)? {
+        write_trigger_file(
+            ods_dir,
+            BOOTLOADER_UPDATED_FILE,
+            FilePermission::FileRestricted,
+            uid,
+            gid,
+        )?;
+        clear_flag(bootloader, BootEnvKey::BootloaderUpdated);
         log::info!("BootEnv update marker created");
     }
 
@@ -680,41 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_update_state_from_str() {
-        assert_eq!(
-            ValidateUpdateState::from("1"),
-            ValidateUpdateState::Requested
-        );
-        assert_eq!(
-            ValidateUpdateState::from("failed"),
-            ValidateUpdateState::Failed
-        );
-        assert_eq!(
-            ValidateUpdateState::from("true"),
-            ValidateUpdateState::Other
-        );
-        assert_eq!(ValidateUpdateState::from("0"), ValidateUpdateState::Other);
-        assert_eq!(ValidateUpdateState::from(""), ValidateUpdateState::Other);
-        assert_eq!(
-            ValidateUpdateState::from("unexpected"),
-            ValidateUpdateState::Other
-        );
-    }
-
-    #[test]
-    fn test_validate_update_state_display() {
-        assert_eq!(ValidateUpdateState::Requested.to_string(), "requested");
-        assert_eq!(ValidateUpdateState::Failed.to_string(), "failed");
-        assert_eq!(ValidateUpdateState::Other.to_string(), "other");
-    }
-
-    #[test]
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
-        let bl =
+        let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
 
         assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
@@ -722,69 +683,122 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_update_validation_value_true_not_accepted() {
-        // Only "1" is a valid truthy value; "true" must not create the trigger file.
+    fn test_handle_update_validation_keeps_validate_update_set() {
+        // ODS unsets omnect_validate_update itself once validation completes;
+        // clearing it here would lose the in-flight update on the next boot.
         let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootEnvKey::ValidateUpdate, "true");
+        let mut bl =
+            crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
 
-        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert_eq!(
+            bl.get_env(BootEnvKey::ValidateUpdate).unwrap().as_deref(),
+            Some("1")
+        );
     }
 
     #[test]
-    fn test_handle_update_validation_failed() {
-        let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootEnvKey::ValidateUpdate, "failed");
+    fn test_handle_update_validation_any_non_empty_value_triggers() {
+        // Flags carry meaning in presence, not value.
+        for value in ["1", "0", "true", "unexpected"] {
+            let temp = TempDir::new().unwrap();
+            let mut bl = crate::bootloader::create_mock_bootloader()
+                .with_env(BootEnvKey::ValidateUpdate, value);
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+
+            assert!(
+                temp.path().join(UPDATE_VALIDATE_FILE).exists(),
+                "value {value:?} must create the trigger file"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_update_validation_empty_value_creates_nothing() {
+        let temp = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::ValidateUpdate, "")
+            .with_env(BootEnvKey::ValidateUpdateFailed, "")
+            .with_env(BootEnvKey::BootloaderUpdated, "");
+
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+
+        assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
+        assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+        assert!(!temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
+    }
+
+    #[test]
+    fn test_handle_update_validation_failed_clears_env() {
+        let temp = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::ValidateUpdateFailed, "1");
+
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
 
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
+        assert_eq!(
+            bl.get_env(BootEnvKey::ValidateUpdateFailed).unwrap(),
+            None,
+            "marker would reappear on every later boot if the flag stays set"
+        );
     }
 
     #[test]
-    fn test_handle_update_validation_unexpected_value_creates_nothing() {
+    fn test_handle_update_validation_both_flags_set_is_fatal() {
         let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootEnvKey::ValidateUpdate, "unexpected");
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::ValidateUpdate, "1")
+            .with_env(BootEnvKey::ValidateUpdateFailed, "1");
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+        let result = handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid());
 
+        assert!(matches!(
+            result,
+            Err(InitramfsError::ConflictingUpdateFlags)
+        ));
+        // Neither trigger file may exist — ODS must not act on a guess.
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
     }
 
     #[test]
-    fn test_handle_update_validation_bootloader_updated() {
+    fn test_handle_update_validation_bootloader_updated_clears_env() {
         let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
+        let mut bl = crate::bootloader::create_mock_bootloader()
             .with_env(BootEnvKey::BootloaderUpdated, "1");
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+
+        assert!(temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
+        assert_eq!(
+            bl.get_env(BootEnvKey::BootloaderUpdated).unwrap(),
+            None,
+            "marker would reappear on every later boot if the flag stays set"
+        );
+    }
+
+    #[test]
+    fn test_handle_update_validation_clear_failure_does_not_abort() {
+        let temp = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::BootloaderUpdated, "1")
+            .with_set_env_error();
+
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
 
         assert!(temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
     }
 
     #[test]
-    fn test_handle_update_validation_bootloader_updated_false_creates_nothing() {
-        let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader()
-            .with_env(BootEnvKey::BootloaderUpdated, "0");
-
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
-
-        assert!(!temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
-    }
-
-    #[test]
     fn test_handle_update_validation_no_env_creates_nothing() {
         let temp = TempDir::new().unwrap();
-        let bl = crate::bootloader::create_mock_bootloader();
+        let mut bl = crate::bootloader::create_mock_bootloader();
 
-        handle_update_validation(temp.path(), &bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
 
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
@@ -833,10 +847,10 @@ mod tests {
         let mut status = OdsStatus::new();
         status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
 
-        let bl =
+        let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
-        create_ods_runtime_files(&status, Some(&bl), rootfs.path(), ods_dir.path()).unwrap();
+        create_ods_runtime_files(&status, Some(&mut bl), rootfs.path(), ods_dir.path()).unwrap();
 
         // Status JSON written and non-empty
         let status_file = ods_dir.path().join(ODS_STATUS_FILE);
