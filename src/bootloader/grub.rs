@@ -29,12 +29,22 @@ fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
     Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"))
 }
 
+/// Flush pending writes to disk.
+///
+/// Some callers persist state and then reboot or halt; neither reboot(2) nor the
+/// halt loop syncs, so an unflushed write would be lost exactly there.
+fn sync_disk() {
+    nix::unistd::sync();
+}
+
 fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootloader::Result<()> {
     let file_path = fsck_file_path(partition);
     fs::write(&file_path, encoded).map_err(|e| BootEnvError::CommandFailed {
         command: format!("write {}", file_path.display()),
         reason: e.to_string(),
-    })
+    })?;
+    sync_disk();
+    Ok(())
 }
 
 fn get_fsck_from_file(partition: PartitionName) -> crate::bootloader::Result<Option<FsckRecord>> {
@@ -64,6 +74,7 @@ fn clear_fsck_file(partition: PartitionName) -> crate::bootloader::Result<()> {
             command: format!("remove {}", file_path.display()),
             reason: e.to_string(),
         })?;
+        sync_disk();
     }
     Ok(())
 }
@@ -139,10 +150,8 @@ impl BootEnv for GrubBootEnv {
                 self.run_grub_editenv(&["unset", key_str.as_ref()])?;
             }
         }
-        // grub-editenv leaves the write in the page cache. Every fatal path from
-        // here ends in reboot(2) or halt, neither of which syncs, so an unsynced
-        // grubenv write is lost exactly when it matters most.
-        nix::unistd::sync();
+        // grub-editenv leaves the write in the page cache.
+        sync_disk();
         Ok(())
     }
 

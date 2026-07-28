@@ -315,12 +315,10 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
 /// Read a boot-env flag. Any non-empty value counts as set — the writers use
 /// `"1"`, but the flags carry their meaning in presence, not in value.
 fn read_flag(bootloader: &dyn BootEnv, key: BootEnvKey) -> Result<bool> {
-    let value = bootloader.get_env(key).map_err(|e| {
-        InitramfsError::Io(std::io::Error::other(format!(
-            "failed to read {} from bootloader: {e}",
-            key.as_str()
-        )))
-    })?;
+    // Logged here because BootEnvError carries the failing command, not the key.
+    let value = bootloader
+        .get_env(key)
+        .inspect_err(|e| log::error!("failed to read {}: {e}", key.as_str()))?;
     Ok(value.is_some_and(|v| !v.is_empty()))
 }
 
