@@ -77,14 +77,14 @@ fn update_pending_from_env(env: &BootEnvState) -> bool {
 
 /// Compute the first-boot flag from the opened boot env.
 ///
-/// Returns `true` if `BootEnvKey::FirstBootDone` is absent from the env.
-/// Errors from `get_env` and the degraded-env state both default to `false`
-/// to avoid triggering first-boot side effects under uncertainty.
+/// `true` unless the marker holds exactly `FIRST_BOOT_DONE`. Repeating the work it
+/// gates is a no-op, skipping it can leave the device unresized, so a missing,
+/// empty or unexpected value counts as a fresh first boot. A read error or a
+/// degraded env yield `false`: under uncertainty, no first-boot side effects.
 fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {
     match env.available() {
         Some(bl) => match bl.get_env(bootloader::BootEnvKey::FirstBootDone) {
-            Ok(None) => true,
-            Ok(Some(_)) => false,
+            Ok(v) => v.as_deref() != Some(bootloader::FIRST_BOOT_DONE),
             Err(e) => {
                 warn!("first-boot: get_env failed: {e}; treating as not-first-boot");
                 false
@@ -456,6 +456,22 @@ mod first_boot_detection_tests {
         let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "1");
         let env: BootEnvState = BootEnvState::Available(Box::new(mock));
         assert!(!compute_first_boot(&env));
+    }
+
+    #[test]
+    fn empty_marker_yields_first_boot_true() {
+        // GRUB keeps an entry whose value was assigned empty; that is not the
+        // marker we wrote, so the first-boot work runs again.
+        let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "");
+        let env: BootEnvState = BootEnvState::Available(Box::new(mock));
+        assert!(compute_first_boot(&env));
+    }
+
+    #[test]
+    fn unexpected_marker_value_yields_first_boot_true() {
+        let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "yes");
+        let env: BootEnvState = BootEnvState::Available(Box::new(mock));
+        assert!(compute_first_boot(&env));
     }
 
     #[test]

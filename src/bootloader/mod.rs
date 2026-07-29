@@ -22,6 +22,9 @@ pub use self::uboot::UBootBootEnv;
 
 pub type Result<T> = std::result::Result<T, BootEnvError>;
 
+/// Value of `omnect_first_boot_done`, shared by its writer and its reader.
+pub const FIRST_BOOT_DONE: &str = "1";
+
 /// Upper bound (bytes) on the failure reason stored via `save_factory_reset_failure`.
 /// The bootloader env block is small and shared by all variables, so keep it short.
 #[cfg(feature = "factory-reset")]
@@ -130,9 +133,10 @@ pub trait BootEnv: Send + Sync {
 
     /// Whether a flag-style variable is set. Any non-empty value counts.
     ///
-    /// Presence alone is not enough: a GRUB script that assigns `key=` leaves an
-    /// entry with an empty value behind, which means "not set". Every reader of
-    /// a flag must use this so the rule has one definition.
+    /// A GRUB script that assigns `key=` leaves an entry with an empty value
+    /// behind, so presence alone is not enough. Applies to the flags the
+    /// bootloader writes; `omnect_first_boot_done` is ours and is matched against
+    /// [`FIRST_BOOT_DONE`].
     fn is_flag_set(&self, key: BootEnvKey) -> Result<bool> {
         Ok(self.get_env(key)?.is_some_and(|v| !v.is_empty()))
     }

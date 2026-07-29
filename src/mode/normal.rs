@@ -32,7 +32,10 @@ fn extra_bootargs_applied_ok(ods_status: &crate::runtime::OdsStatus) -> bool {
 fn write_first_boot_marker(first_boot: bool, bootloader: &mut crate::bootloader::BootEnvState) {
     if first_boot
         && let Some(bl) = bootloader.available_mut()
-        && let Err(e) = bl.set_env(crate::bootloader::BootEnvKey::FirstBootDone, Some("1"))
+        && let Err(e) = bl.set_env(
+            crate::bootloader::BootEnvKey::FirstBootDone,
+            Some(crate::bootloader::FIRST_BOOT_DONE),
+        )
     {
         log::warn!("first-boot marker write failed: {e}; will retry next boot");
     }
