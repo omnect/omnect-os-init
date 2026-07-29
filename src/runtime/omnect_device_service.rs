@@ -216,8 +216,8 @@ impl OdsStatus {
         Self::default()
     }
 
-    /// Record a fsck result. Clean results carry no diagnostic value and are
-    /// left out, so the JSON names only the partitions that needed attention.
+    /// Clean results are left out, so the JSON names only the partitions that
+    /// needed attention.
     pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
         if FsckExitCode::from(code).is_clean() {
             return;
@@ -318,8 +318,8 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
     Ok(())
 }
 
-/// Read a boot-env flag. Any non-empty value counts as set — the writers use
-/// `"1"`, but the flags carry their meaning in presence, not in value.
+/// Any non-empty value counts as set: the writers use `"1"`, but these flags
+/// carry their meaning in presence, not in value.
 fn read_flag(bootloader: &dyn BootEnv, key: BootEnvKey) -> Result<bool> {
     // Logged here because BootEnvError carries the failing command, not the key.
     let value = bootloader
@@ -338,7 +338,6 @@ fn clear_flag(bootloader: &mut dyn BootEnv, key: BootEnvKey) {
     }
 }
 
-/// Create a trigger file with ODS ownership and the given mode.
 fn write_trigger_file(
     ods_dir: &Path,
     name: &str,
@@ -509,6 +508,7 @@ fn set_mode(path: &Path, mode: FilePermission) -> Result<()> {
 mod tests {
     use super::*;
     use crate::partition::PartitionName;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     #[test]
@@ -808,6 +808,43 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_update_validation_read_error_is_typed_as_bootloader() {
+        let temp = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader().with_get_env_error();
+
+        let result = handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid());
+
+        assert!(
+            matches!(result, Err(InitramfsError::Bootloader(_))),
+            "a boot-env read failure must name the bootloader, not report an IO error"
+        );
+    }
+
+    #[test]
+    fn test_trigger_file_modes_match_the_documented_contract() {
+        let temp = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::ValidateUpdate, "1")
+            .with_env(BootEnvKey::BootloaderUpdated, "1");
+
+        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+
+        let mode = |name: &str| {
+            fs::metadata(temp.path().join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode(UPDATE_VALIDATE_FILE), 0o644, "ODS reads this file");
+        assert_eq!(
+            mode(BOOTLOADER_UPDATED_FILE),
+            0o600,
+            "owner-only, per the contract on create_ods_runtime_files"
+        );
+    }
+
+    #[test]
     fn test_handle_update_validation_no_env_creates_nothing() {
         let temp = TempDir::new().unwrap();
         let mut bl = crate::bootloader::create_mock_bootloader();
@@ -877,6 +914,11 @@ mod tests {
 
         // No bootloader-updated marker
         assert!(!ods_dir.path().join(BOOTLOADER_UPDATED_FILE).exists());
+
+        // Remaining modes from the contract on create_ods_runtime_files
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(ods_dir.path()), 0o775);
+        assert_eq!(mode(&status_file), 0o600);
     }
 
     #[test]

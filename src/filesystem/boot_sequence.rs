@@ -340,10 +340,9 @@ pub fn persist_fsck_results(
 
 /// Move fsck records from the boot env into `ods_status` and clear them there.
 ///
-/// The boot env is the carrier across a reboot: a boot that aborts between fsck
-/// and the ODS status write leaves its record there, and this is what brings it
-/// into the JSON on the boot that follows. Clearing keeps the fixed-size env
-/// block from filling up with records that were already reported.
+/// The boot env carries a record across a reboot: a boot that aborts between
+/// fsck and the ODS status write leaves it there, and this brings it into the
+/// JSON on the boot that follows.
 ///
 /// Call after `persist_fsck_results` and before the ODS status JSON is written.
 /// A no-op in degraded boot, where `ods_status` still holds this boot's records.

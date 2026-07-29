@@ -68,8 +68,6 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     setup_data_overlay(rootfs)?;
     create_fs_links(rootfs)?;
 
-    // Brings back this boot's core-partition records (moved to the env by
-    // apply_boot_env_decision) plus anything a previous aborted boot left there.
     drain_fsck_env(&mut ods_status, boot_env.available_mut());
 
     create_ods_runtime_files(
