@@ -102,9 +102,9 @@ fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {
 /// across the reboot. This is a no-op for degraded boot (`env.available_mut()`
 /// returns `None`) and when `ods_status.fsck` is empty.
 ///
-/// After a successful persist the fsck records are cleared from `ods_status` to
-/// prevent double-serialization into the ODS runtime JSON. In degraded mode the
-/// records are intentionally kept so ODS consumers can still read them.
+/// The records stay in `ods_status`. `drain_fsck_env` reads the env back into the
+/// same map keys later in the boot, so nothing is duplicated, and a persist that
+/// failed — the write errors are only logged — still reaches the ODS JSON.
 fn apply_boot_env_decision(
     decision: BootEnvDecision,
     core_result: Result<()>,
@@ -116,12 +116,6 @@ fn apply_boot_env_decision(
             // Must precede core_result? — otherwise a FsckRequiresReboot error
             // propagates before the diagnostic is written to the boot env.
             persist_fsck_results(ods_status, env.available_mut(), rootfs);
-            if env.available_mut().is_some() {
-                // Records moved to boot env; clear to avoid double-serialization
-                // into the ODS runtime JSON. Not done in degraded mode — fsck results
-                // remain in the JSON so ODS and operators can still read them.
-                ods_status.fsck.clear();
-            }
             core_result?;
             if let BootEnvState::Degraded(ref e) = env {
                 warn!("Boot env unavailable: {e}; booting in degraded mode");
@@ -204,10 +198,40 @@ pub fn run_init() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::MockBootEnv;
+    use crate::bootloader::{BootEnvKey, MockBootEnv};
     use crate::error::{BootEnvError, FilesystemError, InitramfsError};
     use crate::filesystem::FsckExitCode;
+    use crate::partition::PartitionName;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// Reports which partitions reached `save_fsck_status` through a handle the
+    /// test keeps, since the env itself is dropped on the error path.
+    struct RecordingBootEnv {
+        saved: Arc<Mutex<Vec<PartitionName>>>,
+    }
+
+    impl BootEnv for RecordingBootEnv {
+        fn get_env(&self, _key: BootEnvKey) -> crate::bootloader::Result<Option<String>> {
+            Ok(None)
+        }
+        fn set_env(
+            &mut self,
+            _key: BootEnvKey,
+            _value: Option<&str>,
+        ) -> crate::bootloader::Result<()> {
+            Ok(())
+        }
+        fn save_fsck_status(
+            &mut self,
+            partition: PartitionName,
+            _code: FsckExitCode,
+            _output: &str,
+        ) -> crate::bootloader::Result<()> {
+            self.saved.lock().unwrap().push(partition);
+            Ok(())
+        }
+    }
 
     fn make_available() -> BootEnvDecision {
         BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())))
@@ -312,6 +336,10 @@ mod tests {
         // so env is Available. The fsck diagnostic in ods_status.fsck must be
         // persisted to the bootloader env *before* FsckRequiresReboot propagates,
         // or it is lost across the reboot (mount_core_partitions persist-before-propagate contract).
+        //
+        // The env is moved into the decision and dropped when the error returns, so
+        // the mock reports through a handle the test keeps.
+        let saved = Arc::new(Mutex::new(Vec::new()));
         let mut ods = OdsStatus::new();
         ods.add_fsck_result(
             crate::partition::PartitionName::Boot,
@@ -320,7 +348,9 @@ mod tests {
         );
 
         let decision =
-            BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())));
+            BootEnvDecision::Continue(BootEnvState::Available(Box::new(RecordingBootEnv {
+                saved: Arc::clone(&saved),
+            })));
         let result =
             apply_boot_env_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
 
@@ -333,13 +363,30 @@ mod tests {
             ),
             "FsckRequiresReboot must still propagate"
         );
-        // fsck.clear() runs after persist; ods.fsck must be empty — records were
-        // moved to the bootloader env before the error propagated.
-        assert!(
-            ods.fsck.is_empty(),
+        assert_eq!(
+            *saved.lock().unwrap(),
+            vec![crate::partition::PartitionName::Boot],
             "persist_fsck_results must run before propagating FsckRequiresReboot \
              (mount_core_partitions persist-before-propagate contract)"
         );
+    }
+
+    #[test]
+    fn persisted_records_stay_in_ods_status() {
+        // drain_fsck_env reads the env back into the same map keys, so keeping the
+        // records costs nothing — and a persist whose write failed (errors are only
+        // logged) still reaches the ODS JSON.
+        let mut ods = OdsStatus::new();
+        ods.add_fsck_result(
+            crate::partition::PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected on pass 1".into(),
+        );
+
+        let result = apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
+
+        assert!(result.is_ok());
+        assert_eq!(ods.fsck.len(), 1, "records must survive the persist step");
     }
 
     #[test]

@@ -166,6 +166,16 @@ record from the env into `OdsStatus` and clears it. It is a no-op in degraded
 boot, where `OdsStatus` still holds this boot's records directly — which
 preserves the degraded-mode rule in `2026-05-27-degraded-boot-design.md` §3.3.
 
+The records stay in `OdsStatus` after `persist_fsck_results`. Clearing them there
+was safe only while nothing read the env back; the drain reads into the same map
+keys, so keeping them cannot duplicate anything, and a persist whose write failed
+— those errors are only logged — still reaches the JSON. The clear came from
+`2026-05-19-degraded-boot-mode-design.md` §3.4 as a bare line of code with no
+stated reason; the "avoid double-serialization" wording was added later as a
+comment in response to review finding M2 on PR #9, not as a design decision. The
+intent that *is* documented — "fsck results remain in the JSON so ODS and
+operators can still read them" — argues for keeping them.
+
 **Consequence for operators:** `fw_printenv omnect_fsck_data` after boot no
 longer shows the last result — the value is consumed. The record is in
 `/run/omnect-device-service/omnect-os-initramfs.json` and, when the data
@@ -241,25 +251,18 @@ again after an A/B update, and the first-boot work repeats.
 
 ## 8. Known gaps, deliberately left
 
-1. **`apply_boot_env_decision` clears `OdsStatus.fsck` optimistically.** It
-   clears whenever the env is *available*, but `persist_fsck_results` swallows
-   write errors. A failed env write therefore loses the record from the JSON. The
-   clean fix is to drop the clear entirely — `drain_fsck_env` overwrites the same
-   map keys, so double-serialization is impossible. Blocked on the test
-   `persist_runs_before_fsck_reboot_propagates`, which uses `fsck.is_empty()` as
-   its proxy for "persist ran" and needs a different observable first.
-2. **Encoding failure is indistinguishable from "no fsck ran".**
+1. **Encoding failure is indistinguishable from "no fsck ran".**
    `encode_fsck_output` returns an empty string when gzip or base64 fail, and
    u-boot's `get_env` maps an empty value to `Ok(None)`. Combined with gap 1 the
    record is then absent from the JSON. `bootloader::types` documents the
    trade-off; this change widens its effect from env inspection to the JSON.
-3. **Factory-reset path.** Three verified gaps, out of scope here: an invalid
+2. **Factory-reset path.** Three verified gaps, out of scope here: an invalid
    trigger is never cleared and never reported (`BootMode::detect` falls back to
    `Normal`, and only `factory_reset::run` clears the key); `preserve` is
    optional and unknown fields are ignored, so a typo means "preserve nothing"
    and the reset wipes everything with status 0; config-file errors are reported
    as status 1 where legacy used 3.
-4. **Correction to an earlier plan.**
+3. **Correction to an earlier plan.**
    `2026-05-27-boot-failure-recovery-policy.md` states that
    `omnect_validate_update` may hold `"1"` or `"failed"` and that the two need
    not be distinguished. The value `"failed"` does not exist — see §3.1 — and the
