@@ -24,6 +24,10 @@ const BOOT_DIR_PATH: &str = "/rootfs/boot";
 /// Absolute path to the grubenv file
 const GRUBENV_PATH: &str = "/rootfs/boot/EFI/BOOT/grubenv";
 
+/// Replaces the fsck output when the encoded record does not fit the grubenv
+/// block. Kept short on purpose — it shares the block with every other variable.
+const FSCK_OUTPUT_TOO_LARGE: &str = "fsck output too large for the boot env";
+
 /// Constructs the fsck status file path for a non-boot partition on the boot volume.
 fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
     Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"))
@@ -35,6 +39,29 @@ fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
 /// halt loop syncs, so an unflushed write would be lost exactly there.
 fn sync_disk() {
     nix::unistd::sync();
+}
+
+/// Store the boot partition's encoded fsck record, retrying with the exit code
+/// alone when the full record does not fit.
+///
+/// grubenv is a fixed-size block shared by all variables, and a verbose
+/// `fsck.vfat` run can exceed it. Keeping the code without the output leaves the
+/// result visible in the ODS JSON instead of dropping the record entirely.
+fn write_boot_fsck_record<W>(
+    code: FsckExitCode,
+    encoded: &str,
+    mut write: W,
+) -> crate::bootloader::Result<()>
+where
+    W: FnMut(&str) -> crate::bootloader::Result<()>,
+{
+    match write(encoded) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            log::warn!("boot fsck record rejected by grubenv ({e}); storing exit code only");
+            write(&encode_fsck_output(code.bits(), FSCK_OUTPUT_TOO_LARGE))
+        }
+    }
 }
 
 fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootloader::Result<()> {
@@ -174,7 +201,9 @@ impl BootEnv for GrubBootEnv {
                     );
                     return Ok(());
                 }
-                self.set_env(BootEnvKey::FsckStatus(PartitionName::Boot), Some(&encoded))
+                write_boot_fsck_record(code, &encoded, |payload| {
+                    self.set_env(BootEnvKey::FsckStatus(PartitionName::Boot), Some(payload))
+                })
             }
             PartitionName::RootA
             | PartitionName::RootB
@@ -225,5 +254,67 @@ impl BootEnv for GrubBootEnv {
             #[cfg(feature = "dos")]
             PartitionName::Extended => clear_fsck_file(partition),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Records every payload handed to `write_boot_fsck_record`, failing the
+    /// first `fail_first` attempts.
+    fn recording_writer(
+        fail_first: usize,
+        seen: &RefCell<Vec<String>>,
+    ) -> impl FnMut(&str) -> crate::bootloader::Result<()> + '_ {
+        move |payload: &str| {
+            seen.borrow_mut().push(payload.to_string());
+            if seen.borrow().len() <= fail_first {
+                return Err(BootEnvError::CommandFailed {
+                    command: "grub-editenv".into(),
+                    reason: "environment block too small".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn full_record_is_written_once_when_it_fits() {
+        let seen = RefCell::new(Vec::new());
+        let result =
+            write_boot_fsck_record(FsckExitCode::from(1), "encoded", recording_writer(0, &seen));
+
+        assert!(result.is_ok());
+        assert_eq!(seen.into_inner(), vec!["encoded".to_string()]);
+    }
+
+    #[test]
+    fn rejected_record_falls_back_to_the_exit_code_alone() {
+        let seen = RefCell::new(Vec::new());
+        let code = FsckExitCode::from(1);
+        let result = write_boot_fsck_record(code, "too-long", recording_writer(1, &seen));
+
+        assert!(result.is_ok(), "the fallback write must succeed");
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 2, "expected one retry, got {seen:?}");
+        assert_eq!(seen[0], "too-long");
+        assert_eq!(
+            seen[1],
+            encode_fsck_output(code.bits(), FSCK_OUTPUT_TOO_LARGE),
+            "the retry must carry the exit code with the placeholder output"
+        );
+    }
+
+    #[test]
+    fn a_broken_env_still_surfaces_as_an_error() {
+        // Both attempts failing means grubenv itself is unusable, not just full.
+        let seen = RefCell::new(Vec::new());
+        let result =
+            write_boot_fsck_record(FsckExitCode::from(4), "payload", recording_writer(2, &seen));
+
+        assert!(result.is_err());
+        assert_eq!(seen.into_inner().len(), 2, "must not retry more than once");
     }
 }
