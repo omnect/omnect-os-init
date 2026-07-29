@@ -315,7 +315,7 @@ mod tests {
         let mut ods = OdsStatus::new();
         ods.add_fsck_result(
             crate::partition::PartitionName::Boot,
-            1,
+            FsckExitCode::CORRECTED,
             "errors corrected on pass 1".into(),
         );
 

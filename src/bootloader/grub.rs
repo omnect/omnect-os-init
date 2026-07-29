@@ -260,44 +260,42 @@ impl BootEnv for GrubBootEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
 
-    /// Records every payload handed to `write_boot_fsck_record`, failing the
-    /// first `fail_first` attempts.
-    fn recording_writer(
-        fail_first: usize,
-        seen: &RefCell<Vec<String>>,
-    ) -> impl FnMut(&str) -> crate::bootloader::Result<()> + '_ {
-        move |payload: &str| {
-            seen.borrow_mut().push(payload.to_string());
-            if seen.borrow().len() <= fail_first {
-                return Err(BootEnvError::CommandFailed {
-                    command: "grub-editenv".into(),
-                    reason: "environment block too small".into(),
-                });
-            }
-            Ok(())
+    fn block_too_small() -> BootEnvError {
+        BootEnvError::CommandFailed {
+            command: "grub-editenv".into(),
+            reason: "environment block too small".into(),
         }
     }
 
     #[test]
     fn full_record_is_written_once_when_it_fits() {
-        let seen = RefCell::new(Vec::new());
-        let result =
-            write_boot_fsck_record(FsckExitCode::from(1), "encoded", recording_writer(0, &seen));
+        let mut seen: Vec<String> = Vec::new();
+
+        let result = write_boot_fsck_record(FsckExitCode::CORRECTED, "encoded", |payload| {
+            seen.push(payload.to_string());
+            Ok(())
+        });
 
         assert!(result.is_ok());
-        assert_eq!(seen.into_inner(), vec!["encoded".to_string()]);
+        assert_eq!(seen, ["encoded"]);
     }
 
     #[test]
     fn rejected_record_falls_back_to_the_exit_code_alone() {
-        let seen = RefCell::new(Vec::new());
-        let code = FsckExitCode::from(1);
-        let result = write_boot_fsck_record(code, "too-long", recording_writer(1, &seen));
+        let code = FsckExitCode::CORRECTED;
+        let mut seen: Vec<String> = Vec::new();
+
+        let result = write_boot_fsck_record(code, "too-long", |payload| {
+            seen.push(payload.to_string());
+            if seen.len() == 1 {
+                Err(block_too_small())
+            } else {
+                Ok(())
+            }
+        });
 
         assert!(result.is_ok(), "the fallback write must succeed");
-        let seen = seen.into_inner();
         assert_eq!(seen.len(), 2, "expected one retry, got {seen:?}");
         assert_eq!(seen[0], "too-long");
         assert_eq!(
@@ -310,11 +308,15 @@ mod tests {
     #[test]
     fn a_broken_env_still_surfaces_as_an_error() {
         // Both attempts failing means grubenv itself is unusable, not just full.
-        let seen = RefCell::new(Vec::new());
+        let mut seen: Vec<String> = Vec::new();
+
         let result =
-            write_boot_fsck_record(FsckExitCode::from(4), "payload", recording_writer(2, &seen));
+            write_boot_fsck_record(FsckExitCode::ERRORS_UNCORRECTED, "payload", |payload| {
+                seen.push(payload.to_string());
+                Err(block_too_small())
+            });
 
         assert!(result.is_err());
-        assert_eq!(seen.into_inner().len(), 2, "must not retry more than once");
+        assert_eq!(seen.len(), 2, "must not retry more than once");
     }
 }

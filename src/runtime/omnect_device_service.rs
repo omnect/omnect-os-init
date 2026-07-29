@@ -218,11 +218,22 @@ impl OdsStatus {
 
     /// Clean results are left out, so the JSON names only the partitions that
     /// needed attention.
-    pub fn add_fsck_result(&mut self, partition: PartitionName, code: i32, output: String) {
-        if FsckExitCode::from(code).is_clean() {
+    pub fn add_fsck_result(
+        &mut self,
+        partition: PartitionName,
+        code: FsckExitCode,
+        output: String,
+    ) {
+        if code.is_clean() {
             return;
         }
-        self.fsck.insert(partition, FsckStatus { code, output });
+        self.fsck.insert(
+            partition,
+            FsckStatus {
+                code: code.bits(),
+                output,
+            },
+        );
     }
 
     pub fn set_factory_reset(&mut self, status: FactoryResetStatus) {
@@ -571,8 +582,12 @@ mod tests {
     #[test]
     fn test_ods_status_add_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
-        status.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
+        status.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
+        status.add_fsck_result(
+            PartitionName::Data,
+            FsckExitCode::CORRECTED,
+            "errors corrected".to_string(),
+        );
 
         assert_eq!(status.fsck.len(), 1, "clean results must not be recorded");
         assert!(!status.fsck.contains_key(&PartitionName::Boot));
@@ -582,7 +597,11 @@ mod tests {
     #[test]
     fn test_ods_status_serialization() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 1, "errors corrected".to_string());
+        status.add_fsck_result(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected".to_string(),
+        );
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"boot\""));
@@ -593,7 +612,7 @@ mod tests {
     #[test]
     fn test_ods_status_serialization_omits_clean_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
+        status.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(!json.contains("fsck"), "got: {json}");
@@ -895,7 +914,11 @@ mod tests {
         let ods_dir = TempDir::new().unwrap();
 
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, 1, "errors corrected".to_string());
+        status.add_fsck_result(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected".to_string(),
+        );
 
         let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");

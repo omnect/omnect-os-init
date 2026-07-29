@@ -51,7 +51,7 @@ pub fn fsck_and_record(
 ) -> std::result::Result<(), FilesystemError> {
     match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
-            ods_status.add_fsck_result(name, r.exit_code.bits(), r.output);
+            ods_status.add_fsck_result(name, r.exit_code, r.output);
             Ok(())
         }
         Err(FilesystemError::FsckRequiresReboot {
@@ -59,7 +59,7 @@ pub fn fsck_and_record(
             code,
             ref output,
         }) => {
-            ods_status.add_fsck_result(name, code.bits(), output.clone());
+            ods_status.add_fsck_result(name, code, output.clone());
             Err(FilesystemError::FsckRequiresReboot {
                 device,
                 code,
@@ -363,7 +363,7 @@ pub fn drain_fsck_env(ods_status: &mut OdsStatus, bootloader: Option<&mut dyn Bo
             continue;
         };
 
-        ods_status.add_fsck_result(partition, record.exit_code.bits(), record.output);
+        ods_status.add_fsck_result(partition, record.exit_code, record.output);
         if let Err(e) = bl.clear_fsck_status(partition) {
             log::warn!("Failed to clear fsck record for {partition} in boot env: {e}");
         }
@@ -381,7 +381,7 @@ mod tests {
 
     // ---- helpers -------------------------------------------------------
 
-    fn make_ods_with(partition: PartitionName, code: i32, output: &str) -> OdsStatus {
+    fn make_ods_with(partition: PartitionName, code: FsckExitCode, output: &str) -> OdsStatus {
         let mut s = OdsStatus::new();
         s.add_fsck_result(partition, code, output.to_string());
         s
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn test_persist_zero_code_not_saved() {
         // Exit code 0 (clean) must not trigger any boot env write.
-        let ods = make_ods_with(PartitionName::Boot, 0, "clean");
+        let ods = make_ods_with(PartitionName::Boot, FsckExitCode::OK, "clean");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
 
@@ -484,7 +484,11 @@ mod tests {
     #[test]
     fn test_persist_nonzero_calls_save_fsck_status() {
         // Non-zero exit code must call save_fsck_status with correct args.
-        let ods = make_ods_with(PartitionName::Boot, 1, "errors corrected");
+        let ods = make_ods_with(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected",
+        );
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
 
@@ -499,7 +503,7 @@ mod tests {
     #[test]
     fn test_persist_empty_output_still_calls_bootloader_but_no_log_dir() {
         // Empty output: boot env is still called (code != 0), but no log dir is created.
-        let ods = make_ods_with(PartitionName::Data, 4, "");
+        let ods = make_ods_with(PartitionName::Data, FsckExitCode::ERRORS_UNCORRECTED, "");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
 
@@ -514,10 +518,18 @@ mod tests {
     fn test_persist_multiple_partitions_only_nonzero_saved() {
         // Mix of zero and non-zero codes — only non-zero ones reach save_fsck_status.
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result(PartitionName::Boot, 0, "clean".to_string());
-        ods.add_fsck_result(PartitionName::Data, 1, "errors corrected".to_string());
-        ods.add_fsck_result(PartitionName::Etc, 0, "clean".to_string());
-        ods.add_fsck_result(PartitionName::Cert, 4, "uncorrected errors".to_string());
+        ods.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
+        ods.add_fsck_result(
+            PartitionName::Data,
+            FsckExitCode::CORRECTED,
+            "errors corrected".to_string(),
+        );
+        ods.add_fsck_result(PartitionName::Etc, FsckExitCode::OK, "clean".to_string());
+        ods.add_fsck_result(
+            PartitionName::Cert,
+            FsckExitCode::ERRORS_UNCORRECTED,
+            "uncorrected errors".to_string(),
+        );
 
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
@@ -568,7 +580,11 @@ mod tests {
             "stale from a reboot",
         )
         .unwrap();
-        let mut ods = make_ods_with(PartitionName::Data, 4, "uncorrected errors");
+        let mut ods = make_ods_with(
+            PartitionName::Data,
+            FsckExitCode::ERRORS_UNCORRECTED,
+            "uncorrected errors",
+        );
 
         drain_fsck_env(&mut ods, Some(&mut bl));
 
@@ -580,7 +596,11 @@ mod tests {
     #[test]
     fn test_drain_without_bootloader_is_a_no_op() {
         // Degraded boot: this boot's records stay in ods_status for the JSON.
-        let mut ods = make_ods_with(PartitionName::Data, 1, "errors corrected");
+        let mut ods = make_ods_with(
+            PartitionName::Data,
+            FsckExitCode::CORRECTED,
+            "errors corrected",
+        );
 
         drain_fsck_env(&mut ods, None);
 
@@ -601,7 +621,11 @@ mod tests {
     #[test]
     fn test_persist_bootloader_save_failure_does_not_abort() {
         // A failing boot env write must not panic or propagate — it is non-fatal.
-        let ods = make_ods_with(PartitionName::Boot, 2, "reboot required");
+        let ods = make_ods_with(
+            PartitionName::Boot,
+            FsckExitCode::REBOOT_REQUIRED,
+            "reboot required",
+        );
         let temp = TempDir::new().unwrap();
         let mut bl = FailingBootEnv;
 
@@ -612,7 +636,7 @@ mod tests {
     #[test]
     fn test_persist_data_not_mounted_no_log_dir_created() {
         // When data partition is not mounted (normal in tests), no log dir is created.
-        let ods = make_ods_with(PartitionName::Boot, 1, "some output");
+        let ods = make_ods_with(PartitionName::Boot, FsckExitCode::CORRECTED, "some output");
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
 
@@ -631,7 +655,11 @@ mod tests {
         // the type system statically prevents any save_fsck_status call — this
         // test documents the contract and catches any future refactor that
         // re-introduces an implicit fallback or null-object pattern.
-        let ods = make_ods_with(PartitionName::Boot, 1, "errors corrected");
+        let ods = make_ods_with(
+            PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected",
+        );
         let temp = TempDir::new().unwrap();
 
         // Must not panic; no boot env write; no log dir (data not mounted).
