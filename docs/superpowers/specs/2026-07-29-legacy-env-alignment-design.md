@@ -272,14 +272,13 @@ again after an A/B update, and the first-boot work repeats.
    optional and unknown fields are ignored, so a typo means "preserve nothing"
    and the reset wipes everything with status 0; config-file errors are reported
    as status 1 where legacy used 3.
-3. **Correction to an earlier plan.**
-   `2026-05-27-boot-failure-recovery-policy.md` states that
-   `omnect_validate_update` may hold `"1"` or `"failed"` and that the two need
-   not be distinguished. The value `"failed"` does not exist — see §3.1 — and the
-   `is_some()` check it justifies has been replaced, see §3.2. The plan text is
-   left as written; correcting it is a separate call, since it is the record of
-   someone else's design decision. Worth doing, because the next reader would
-   otherwise build on it again, as this port did.
+3. **Correction to an earlier plan.** Done, as a marked note rather than an edit.
+   `2026-05-27-boot-failure-recovery-policy.md` Task 3 states that
+   `omnect_validate_update` may hold `"1"` or `"failed"` and that the two need not
+   be distinguished. The value `"failed"` does not exist — see §3.1 — and the
+   `is_some()` check it justifies has been replaced, see §3.2. The original text
+   stays, with a dated correction beside it: the assumption recorded there is what
+   this port was built on, so removing it would hide why the defect existed.
 
 ---
 
