@@ -251,11 +251,21 @@ again after an A/B update, and the first-boot work repeats.
 
 ## 8. Known gaps, deliberately left
 
-1. **Encoding failure is indistinguishable from "no fsck ran".**
+1. **Encoding failure is indistinguishable from "no fsck ran".** Accepted.
    `encode_fsck_output` returns an empty string when gzip or base64 fail, and
-   u-boot's `get_env` maps an empty value to `Ok(None)`. Combined with gap 1 the
-   record is then absent from the JSON. `bootloader::types` documents the
-   trade-off; this change widens its effect from env inspection to the JSON.
+   `get_fsck_status` then reports `Ok(None)` — the same as an absent record. Since
+   the records now stay in `OdsStatus` (§4), the only loss is the record's trip
+   across a reboot, so the failure costs a diagnostic on the boot that follows and
+   nothing on this one. Making it explicit would need `encode_fsck_output` to
+   return a `Result` and a second env format for the degraded payload; both buy a
+   clearer log line for a record that is gone either way.
+
+   The doc comment on `encode_fsck_output` was corrected twice while deciding
+   this: it claimed ODS decodes the value (ODS reads no fsck data at all — the only
+   reader is `decode_fsck_output` in this crate), and it called the
+   `/data/var/log/fsck/<partition>.log` copy the primary artifact, which inverts
+   the channel roles in `2026-05-27-fsck-and-resize-design.md` §2.1 and does not
+   hold on the `FsckRequiresReboot` path, where the data partition is not mounted.
 2. **Factory-reset path.** Three verified gaps, out of scope here: an invalid
    trigger is never cleared and never reported (`BootMode::detect` falls back to
    `Normal`, and only `factory_reset::run` clears the key); `preserve` is

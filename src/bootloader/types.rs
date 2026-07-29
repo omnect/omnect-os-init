@@ -13,21 +13,16 @@ const BASE64_CMD: &str = "/bin/base64";
 /// Encode fsck result for storage in the bootloader environment.
 ///
 /// Produces `base64(gzip("{code}\n{output}"))` using the busybox `gzip` and
-/// `base64` applets that are always present in the initramfs. The format must
-/// remain stable as ODS decodes this value at runtime.
+/// `base64` applets in the initramfs. [`decode_fsck_output`] is the only reader,
+/// so the format is internal — but both ends have to change together.
 ///
-/// Returns an empty string if encoding fails (non-fatal; the plain log file
-/// on the data partition still captures the output). Note: an empty string
-/// stored in the bootloader env is indistinguishable from "no fsck ran" —
-/// `get_fsck_status` will return `Ok(None)` for both cases, masking the
-/// encoding failure. This is acceptable: the plain log file is the primary
-/// diagnostic artifact; the bootloader env value is a lightweight indicator.
-///
-/// Residual observability gap: if encoding fails *and* fsck produced no output
-/// (e.g. the process was killed before writing anything), the plain log file
-/// will also be empty, so the encoding failure is visible only via the
-/// `log::warn!` emitted here — which itself requires `/dev/kmsg` to be
-/// functional. This is a low-probability scenario and is accepted.
+/// Returns an empty string if either applet fails. `get_fsck_status` then reports
+/// `Ok(None)`, which is also what an absent record looks like, so the failure is
+/// visible only in the warning logged here. What that costs is the record's trip
+/// across a reboot: `drain_fsck_env` keeps this boot's copy in `OdsStatus`, so the
+/// ODS JSON still carries it. `/data/var/log/fsck/<partition>.log` does not close
+/// the gap on the `FsckRequiresReboot` path, where the data partition is not
+/// mounted.
 pub fn encode_fsck_output(code: i32, output: &str) -> String {
     let raw = format!("{code}\n{output}");
 
