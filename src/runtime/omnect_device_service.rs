@@ -318,14 +318,13 @@ fn write_status_file(ods_dir: &Path, status: &OdsStatus) -> Result<()> {
     Ok(())
 }
 
-/// Any non-empty value counts as set: the writers use `"1"`, but these flags
-/// carry their meaning in presence, not in value.
+/// Names the key on failure — `BootEnvError` carries the failing command, not
+/// the variable.
 fn read_flag(bootloader: &dyn BootEnv, key: BootEnvKey) -> Result<bool> {
-    // Logged here because BootEnvError carries the failing command, not the key.
-    let value = bootloader
-        .get_env(key)
-        .inspect_err(|e| log::error!("failed to read {}: {e}", key.as_str()))?;
-    Ok(value.is_some_and(|v| !v.is_empty()))
+    bootloader
+        .is_flag_set(key)
+        .inspect_err(|e| log::error!("failed to read {}: {e}", key.as_str()))
+        .map_err(Into::into)
 }
 
 /// Clear a boot-env flag whose trigger file was just created.

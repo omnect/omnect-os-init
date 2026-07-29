@@ -128,6 +128,15 @@ pub trait BootEnv: Send + Sync {
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
     fn set_env(&mut self, key: BootEnvKey, value: Option<&str>) -> Result<()>;
 
+    /// Whether a flag-style variable is set. Any non-empty value counts.
+    ///
+    /// Presence alone is not enough: a GRUB script that assigns `key=` leaves an
+    /// entry with an empty value behind, which means "not set". Every reader of
+    /// a flag must use this so the rule has one definition.
+    fn is_flag_set(&self, key: BootEnvKey) -> Result<bool> {
+        Ok(self.get_env(key)?.is_some_and(|v| !v.is_empty()))
+    }
+
     /// Save fsck result to bootloader environment.
     ///
     /// Stores exit code and full fsck output as gzip+base64 encoded string so the
@@ -420,6 +429,20 @@ mod tests {
                 BootEnvDecision::Abort(InitramfsError::DegradedBoot(_))
             ));
         }
+    }
+
+    #[test]
+    fn is_flag_set_requires_a_non_empty_value() {
+        let bl = MockBootEnv::new()
+            .with_env(BootEnvKey::ValidateUpdate, "1")
+            .with_env(BootEnvKey::ValidateUpdateFailed, "");
+
+        assert!(bl.is_flag_set(BootEnvKey::ValidateUpdate).unwrap());
+        assert!(
+            !bl.is_flag_set(BootEnvKey::ValidateUpdateFailed).unwrap(),
+            "an entry with an empty value means not set"
+        );
+        assert!(!bl.is_flag_set(BootEnvKey::BootloaderUpdated).unwrap());
     }
 
     #[test]

@@ -60,20 +60,19 @@ pub fn read_update_pending() -> bool {
 /// Derive the update-pending flag from a boot environment.
 ///
 /// Returns `true` only when the env is available *and* `omnect_validate_update`
-/// is set; all other cases (degraded env, read error, key absent) return `false`
-/// so failures before the env is opened are treated as "no update in flight".
+/// holds a non-empty value; all other cases (degraded env, read error, key
+/// absent or empty) return `false` so failures before the env is opened are
+/// treated as "no update in flight".
 fn update_pending_from_env(env: &BootEnvState) -> bool {
-    env.available()
-        .and_then(
-            |bl| match bl.get_env(bootloader::BootEnvKey::ValidateUpdate) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("reading omnect_validate_update failed; treating as not pending: {e}");
-                    None
-                }
-            },
-        )
-        .is_some()
+    match env.available() {
+        Some(bl) => bl
+            .is_flag_set(bootloader::BootEnvKey::ValidateUpdate)
+            .unwrap_or_else(|e| {
+                warn!("reading omnect_validate_update failed; treating as not pending: {e}");
+                false
+            }),
+        None => false,
+    }
 }
 
 /// Compute the first-boot flag from the opened boot env.
@@ -373,6 +372,16 @@ mod tests {
         let bl = MockBootEnv::new().with_env(crate::bootloader::BootEnvKey::ValidateUpdate, "1");
         let env = BootEnvState::Available(Box::new(bl));
         assert!(update_pending_from_env(&env));
+    }
+
+    #[test]
+    fn update_pending_false_when_key_is_empty() {
+        // GRUB's rollback path assigns `omnect_validate_update=` and saves it, so
+        // the entry survives with an empty value. Treating that as pending would
+        // keep a rolled-back device on the reboot-on-fatal path forever.
+        let bl = MockBootEnv::new().with_env(crate::bootloader::BootEnvKey::ValidateUpdate, "");
+        let env = BootEnvState::Available(Box::new(bl));
+        assert!(!update_pending_from_env(&env));
     }
 
     #[test]

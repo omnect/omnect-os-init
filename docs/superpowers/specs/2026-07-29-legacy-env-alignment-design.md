@@ -82,8 +82,27 @@ The port read the failed state as *the value* `"failed"` of
 ### 3.2 Flags carry meaning in presence, not in value
 
 Legacy tests every flag with `[ -n "${flag}" ]`. Any non-empty value counts as
-set. The port compared against `"1"`. The writers do use `"1"`, so this is not
-observable today — it is aligned to remove the trap.
+set. The port compared against `"1"`.
+
+The rule now has one definition, `BootEnv::is_flag_set`, because the codebase had
+two that disagreed. `update_pending_from_env` used `is_some()`, so an entry with
+an empty value counted as "update in flight".
+
+That is not hypothetical on GRUB. Its rollback path assigns
+`omnect_validate_update=` and saves it, which leaves the entry present with an
+empty value — verified with `grub-editenv set key=` followed by `list`. U-Boot
+does not show it, because its `get_env` maps an empty value to `None`. Legacy
+avoided it by clearing with an *unset*, which removes the entry.
+
+Left uncorrected, a rolled-back GRUB device would report `update_pending` on
+every later boot: a fatal error would then reboot instead of halting, and the
+extra-bootargs sync would stay gated off. Nothing clears the entry — ODS unsets
+`omnect_validate_update` only on the successful-validation path.
+
+One step remains unverified: that GRUB's own `save_env` at boot writes the empty
+value the same way `grub-editenv` does. Same block format and same `name=value`
+lines, but not the same code path. `grub-editenv /boot/EFI/BOOT/grubenv list`
+after a rollback settles it on a device.
 
 ### 3.3 Both flags set at once is fatal
 
@@ -243,10 +262,11 @@ again after an A/B update, and the first-boot work repeats.
 4. **Correction to an earlier plan.**
    `2026-05-27-boot-failure-recovery-policy.md` states that
    `omnect_validate_update` may hold `"1"` or `"failed"` and that the two need
-   not be distinguished. The value `"failed"` does not exist — see §3.1. The code
-   it describes (`is_some()`) stays correct, because any value means an update is
-   in flight, but the reasoning is wrong and is the origin of the defect fixed
-   here.
+   not be distinguished. The value `"failed"` does not exist — see §3.1 — and the
+   `is_some()` check it justifies has been replaced, see §3.2. The plan text is
+   left as written; correcting it is a separate call, since it is the record of
+   someone else's design decision. Worth doing, because the next reader would
+   otherwise build on it again, as this port did.
 
 ---
 
@@ -254,8 +274,9 @@ again after an A/B update, and the first-boot work repeats.
 
 Covered by unit tests: the failed-flag key and its clearing; the
 bootloader-updated marker and its clearing; both-flags-set is fatal and writes
-no file; any non-empty value triggers; a clear failure does not abort;
-`omnect_validate_update` stays set; a boot-env read error is typed as
+no file; any non-empty value triggers; an entry with an empty value counts as
+unset, both at `is_flag_set` and at `update_pending_from_env`; a clear failure
+does not abort; `omnect_validate_update` stays set; a boot-env read error is typed as
 `Bootloader`; the documented file modes; `drain_fsck_env` for move-and-clear,
 stale-plus-current, no-bootloader, and read failure; the grubenv fallback for
 fits / does-not-fit / env-unusable.
