@@ -84,9 +84,17 @@ The port read the failed state as *the value* `"failed"` of
 Legacy tests every flag with `[ -n "${flag}" ]`. Any non-empty value counts as
 set. The port compared against `"1"`.
 
-The rule now has one definition, `BootEnv::is_flag_set`, because the codebase had
-two that disagreed. `update_pending_from_env` used `is_some()`, so an entry with
-an empty value counted as "update in flight".
+The rule now has one definition for these flags, `BootEnv::is_flag_set`, because
+the codebase had two that disagreed. `update_pending_from_env` used `is_some()`,
+so an entry with an empty value counted as "update in flight".
+
+`omnect_first_boot_done` deliberately does **not** follow that rule. It is not a
+handshake the bootloader writes but a marker this crate writes, so it is matched
+against its exact value (`FIRST_BOOT_DONE`): missing, empty or unexpected all mean
+a fresh first boot. That is the safe direction, because the work it gates —
+resize-data, the extra-bootargs sync — costs a no-op when repeated and can leave a
+device unresized when skipped. `ci/tests/base_test.sh:222` already compared against
+exactly `"1"`, so the reader had been looser than both its writer and the test.
 
 That is not hypothetical on GRUB. Its rollback path assigns
 `omnect_validate_update=` and saves it, which leaves the entry present with an
