@@ -151,9 +151,19 @@ Legacy is two-phase within a single boot:
 1. fsck writes `omnect_fsck_<partition>` into the env (`save_fsck_status`).
 2. `fsck_handling` in step 95 reads it into the JSON and **clears** it.
 
-The env is therefore a transport, not a store. It only survives into the next
-boot when a boot aborts between the two phases — which is exactly the
-`FsckRequiresReboot` case the channel exists for.
+The env is therefore a transport, not a store. A record survives into the next
+boot only when a boot aborts between the two phases.
+
+With one exception, which is the case that matters most: on GRUB the boot
+partition's own record is **not** written when fsck demands a reboot.
+`grub.rs::save_fsck_status` skips the grubenv write for `is_reboot_required()`,
+because writing to a filesystem that fsck just declared inconsistent is not
+sound. Legacy does the same — `grub-sh::save_fsck_status` guards the boot branch
+with `elif [ ! "${fsck_res}" = "2" ]` and otherwise logs "can not save fsck
+state" — so this is not a regression, and the two differ only in reach: legacy
+compares the literal `2`, while `is_reboot_required()` tests the bit, so it also
+covers 3, 6, 7. Non-boot partitions do carry across, via the file on the boot
+partition.
 
 The port implemented phase 1 only. Consequences: `omnect_fsck_*` accumulated in
 the fixed-size env block forever, and the boot partition's record never reached
@@ -201,12 +211,23 @@ This repo owns the contract; consumers adapt. omnect/omnect-device-service#205
 names `runtime::omnect_device_service` as the contract source and resolves the
 `factory_reset` key spelling on the ODS side.
 
-Two commits on the older `factory_reset` branch pull the other way — one makes
-`fsck` always present as `{}`, one makes it a bare output string, both to match
-legacy. Both are **rejected**: meta-omnect `73eb46a` already moved
-factory-reset from `{}` to `null` for the same reason, so omit-when-empty is the
-established direction, and a bare string would be inconsistent with every other
-`OdsStatus` field.
+**This is a deliberate break from the contract meta-omnect `main` ships today**,
+not a disagreement with two stale commits. `omnect-device-service-setup`'s
+`fsck_handling` starts from `echo "{}"` and then sets `.fsck=$fsck`
+unconditionally, so `.fsck` is always present and is `{}` when there is nothing to
+report; each value is `$(get_fsck_status ${i})`, a bare decoded string with no
+`{code, output}` wrapper. `factory_reset_status_handling` likewise writes
+`."factory-reset"`. Two commits on the older `factory_reset` branch reproduce both
+of those in this crate.
+
+Rejected anyway, on two grounds. Omit-when-empty is the established direction:
+meta-omnect `73eb46a` ("return `null` from initramfs in case no factory reset
+happened") already moved factory-reset from `{}` to `null` for the same reason. And
+a bare string would be the only `OdsStatus` field without structure, which costs
+the exit code — the one part a consumer can act on without parsing free text.
+
+The cost is real and lands on consumers: §7 names the smoke tests that had to
+change, and omnect/omnect-device-service#205 is the ODS side.
 
 `tests/fsck_status.rs` pins the fsck part of the contract, because the omnect-os
 smoke tests read it directly.
