@@ -301,6 +301,9 @@ pub fn persist_fsck_results(
         is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
+        // `add_fsck_result` already drops clean results, but `OdsStatus::fsck` is a
+        // public map — this guard is what stops a direct insert from putting a clean
+        // record into the fixed-size env block.
         let exit_code = FsckExitCode::from(fsck.code);
         if exit_code.is_clean() {
             continue;
@@ -385,6 +388,18 @@ mod tests {
         let mut s = OdsStatus::new();
         s.add_fsck_result(partition, code, output.to_string());
         s
+    }
+
+    /// Insert past `add_fsck_result`, which drops clean results. Needed to reach
+    /// the `is_clean()` guard in `persist_fsck_results` at all.
+    fn insert_raw(ods: &mut OdsStatus, partition: PartitionName, code: i32, output: &str) {
+        ods.fsck.insert(
+            partition,
+            crate::runtime::FsckStatus {
+                code,
+                output: output.to_string(),
+            },
+        );
     }
     struct TrackingBootEnv {
         saved: Vec<(PartitionName, FsckExitCode, String)>,
@@ -471,8 +486,12 @@ mod tests {
 
     #[test]
     fn test_persist_zero_code_not_saved() {
-        // Exit code 0 (clean) must not trigger any boot env write.
-        let ods = make_ods_with(PartitionName::Boot, FsckExitCode::OK, "clean");
+        // Exercises the is_clean() guard: a clean record that bypassed
+        // add_fsck_result must still not reach the boot env.
+        let mut ods = OdsStatus::new();
+        insert_raw(&mut ods, PartitionName::Boot, 0, "clean");
+        assert_eq!(ods.fsck.len(), 1, "the guard must have something to skip");
+
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
 
@@ -517,19 +536,22 @@ mod tests {
     #[test]
     fn test_persist_multiple_partitions_only_nonzero_saved() {
         // Mix of zero and non-zero codes — only non-zero ones reach save_fsck_status.
+        // The clean entries are inserted raw so they are present in the map and the
+        // is_clean() guard is what excludes them.
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
+        insert_raw(&mut ods, PartitionName::Boot, 0, "clean");
+        insert_raw(&mut ods, PartitionName::Etc, 0, "clean");
         ods.add_fsck_result(
             PartitionName::Data,
             FsckExitCode::CORRECTED,
             "errors corrected".to_string(),
         );
-        ods.add_fsck_result(PartitionName::Etc, FsckExitCode::OK, "clean".to_string());
         ods.add_fsck_result(
             PartitionName::Cert,
             FsckExitCode::ERRORS_UNCORRECTED,
             "uncorrected errors".to_string(),
         );
+        assert_eq!(ods.fsck.len(), 4, "all four must be in the map");
 
         let temp = TempDir::new().unwrap();
         let mut bl = TrackingBootEnv::new();
