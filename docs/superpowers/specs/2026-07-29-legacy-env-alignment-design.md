@@ -195,7 +195,7 @@ partition was mounted, in `/data/var/log/fsck/<partition>.log`.
 
 `2026-05-27-fsck-and-resize-design.md` §2 states `clean (0) | mount; nothing
 recorded`, and "records every non-clean result in `OdsStatus.fsck`". The port
-recorded clean results too, which deviated from that spec. `add_fsck_result` now
+recorded clean results too, which deviated from that spec. `record_fsck_result` now
 drops them, so the JSON names only partitions that needed attention.
 
 ---
@@ -241,7 +241,7 @@ Two gaps against `grub-sh`:
 - **No `sync`.** `set_bootloader_env_var` ends with `sync`; the port did not.
   `grub-editenv` leaves the write in the page cache, and the paths that write
   the env then reboot or halt — neither `reboot(2)` nor the halt loop syncs.
-  Added `sync_disk()` after every grubenv write and after the fsck files on the
+  Added `sync_filesystems()` after every grubenv write and after the fsck files on the
   boot partition. U-Boot keeps no sync, matching `uboot-sh`: `fw_setenv` writes
   the env region itself.
 - **No fallback when the record does not fit.** grubenv is a fixed-size block

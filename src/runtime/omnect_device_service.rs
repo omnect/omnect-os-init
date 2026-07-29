@@ -105,8 +105,8 @@ pub struct OdsStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded_boot: Option<DegradedBootStatus>,
 
-    /// `true` if this boot is the first boot since flashing (i.e. the
-    /// `omnect_first_boot_done` marker was absent at run_init time).
+    /// `true` if this boot is the first boot since flashing, i.e. the
+    /// `omnect_first_boot_done` marker did not hold its value at run_init time.
     /// Always serialized — absence of the key would itself be a bug.
     pub first_boot: bool,
 
@@ -218,7 +218,7 @@ impl OdsStatus {
 
     /// Clean results are left out, so the JSON names only the partitions that
     /// needed attention.
-    pub fn add_fsck_result(
+    pub fn record_fsck_result(
         &mut self,
         partition: PartitionName,
         code: FsckExitCode,
@@ -582,8 +582,8 @@ mod tests {
     #[test]
     fn test_ods_status_add_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
-        status.add_fsck_result(
+        status.record_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
+        status.record_fsck_result(
             PartitionName::Data,
             FsckExitCode::CORRECTED,
             "errors corrected".to_string(),
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn test_ods_status_serialization() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(
+        status.record_fsck_result(
             PartitionName::Boot,
             FsckExitCode::CORRECTED,
             "errors corrected".to_string(),
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn test_ods_status_serialization_omits_clean_fsck() {
         let mut status = OdsStatus::new();
-        status.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
+        status.record_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".to_string());
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(!json.contains("fsck"), "got: {json}");
@@ -914,7 +914,7 @@ mod tests {
         let ods_dir = TempDir::new().unwrap();
 
         let mut status = OdsStatus::new();
-        status.add_fsck_result(
+        status.record_fsck_result(
             PartitionName::Boot,
             FsckExitCode::CORRECTED,
             "errors corrected".to_string(),

@@ -12,8 +12,8 @@ use omnect_os_init::partition::PartitionName;
 #[test]
 fn clean_run_omits_the_fsck_key() {
     let mut ods = OdsStatus::new();
-    ods.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".into());
-    ods.add_fsck_result(PartitionName::Data, FsckExitCode::OK, "clean".into());
+    ods.record_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".into());
+    ods.record_fsck_result(PartitionName::Data, FsckExitCode::OK, "clean".into());
 
     let json = serde_json::to_value(&ods).unwrap();
     assert!(
@@ -25,7 +25,7 @@ fn clean_run_omits_the_fsck_key() {
 #[test]
 fn failing_partition_is_keyed_by_its_canonical_name() {
     let mut ods = OdsStatus::new();
-    ods.add_fsck_result(
+    ods.record_fsck_result(
         PartitionName::Data,
         FsckExitCode::CORRECTED,
         "errors corrected on pass 1".into(),
@@ -42,18 +42,18 @@ fn only_failing_partitions_appear() {
     // What destructive_test.sh asserts: a clean boot partition reads as null
     // while the partitions it corrupted on purpose carry an entry.
     let mut ods = OdsStatus::new();
-    ods.add_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".into());
-    ods.add_fsck_result(
+    ods.record_fsck_result(PartitionName::Boot, FsckExitCode::OK, "clean".into());
+    ods.record_fsck_result(
         PartitionName::Cert,
         FsckExitCode::CORRECTED,
         "errors corrected".into(),
     );
-    ods.add_fsck_result(
+    ods.record_fsck_result(
         PartitionName::Etc,
         FsckExitCode::CORRECTED,
         "errors corrected".into(),
     );
-    ods.add_fsck_result(
+    ods.record_fsck_result(
         PartitionName::Data,
         FsckExitCode::ERRORS_UNCORRECTED,
         "uncorrected errors".into(),

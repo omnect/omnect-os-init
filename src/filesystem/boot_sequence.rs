@@ -23,7 +23,9 @@ use crate::runtime::OdsStatus;
 /// Subdirectory within the data partition where fsck logs are written.
 const FSCK_LOG_SUBDIR: &str = "var/log/fsck";
 
-/// Partitions this crate runs fsck on — the boot-env keys `drain_fsck_env` looks for.
+/// Every partition passed to `fsck_and_record`, which is what `drain_fsck_env`
+/// looks for in the boot env. Adding a fsck'd partition without listing it here
+/// leaves its record undrained.
 const FSCK_PARTITIONS: [PartitionName; 5] = [
     PartitionName::Boot,
     PartitionName::Factory,
@@ -51,7 +53,7 @@ pub fn fsck_and_record(
 ) -> std::result::Result<(), FilesystemError> {
     match check_filesystem_lenient(dev, fstype) {
         Ok(r) => {
-            ods_status.add_fsck_result(name, r.exit_code, r.output);
+            ods_status.record_fsck_result(name, r.exit_code, r.output);
             Ok(())
         }
         Err(FilesystemError::FsckRequiresReboot {
@@ -59,7 +61,7 @@ pub fn fsck_and_record(
             code,
             ref output,
         }) => {
-            ods_status.add_fsck_result(name, code, output.clone());
+            ods_status.record_fsck_result(name, code, output.clone());
             Err(FilesystemError::FsckRequiresReboot {
                 device,
                 code,
@@ -301,7 +303,7 @@ pub fn persist_fsck_results(
         is_path_mounted(&rootfs_dir.join(mount_points::DATA_PARTITION)).unwrap_or(false);
 
     for (partition, fsck) in &ods_status.fsck {
-        // `add_fsck_result` already drops clean results, but `OdsStatus::fsck` is a
+        // `record_fsck_result` already drops clean results, but `OdsStatus::fsck` is a
         // public map — this guard is what stops a direct insert from putting a clean
         // record into the fixed-size env block.
         let exit_code = FsckExitCode::from(fsck.code);
@@ -366,7 +368,7 @@ pub fn drain_fsck_env(ods_status: &mut OdsStatus, bootloader: Option<&mut dyn Bo
             continue;
         };
 
-        ods_status.add_fsck_result(partition, record.exit_code, record.output);
+        ods_status.record_fsck_result(partition, record.exit_code, record.output);
         if let Err(e) = bl.clear_fsck_status(partition) {
             log::warn!("Failed to clear fsck record for {partition} in boot env: {e}");
         }
@@ -386,11 +388,11 @@ mod tests {
 
     fn make_ods_with(partition: PartitionName, code: FsckExitCode, output: &str) -> OdsStatus {
         let mut s = OdsStatus::new();
-        s.add_fsck_result(partition, code, output.to_string());
+        s.record_fsck_result(partition, code, output.to_string());
         s
     }
 
-    /// Insert past `add_fsck_result`, which drops clean results. Needed to reach
+    /// Insert past `record_fsck_result`, which drops clean results. Needed to reach
     /// the `is_clean()` guard in `persist_fsck_results` at all.
     fn insert_raw(ods: &mut OdsStatus, partition: PartitionName, code: i32, output: &str) {
         ods.fsck.insert(
@@ -464,7 +466,6 @@ mod tests {
         }
     }
 
-    /// Mock that always fails on get_fsck_status.
     struct FsckReadFailsBootEnv;
 
     impl BootEnv for FsckReadFailsBootEnv {
@@ -487,7 +488,7 @@ mod tests {
     #[test]
     fn test_persist_zero_code_not_saved() {
         // Exercises the is_clean() guard: a clean record that bypassed
-        // add_fsck_result must still not reach the boot env.
+        // record_fsck_result must still not reach the boot env.
         let mut ods = OdsStatus::new();
         insert_raw(&mut ods, PartitionName::Boot, 0, "clean");
         assert_eq!(ods.fsck.len(), 1, "the guard must have something to skip");
@@ -541,12 +542,12 @@ mod tests {
         let mut ods = OdsStatus::new();
         insert_raw(&mut ods, PartitionName::Boot, 0, "clean");
         insert_raw(&mut ods, PartitionName::Etc, 0, "clean");
-        ods.add_fsck_result(
+        ods.record_fsck_result(
             PartitionName::Data,
             FsckExitCode::CORRECTED,
             "errors corrected".to_string(),
         );
-        ods.add_fsck_result(
+        ods.record_fsck_result(
             PartitionName::Cert,
             FsckExitCode::ERRORS_UNCORRECTED,
             "uncorrected errors".to_string(),
@@ -575,7 +576,7 @@ mod tests {
         let mut bl = crate::bootloader::MockBootEnv::new();
         bl.save_fsck_status(
             PartitionName::Boot,
-            FsckExitCode::from(1),
+            FsckExitCode::CORRECTED,
             "errors corrected on pass 1",
         )
         .unwrap();
@@ -598,7 +599,7 @@ mod tests {
         let mut bl = crate::bootloader::MockBootEnv::new();
         bl.save_fsck_status(
             PartitionName::Boot,
-            FsckExitCode::from(1),
+            FsckExitCode::CORRECTED,
             "stale from a reboot",
         )
         .unwrap();

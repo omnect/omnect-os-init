@@ -37,7 +37,7 @@ fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
 ///
 /// Some callers persist state and then reboot or halt; neither reboot(2) nor the
 /// halt loop syncs, so an unflushed write would be lost exactly there.
-fn sync_disk() {
+fn sync_filesystems() {
     nix::unistd::sync();
 }
 
@@ -70,7 +70,7 @@ fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootload
         command: format!("write {}", file_path.display()),
         reason: e.to_string(),
     })?;
-    sync_disk();
+    sync_filesystems();
     Ok(())
 }
 
@@ -101,7 +101,7 @@ fn clear_fsck_file(partition: PartitionName) -> crate::bootloader::Result<()> {
             command: format!("remove {}", file_path.display()),
             reason: e.to_string(),
         })?;
-        sync_disk();
+        sync_filesystems();
     }
     Ok(())
 }
@@ -178,7 +178,7 @@ impl BootEnv for GrubBootEnv {
             }
         }
         // grub-editenv leaves the write in the page cache.
-        sync_disk();
+        sync_filesystems();
         Ok(())
     }
 

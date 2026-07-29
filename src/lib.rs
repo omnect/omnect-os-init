@@ -167,7 +167,7 @@ pub fn run_init() -> Result<()> {
 
     ods_status.first_boot = compute_first_boot(&bootloader_env);
     if ods_status.first_boot {
-        info!("first-boot detected (omnect_first_boot_done absent)");
+        info!("first-boot detected (omnect_first_boot_done not set to the marker value)");
     }
 
     // Read omnect_validate_update once, before any subsequent fallible step.
@@ -341,7 +341,7 @@ mod tests {
         // the mock reports through a handle the test keeps.
         let saved = Arc::new(Mutex::new(Vec::new()));
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result(
+        ods.record_fsck_result(
             crate::partition::PartitionName::Boot,
             FsckExitCode::CORRECTED,
             "errors corrected on pass 1".into(),
@@ -377,7 +377,7 @@ mod tests {
         // records costs nothing — and a persist whose write failed (errors are only
         // logged) still reaches the ODS JSON.
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result(
+        ods.record_fsck_result(
             crate::partition::PartitionName::Boot,
             FsckExitCode::CORRECTED,
             "errors corrected on pass 1".into(),
