@@ -93,8 +93,10 @@ handshake the bootloader writes but a marker this crate writes, so it is matched
 against its exact value (`FIRST_BOOT_DONE`): missing, empty or unexpected all mean
 a fresh first boot. That is the safe direction, because the work it gates —
 resize-data, the extra-bootargs sync — costs a no-op when repeated and can leave a
-device unresized when skipped. `ci/tests/base_test.sh:222` already compared against
-exactly `"1"`, so the reader had been looser than both its writer and the test.
+device unresized when skipped. The exact-`1` expectation predates the rename: omnect-os
+`main` checks `bootloader_env.sh get resized-data != "1"` and `feature_rust_init`
+checks the same against `omnect_first_boot_done` (`base_test.sh:222`). So the reader
+had been looser than both its writer and the test.
 
 That is not hypothetical on GRUB. Its rollback path assigns
 `omnect_validate_update=` and saves it, which leaves the entry present with an
@@ -259,6 +261,20 @@ Two gaps against `grub-sh`:
   exit code, so the JSON still shows that fsck reported something and with which
   code. Two attempts only — if the retry also fails, grubenv is unusable rather
   than full, and the error surfaces.
+
+---
+
+### 6.1 The fsck log is flushed on its own
+
+`persist_fsck_results` writes `/data/var/log/fsck/<partition>.log` after the env
+write. That file had no flush of its own: on GRUB it was carried incidentally by the
+*next* partition's `sync_filesystems()`, the last partition's log by nothing, and on
+u-boot by nothing at all — while the path that needs it most, `FsckRequiresReboot`,
+continues into `reboot(2)`, which does not sync.
+
+`write_fsck_log` now flushes the file with `sync_all()` and fsyncs the directory, so
+the name is durable too. The guarantee is local and identical on both bootloaders
+instead of depending on what happens to sync next.
 
 ---
 

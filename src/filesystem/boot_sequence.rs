@@ -5,9 +5,8 @@
 //! with mock bootloaders and temporary directories.
 
 use std::fs;
-use std::path::Path;
-#[cfg(feature = "factory-reset")]
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use nix::mount::MsFlags;
 
@@ -274,6 +273,24 @@ pub fn mount_remaining_partitions(
     Ok(())
 }
 
+/// Write one partition's fsck log and make it durable, directory entry included.
+///
+/// The `FsckRequiresReboot` path continues with `reboot(2)`, which does not sync,
+/// so this is flushed here rather than left to whatever happens to sync next.
+fn write_fsck_log(
+    log_dir: &Path,
+    partition: PartitionName,
+    output: &str,
+) -> std::io::Result<PathBuf> {
+    let log_path = log_dir.join(format!("{partition}.log"));
+    let mut file = fs::File::create(&log_path)?;
+    file.write_all(output.as_bytes())?;
+    file.sync_all()?;
+    // Flushing the file does not make its name durable — that lives in the directory.
+    fs::File::open(log_dir)?.sync_all()?;
+    Ok(log_path)
+}
+
 /// Persist fsck results after all partitions are mounted.
 ///
 /// For each partition with a non-zero fsck exit code:
@@ -332,11 +349,9 @@ pub fn persist_fsck_results(
             if let Err(e) = fs::create_dir_all(&log_dir) {
                 log::warn!("Failed to create fsck log dir {}: {}", log_dir.display(), e);
             } else {
-                let log_path = log_dir.join(format!("{}.log", partition));
-                if let Err(e) = fs::write(&log_path, &fsck.output) {
-                    log::warn!("Failed to write fsck log {}: {}", log_path.display(), e);
-                } else {
-                    log::info!("Wrote fsck log: {}", log_path.display());
+                match write_fsck_log(&log_dir, *partition, &fsck.output) {
+                    Ok(path) => log::info!("Wrote fsck log: {}", path.display()),
+                    Err(e) => log::warn!("Failed to write fsck log for {partition}: {e}"),
                 }
             }
         }
@@ -484,6 +499,16 @@ mod tests {
     }
 
     // ---- tests ---------------------------------------------------------
+
+    #[test]
+    fn write_fsck_log_writes_the_file_and_returns_its_path() {
+        let temp = TempDir::new().unwrap();
+
+        let path = write_fsck_log(temp.path(), PartitionName::Data, "errors corrected").unwrap();
+
+        assert_eq!(path, temp.path().join("data.log"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "errors corrected");
+    }
 
     #[test]
     fn test_persist_zero_code_not_saved() {

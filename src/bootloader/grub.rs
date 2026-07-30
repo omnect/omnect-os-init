@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::bootloader::{
-    BootEnv, BootEnvKey, FsckRecord, Result,
+    BootEnv, BootEnvKey, FsckRecord, Result, sync_filesystems,
     types::{decode_fsck_output, encode_fsck_output},
 };
 use crate::error::BootEnvError;
@@ -31,14 +31,6 @@ const FSCK_OUTPUT_TOO_LARGE: &str = "fsck output too large for the boot env";
 /// Constructs the fsck status file path for a non-boot partition on the boot volume.
 fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
     Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"))
-}
-
-/// Flush pending writes to disk.
-///
-/// Some callers persist state and then reboot or halt; neither reboot(2) nor the
-/// halt loop syncs, so an unflushed write would be lost exactly there.
-fn sync_filesystems() {
-    nix::unistd::sync();
 }
 
 /// Store the boot partition's encoded fsck record, retrying with the exit code

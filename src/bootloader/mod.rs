@@ -44,6 +44,15 @@ fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Flush pending writes to disk.
+///
+/// Callers that persist state and then reboot or halt need this: neither
+/// `reboot(2)` with `RB_AUTOBOOT` nor the halt loop syncs, so an unflushed write
+/// is lost exactly where it was meant to survive.
+pub(crate) fn sync_filesystems() {
+    nix::unistd::sync();
+}
+
 /// Decoded fsck result stored in the bootloader environment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FsckRecord {
