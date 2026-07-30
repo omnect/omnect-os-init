@@ -447,6 +447,16 @@ Immediately *after* that line, insert:
 
 The `is_some()` check: any non-absent value means an update is in flight. We do not distinguish `"1"` vs `"failed"` here — both indicate "the bootloader booted a slot whose validation has not yet been confirmed."
 
+> **Correction, 2026-07-29 —** the paragraph above is wrong on both counts, and the
+> code it describes has been replaced. `omnect_validate_update` never holds
+> `"failed"`: the bootloader clears it and sets the separate
+> `omnect_validate_update_failed` (grub `omnect.inc.in`, u-boot `omnect_env.env`).
+> And `is_some()` counted an entry with an empty value as pending, which is the
+> state GRUB's rollback path leaves behind. Both now go through
+> `BootEnv::is_flag_set`. See `specs/2026-07-29-legacy-env-alignment-design.md`
+> §3.1 and §3.2. Left in place because the assumption recorded here is what the
+> initramfs port was built on.
+
 - [ ] **Step 3.5: Run the tests**
 
 Run: `cargo test --lib update_pending_tests`

@@ -5,8 +5,8 @@ use log::info;
 use crate::{
     Result,
     filesystem::{
-        mount_remaining_partitions, persist_fsck_results, setup_data_overlay, setup_etc_overlay,
-        setup_raw_rootfs_mount,
+        drain_fsck_env, mount_remaining_partitions, persist_fsck_results, setup_data_overlay,
+        setup_etc_overlay, setup_raw_rootfs_mount,
     },
     mode::BootContext,
     runtime::{ODS_RUNTIME_DIR, create_fs_links, create_ods_runtime_files, switch_root},
@@ -32,7 +32,10 @@ fn extra_bootargs_applied_ok(ods_status: &crate::runtime::OdsStatus) -> bool {
 fn write_first_boot_marker(first_boot: bool, bootloader: &mut crate::bootloader::BootEnvState) {
     if first_boot
         && let Some(bl) = bootloader.available_mut()
-        && let Err(e) = bl.set_env(crate::bootloader::BootEnvKey::FirstBootDone, Some("1"))
+        && let Err(e) = bl.set_env(
+            crate::bootloader::BootEnvKey::FirstBootDone,
+            Some(crate::bootloader::FIRST_BOOT_DONE),
+        )
     {
         log::warn!("first-boot marker write failed: {e}; will retry next boot");
     }
@@ -68,9 +71,11 @@ pub fn run(ctx: BootContext<'_>) -> Result<()> {
     setup_data_overlay(rootfs)?;
     create_fs_links(rootfs)?;
 
+    drain_fsck_env(&mut ods_status, boot_env.available_mut());
+
     create_ods_runtime_files(
         &ods_status,
-        boot_env.available(),
+        boot_env.available_mut(),
         rootfs,
         Path::new(ODS_RUNTIME_DIR),
     )?;

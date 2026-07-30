@@ -60,32 +60,31 @@ pub fn read_update_pending() -> bool {
 /// Derive the update-pending flag from a boot environment.
 ///
 /// Returns `true` only when the env is available *and* `omnect_validate_update`
-/// is set; all other cases (degraded env, read error, key absent) return `false`
-/// so failures before the env is opened are treated as "no update in flight".
+/// holds a non-empty value; all other cases (degraded env, read error, key
+/// absent or empty) return `false` so failures before the env is opened are
+/// treated as "no update in flight".
 fn update_pending_from_env(env: &BootEnvState) -> bool {
-    env.available()
-        .and_then(
-            |bl| match bl.get_env(bootloader::BootEnvKey::ValidateUpdate) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("reading omnect_validate_update failed; treating as not pending: {e}");
-                    None
-                }
-            },
-        )
-        .is_some()
+    match env.available() {
+        Some(bl) => bl
+            .is_flag_set(bootloader::BootEnvKey::ValidateUpdate)
+            .unwrap_or_else(|e| {
+                warn!("reading omnect_validate_update failed; treating as not pending: {e}");
+                false
+            }),
+        None => false,
+    }
 }
 
 /// Compute the first-boot flag from the opened boot env.
 ///
-/// Returns `true` if `BootEnvKey::FirstBootDone` is absent from the env.
-/// Errors from `get_env` and the degraded-env state both default to `false`
-/// to avoid triggering first-boot side effects under uncertainty.
+/// `true` unless the marker holds exactly `FIRST_BOOT_DONE`. Repeating the work it
+/// gates is a no-op, skipping it can leave the device unresized, so a missing,
+/// empty or unexpected value counts as a fresh first boot. A read error or a
+/// degraded env yield `false`: under uncertainty, no first-boot side effects.
 fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {
     match env.available() {
         Some(bl) => match bl.get_env(bootloader::BootEnvKey::FirstBootDone) {
-            Ok(None) => true,
-            Ok(Some(_)) => false,
+            Ok(v) => v.as_deref() != Some(bootloader::FIRST_BOOT_DONE),
             Err(e) => {
                 warn!("first-boot: get_env failed: {e}; treating as not-first-boot");
                 false
@@ -103,9 +102,9 @@ fn compute_first_boot(env: &bootloader::BootEnvState) -> bool {
 /// across the reboot. This is a no-op for degraded boot (`env.available_mut()`
 /// returns `None`) and when `ods_status.fsck` is empty.
 ///
-/// After a successful persist the fsck records are cleared from `ods_status` to
-/// prevent double-serialization into the ODS runtime JSON. In degraded mode the
-/// records are intentionally kept so ODS consumers can still read them.
+/// The records stay in `ods_status`. `drain_fsck_env` reads the env back into the
+/// same map keys later in the boot, so nothing is duplicated, and a persist that
+/// failed — the write errors are only logged — still reaches the ODS JSON.
 fn apply_boot_env_decision(
     decision: BootEnvDecision,
     core_result: Result<()>,
@@ -117,12 +116,6 @@ fn apply_boot_env_decision(
             // Must precede core_result? — otherwise a FsckRequiresReboot error
             // propagates before the diagnostic is written to the boot env.
             persist_fsck_results(ods_status, env.available_mut(), rootfs);
-            if env.available_mut().is_some() {
-                // Records moved to boot env; clear to avoid double-serialization
-                // into the ODS runtime JSON. Not done in degraded mode — fsck results
-                // remain in the JSON so ODS and operators can still read them.
-                ods_status.fsck.clear();
-            }
             core_result?;
             if let BootEnvState::Degraded(ref e) = env {
                 warn!("Boot env unavailable: {e}; booting in degraded mode");
@@ -174,7 +167,7 @@ pub fn run_init() -> Result<()> {
 
     ods_status.first_boot = compute_first_boot(&bootloader_env);
     if ods_status.first_boot {
-        info!("first-boot detected (omnect_first_boot_done absent)");
+        info!("first-boot detected (omnect_first_boot_done not set to the marker value)");
     }
 
     // Read omnect_validate_update once, before any subsequent fallible step.
@@ -313,15 +306,19 @@ mod tests {
         // so env is Available. The fsck diagnostic in ods_status.fsck must be
         // persisted to the bootloader env *before* FsckRequiresReboot propagates,
         // or it is lost across the reboot (mount_core_partitions persist-before-propagate contract).
+        //
+        // The env is moved into the decision and dropped when the error returns, so
+        // the call log is read through a handle obtained before the move.
         let mut ods = OdsStatus::new();
-        ods.add_fsck_result(
+        ods.record_fsck_result(
             crate::partition::PartitionName::Boot,
-            1,
+            FsckExitCode::CORRECTED,
             "errors corrected on pass 1".into(),
         );
 
-        let decision =
-            BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())));
+        let bl = MockBootEnv::new();
+        let saved = bl.saved_fsck_calls();
+        let decision = BootEnvDecision::Continue(BootEnvState::Available(Box::new(bl)));
         let result =
             apply_boot_env_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
 
@@ -334,13 +331,31 @@ mod tests {
             ),
             "FsckRequiresReboot must still propagate"
         );
-        // fsck.clear() runs after persist; ods.fsck must be empty — records were
-        // moved to the bootloader env before the error propagated.
-        assert!(
-            ods.fsck.is_empty(),
+        let saved = saved.lock().unwrap();
+        assert_eq!(
+            saved.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(),
+            vec![crate::partition::PartitionName::Boot],
             "persist_fsck_results must run before propagating FsckRequiresReboot \
              (mount_core_partitions persist-before-propagate contract)"
         );
+    }
+
+    #[test]
+    fn persisted_records_stay_in_ods_status() {
+        // drain_fsck_env reads the env back into the same map keys, so keeping the
+        // records costs nothing — and a persist whose write failed (errors are only
+        // logged) still reaches the ODS JSON.
+        let mut ods = OdsStatus::new();
+        ods.record_fsck_result(
+            crate::partition::PartitionName::Boot,
+            FsckExitCode::CORRECTED,
+            "errors corrected on pass 1".into(),
+        );
+
+        let result = apply_boot_env_decision(make_available(), Ok(()), &mut ods, Path::new("/tmp"));
+
+        assert!(result.is_ok());
+        assert_eq!(ods.fsck.len(), 1, "records must survive the persist step");
     }
 
     #[test]
@@ -376,6 +391,16 @@ mod tests {
     }
 
     #[test]
+    fn update_pending_false_when_key_is_empty() {
+        // GRUB's rollback path assigns `omnect_validate_update=` and saves it, so
+        // the entry survives with an empty value. Treating that as pending would
+        // keep a rolled-back device on the reboot-on-fatal path forever.
+        let bl = MockBootEnv::new().with_env(crate::bootloader::BootEnvKey::ValidateUpdate, "");
+        let env = BootEnvState::Available(Box::new(bl));
+        assert!(!update_pending_from_env(&env));
+    }
+
+    #[test]
     fn update_pending_false_when_get_env_errors() {
         let bl = MockBootEnv::new().with_get_env_error();
         let env = BootEnvState::Available(Box::new(bl));
@@ -400,6 +425,22 @@ mod first_boot_detection_tests {
         let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "1");
         let env: BootEnvState = BootEnvState::Available(Box::new(mock));
         assert!(!compute_first_boot(&env));
+    }
+
+    #[test]
+    fn empty_marker_yields_first_boot_true() {
+        // GRUB keeps an entry whose value was assigned empty; that is not the
+        // marker we wrote, so the first-boot work runs again.
+        let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "");
+        let env: BootEnvState = BootEnvState::Available(Box::new(mock));
+        assert!(compute_first_boot(&env));
+    }
+
+    #[test]
+    fn unexpected_marker_value_yields_first_boot_true() {
+        let mock = MockBootEnv::new().with_env(BootEnvKey::FirstBootDone, "yes");
+        let env: BootEnvState = BootEnvState::Available(Box::new(mock));
+        assert!(compute_first_boot(&env));
     }
 
     #[test]

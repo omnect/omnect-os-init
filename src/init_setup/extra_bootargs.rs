@@ -156,9 +156,8 @@ pub fn run(ctx: &mut InitSetupCtx<'_, '_, '_, '_>) -> Result<()> {
         return Ok(());
     }
 
-    // Flush the env write to disk. reboot(2) with RB_AUTOBOOT does not sync,
-    // so without this the write can be lost across the reboot and loop forever.
-    nix::unistd::sync();
+    // Without this the write is lost across the reboot and the sync retries forever.
+    crate::bootloader::sync_filesystems();
 
     // Success is not recorded in ODS: we reboot before normal::run writes the
     // JSON, and the next boot is a no-op.

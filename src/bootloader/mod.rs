@@ -22,6 +22,9 @@ pub use self::uboot::UBootBootEnv;
 
 pub type Result<T> = std::result::Result<T, BootEnvError>;
 
+/// Value of `omnect_first_boot_done`, shared by its writer and its reader.
+pub const FIRST_BOOT_DONE: &str = "1";
+
 /// Upper bound (bytes) on the failure reason stored via `save_factory_reset_failure`.
 /// The bootloader env block is small and shared by all variables, so keep it short.
 #[cfg(feature = "factory-reset")]
@@ -41,6 +44,15 @@ fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Flush pending writes to disk.
+///
+/// Callers that persist state and then reboot or halt need this: neither
+/// `reboot(2)` with `RB_AUTOBOOT` nor the halt loop syncs, so an unflushed write
+/// is lost exactly where it was meant to survive.
+pub(crate) fn sync_filesystems() {
+    nix::unistd::sync();
+}
+
 /// Decoded fsck result stored in the bootloader environment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FsckRecord {
@@ -58,6 +70,10 @@ pub struct FsckRecord {
 pub enum BootEnvKey {
     /// `omnect_validate_update` — OTA update validation state.
     ValidateUpdate,
+    /// `omnect_validate_update_failed` — set by the bootloader when it rolled
+    /// back to the previous slot because update validation did not complete.
+    /// The bootloader clears `omnect_validate_update` when it sets this key.
+    ValidateUpdateFailed,
     /// `omnect_bootloader_updated` — whether the bootloader itself was updated.
     BootloaderUpdated,
     /// `omnect_fsck_<partition>` — fsck result for the given partition.
@@ -88,6 +104,7 @@ impl BootEnvKey {
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
             Self::ValidateUpdate => Cow::Borrowed("omnect_validate_update"),
+            Self::ValidateUpdateFailed => Cow::Borrowed("omnect_validate_update_failed"),
             Self::BootloaderUpdated => Cow::Borrowed("omnect_bootloader_updated"),
             Self::FsckStatus(p) => Cow::Owned(format!("omnect_fsck_{p}")),
             Self::FirstBootDone => Cow::Borrowed("omnect_first_boot_done"),
@@ -122,6 +139,16 @@ pub trait BootEnv: Send + Sync {
     ///
     /// Pass `Some(value)` to set the variable, or `None` to delete it.
     fn set_env(&mut self, key: BootEnvKey, value: Option<&str>) -> Result<()>;
+
+    /// Whether a flag-style variable is set. Any non-empty value counts.
+    ///
+    /// A GRUB script that assigns `key=` leaves an entry with an empty value
+    /// behind, so presence alone is not enough. Applies to the flags the
+    /// bootloader writes; `omnect_first_boot_done` is ours and is matched against
+    /// [`FIRST_BOOT_DONE`].
+    fn is_flag_set(&self, key: BootEnvKey) -> Result<bool> {
+        Ok(self.get_env(key)?.is_some_and(|v| !v.is_empty()))
+    }
 
     /// Save fsck result to bootloader environment.
     ///
@@ -263,6 +290,14 @@ pub struct MockBootEnv {
     /// When set, `set_env` stores this fixed value instead of the given one,
     /// simulating a bootloader tool that normalizes the written value.
     set_env_normalize: Option<String>,
+    /// Every `save_fsck_status` call, in call order. Shared so a handle
+    /// obtained before the mock is moved (e.g. into a `Box<dyn BootEnv>`) can
+    /// still be read after the mock itself is dropped.
+    saved_fsck_calls: std::sync::Arc<std::sync::Mutex<Vec<(PartitionName, FsckExitCode, String)>>>,
+    /// When true, `save_fsck_status` returns an error instead of recording.
+    save_fsck_errors: bool,
+    /// When true, `get_fsck_status` returns an error instead of looking up the partition.
+    get_fsck_errors: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -294,6 +329,24 @@ impl MockBootEnv {
     pub fn with_set_env_normalize(mut self, stored: &str) -> Self {
         self.set_env_normalize = Some(stored.to_string());
         self
+    }
+
+    pub fn with_save_fsck_error(mut self) -> Self {
+        self.save_fsck_errors = true;
+        self
+    }
+
+    pub fn with_get_fsck_error(mut self) -> Self {
+        self.get_fsck_errors = true;
+        self
+    }
+
+    /// A handle to this mock's `save_fsck_status` call log, readable even
+    /// after the mock has been moved and dropped.
+    pub fn saved_fsck_calls(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<(PartitionName, FsckExitCode, String)>>> {
+        std::sync::Arc::clone(&self.saved_fsck_calls)
     }
 }
 
@@ -341,6 +394,16 @@ impl BootEnv for MockBootEnv {
         code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
+        if self.save_fsck_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected save_fsck_status error".into(),
+            });
+        }
+        self.saved_fsck_calls
+            .lock()
+            .unwrap()
+            .push((partition, code, output.to_string()));
         self.fsck.insert(
             partition,
             FsckRecord {
@@ -352,6 +415,12 @@ impl BootEnv for MockBootEnv {
     }
 
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        if self.get_fsck_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected get_fsck_status error".into(),
+            });
+        }
         Ok(self.fsck.get(&partition).cloned())
     }
 
@@ -415,6 +484,20 @@ mod tests {
                 BootEnvDecision::Abort(InitramfsError::DegradedBoot(_))
             ));
         }
+    }
+
+    #[test]
+    fn is_flag_set_requires_a_non_empty_value() {
+        let bl = MockBootEnv::new()
+            .with_env(BootEnvKey::ValidateUpdate, "1")
+            .with_env(BootEnvKey::ValidateUpdateFailed, "");
+
+        assert!(bl.is_flag_set(BootEnvKey::ValidateUpdate).unwrap());
+        assert!(
+            !bl.is_flag_set(BootEnvKey::ValidateUpdateFailed).unwrap(),
+            "an entry with an empty value means not set"
+        );
+        assert!(!bl.is_flag_set(BootEnvKey::BootloaderUpdated).unwrap());
     }
 
     #[test]

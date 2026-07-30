@@ -131,6 +131,13 @@ match classify_bootloader(open_bootloader_env(), is_release) {
 }
 ```
 
+> **Correction, 2026-07-29 —** the `ods_status.fsck.clear()` line above no longer
+> exists. It was safe only while nothing read the boot env back; `drain_fsck_env`
+> now does, and clearing here dropped the record from the ODS JSON whenever the
+> env write failed, since `persist_fsck_results` only logs those errors. The
+> persist-before-`core_result?` ordering this section establishes is unchanged and
+> still load-bearing. See `specs/2026-07-29-legacy-env-alignment-design.md` §4.
+
 The persist-before-propagate ordering is critical on uboot: `UBootBootloader::new()`
 is infallible, so `env` is always `Available` — without persisting first the boot
 fsck diagnostic would be lost across the reboot. `apply_bootloader_decision` owns
