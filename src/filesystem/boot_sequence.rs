@@ -393,8 +393,7 @@ pub fn drain_fsck_env(ods_status: &mut OdsStatus, bootloader: Option<&mut dyn Bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootEnv, BootEnvKey, FsckRecord, Result as BootEnvResult};
-    use crate::error::BootEnvError;
+    use crate::bootloader::MockBootEnv;
     use crate::partition::PartitionName;
     use crate::runtime::OdsStatus;
     use tempfile::TempDir;
@@ -418,86 +417,6 @@ mod tests {
             },
         );
     }
-    struct TrackingBootEnv {
-        saved: Vec<(PartitionName, FsckExitCode, String)>,
-    }
-
-    impl TrackingBootEnv {
-        fn new() -> Self {
-            Self { saved: Vec::new() }
-        }
-    }
-
-    impl BootEnv for TrackingBootEnv {
-        fn get_env(&self, _key: BootEnvKey) -> BootEnvResult<Option<String>> {
-            Ok(None)
-        }
-        fn set_env(&mut self, _key: BootEnvKey, _value: Option<&str>) -> BootEnvResult<()> {
-            Ok(())
-        }
-        fn save_fsck_status(
-            &mut self,
-            partition: PartitionName,
-            code: FsckExitCode,
-            output: &str,
-        ) -> BootEnvResult<()> {
-            self.saved.push((partition, code, output.to_string()));
-            Ok(())
-        }
-        fn get_fsck_status(&self, _partition: PartitionName) -> BootEnvResult<Option<FsckRecord>> {
-            Ok(None)
-        }
-        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootEnvResult<()> {
-            Ok(())
-        }
-    }
-
-    /// Mock that always fails on save_fsck_status.
-    struct FailingBootEnv;
-
-    impl BootEnv for FailingBootEnv {
-        fn get_env(&self, _key: BootEnvKey) -> BootEnvResult<Option<String>> {
-            Ok(None)
-        }
-        fn set_env(&mut self, _key: BootEnvKey, _value: Option<&str>) -> BootEnvResult<()> {
-            Ok(())
-        }
-        fn save_fsck_status(
-            &mut self,
-            _partition: PartitionName,
-            _code: FsckExitCode,
-            _output: &str,
-        ) -> BootEnvResult<()> {
-            Err(BootEnvError::CommandFailed {
-                command: "mock".into(),
-                reason: "injected failure".into(),
-            })
-        }
-        fn get_fsck_status(&self, _partition: PartitionName) -> BootEnvResult<Option<FsckRecord>> {
-            Ok(None)
-        }
-        fn clear_fsck_status(&mut self, _partition: PartitionName) -> BootEnvResult<()> {
-            Ok(())
-        }
-    }
-
-    struct FsckReadFailsBootEnv;
-
-    impl BootEnv for FsckReadFailsBootEnv {
-        fn get_env(&self, _key: BootEnvKey) -> BootEnvResult<Option<String>> {
-            Ok(None)
-        }
-        fn set_env(&mut self, _key: BootEnvKey, _value: Option<&str>) -> BootEnvResult<()> {
-            Ok(())
-        }
-        fn get_fsck_status(&self, _partition: PartitionName) -> BootEnvResult<Option<FsckRecord>> {
-            Err(BootEnvError::CommandFailed {
-                command: "mock".into(),
-                reason: "injected failure".into(),
-            })
-        }
-    }
-
     // ---- tests ---------------------------------------------------------
 
     #[test]
@@ -519,11 +438,14 @@ mod tests {
         assert_eq!(ods.fsck.len(), 1, "the guard must have something to skip");
 
         let temp = TempDir::new().unwrap();
-        let mut bl = TrackingBootEnv::new();
+        let mut bl = MockBootEnv::new();
 
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
-        assert!(bl.saved.is_empty(), "zero exit code must not be persisted");
+        assert!(
+            bl.saved_fsck_calls().lock().unwrap().is_empty(),
+            "zero exit code must not be persisted"
+        );
     }
 
     #[test]
@@ -535,14 +457,16 @@ mod tests {
             "errors corrected",
         );
         let temp = TempDir::new().unwrap();
-        let mut bl = TrackingBootEnv::new();
+        let mut bl = MockBootEnv::new();
 
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
-        assert_eq!(bl.saved.len(), 1);
-        assert_eq!(bl.saved[0].0, PartitionName::Boot);
-        assert_eq!(bl.saved[0].1, FsckExitCode::CORRECTED);
-        assert_eq!(bl.saved[0].2, "errors corrected");
+        let saved = bl.saved_fsck_calls();
+        let saved = saved.lock().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, PartitionName::Boot);
+        assert_eq!(saved[0].1, FsckExitCode::CORRECTED);
+        assert_eq!(saved[0].2, "errors corrected");
     }
 
     #[test]
@@ -550,11 +474,11 @@ mod tests {
         // Empty output: boot env is still called (code != 0), but no log dir is created.
         let ods = make_ods_with(PartitionName::Data, FsckExitCode::ERRORS_UNCORRECTED, "");
         let temp = TempDir::new().unwrap();
-        let mut bl = TrackingBootEnv::new();
+        let mut bl = MockBootEnv::new();
 
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
-        assert_eq!(bl.saved.len(), 1);
+        assert_eq!(bl.saved_fsck_calls().lock().unwrap().len(), 1);
         // No log dir should be created for empty output.
         assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
     }
@@ -580,13 +504,15 @@ mod tests {
         assert_eq!(ods.fsck.len(), 4, "all four must be in the map");
 
         let temp = TempDir::new().unwrap();
-        let mut bl = TrackingBootEnv::new();
+        let mut bl = MockBootEnv::new();
 
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
-        assert_eq!(bl.saved.len(), 2);
+        let saved = bl.saved_fsck_calls();
+        let saved = saved.lock().unwrap();
+        assert_eq!(saved.len(), 2);
         let saved_partitions: std::collections::HashSet<PartitionName> =
-            bl.saved.iter().map(|(p, _, _)| *p).collect();
+            saved.iter().map(|(p, _, _)| *p).collect();
         assert!(saved_partitions.contains(&PartitionName::Data));
         assert!(saved_partitions.contains(&PartitionName::Cert));
         assert!(!saved_partitions.contains(&PartitionName::Boot));
@@ -598,7 +524,7 @@ mod tests {
         // The round trip that gets a core-partition record into the JSON:
         // apply_boot_env_decision persists it to the env and drops it from
         // ods_status; the drain brings it back.
-        let mut bl = crate::bootloader::MockBootEnv::new();
+        let mut bl = MockBootEnv::new();
         bl.save_fsck_status(
             PartitionName::Boot,
             FsckExitCode::CORRECTED,
@@ -621,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_drain_keeps_this_boot_results_and_adds_stale_ones() {
-        let mut bl = crate::bootloader::MockBootEnv::new();
+        let mut bl = MockBootEnv::new();
         bl.save_fsck_status(
             PartitionName::Boot,
             FsckExitCode::CORRECTED,
@@ -658,7 +584,7 @@ mod tests {
     #[test]
     fn test_drain_read_failure_does_not_abort() {
         let mut ods = OdsStatus::new();
-        let mut bl = FsckReadFailsBootEnv;
+        let mut bl = MockBootEnv::new().with_get_fsck_error();
 
         // Must not panic.
         drain_fsck_env(&mut ods, Some(&mut bl));
@@ -675,7 +601,7 @@ mod tests {
             "reboot required",
         );
         let temp = TempDir::new().unwrap();
-        let mut bl = FailingBootEnv;
+        let mut bl = MockBootEnv::new().with_save_fsck_error();
 
         // Must not panic.
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
@@ -686,12 +612,12 @@ mod tests {
         // When data partition is not mounted (normal in tests), no log dir is created.
         let ods = make_ods_with(PartitionName::Boot, FsckExitCode::CORRECTED, "some output");
         let temp = TempDir::new().unwrap();
-        let mut bl = TrackingBootEnv::new();
+        let mut bl = MockBootEnv::new();
 
         persist_fsck_results(&ods, Some(&mut bl), temp.path());
 
         // BootEnv was still called.
-        assert_eq!(bl.saved.len(), 1);
+        assert_eq!(bl.saved_fsck_calls().lock().unwrap().len(), 1);
         // But log dir must not be created (data not mounted).
         assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
     }

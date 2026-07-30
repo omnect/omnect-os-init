@@ -33,6 +33,43 @@ fn fsck_file_path(partition: PartitionName) -> std::path::PathBuf {
     Path::new(BOOT_DIR_PATH).join(format!("fsck.{partition}"))
 }
 
+/// Where a partition's fsck record lives. One mapping shared by
+/// `save_fsck_status`, `get_fsck_status` and `clear_fsck_status`, so the
+/// partition-to-channel rule can't diverge between them.
+enum FsckChannel {
+    /// The boot partition's own record: grubenv, via `BootEnvKey::FsckStatus`.
+    Env,
+    /// Every other partition: a file on the boot partition — grubenv is a
+    /// small, fixed-size block that storing multiple large blobs would overflow.
+    File,
+}
+
+impl FsckChannel {
+    fn for_partition(partition: PartitionName) -> Self {
+        match partition {
+            PartitionName::Boot => Self::Env,
+            PartitionName::RootA
+            | PartitionName::RootB
+            | PartitionName::RootCurrent
+            | PartitionName::Factory
+            | PartitionName::Cert
+            | PartitionName::Etc
+            | PartitionName::Data => Self::File,
+            #[cfg(feature = "dos")]
+            PartitionName::Extended => Self::File,
+        }
+    }
+}
+
+/// Maps an I/O failure on `file_path` into a `BootEnvError`, naming the action
+/// (`"read"`, `"write"`, `"remove"`) for diagnosis.
+fn io_err(action: &str, file_path: &Path, e: std::io::Error) -> BootEnvError {
+    BootEnvError::CommandFailed {
+        command: format!("{action} {}", file_path.display()),
+        reason: e.to_string(),
+    }
+}
+
 /// Store the boot partition's encoded fsck record, retrying with the exit code
 /// alone when the full record does not fit.
 ///
@@ -58,10 +95,7 @@ where
 
 fn save_fsck_to_file(partition: PartitionName, encoded: &str) -> crate::bootloader::Result<()> {
     let file_path = fsck_file_path(partition);
-    fs::write(&file_path, encoded).map_err(|e| BootEnvError::CommandFailed {
-        command: format!("write {}", file_path.display()),
-        reason: e.to_string(),
-    })?;
+    fs::write(&file_path, encoded).map_err(|e| io_err("write", &file_path, e))?;
     sync_filesystems();
     Ok(())
 }
@@ -71,10 +105,7 @@ fn get_fsck_from_file(partition: PartitionName) -> crate::bootloader::Result<Opt
     if !file_path.is_file() {
         return Ok(None);
     }
-    let encoded = fs::read_to_string(&file_path).map_err(|e| BootEnvError::CommandFailed {
-        command: format!("read {}", file_path.display()),
-        reason: e.to_string(),
-    })?;
+    let encoded = fs::read_to_string(&file_path).map_err(|e| io_err("read", &file_path, e))?;
     // Remove file after reading; each fsck result is consumed once.
     if let Err(e) = fs::remove_file(&file_path) {
         log::warn!(
@@ -89,10 +120,7 @@ fn get_fsck_from_file(partition: PartitionName) -> crate::bootloader::Result<Opt
 fn clear_fsck_file(partition: PartitionName) -> crate::bootloader::Result<()> {
     let file_path = fsck_file_path(partition);
     if file_path.exists() {
-        fs::remove_file(&file_path).map_err(|e| BootEnvError::CommandFailed {
-            command: format!("remove {}", file_path.display()),
-            reason: e.to_string(),
-        })?;
+        fs::remove_file(&file_path).map_err(|e| io_err("remove", &file_path, e))?;
         sync_filesystems();
     }
     Ok(())
@@ -182,8 +210,8 @@ impl BootEnv for GrubBootEnv {
     ) -> Result<()> {
         let encoded = encode_fsck_output(code.bits(), output);
 
-        match partition {
-            PartitionName::Boot => {
+        match FsckChannel::for_partition(partition) {
+            FsckChannel::Env => {
                 // When the boot partition's own fsck requests a reboot, writing to
                 // grubenv is unreliable — the filesystem is in an inconsistent state.
                 // Skip; a clean check runs on next boot.
@@ -194,57 +222,28 @@ impl BootEnv for GrubBootEnv {
                     return Ok(());
                 }
                 write_boot_fsck_record(code, &encoded, |payload| {
-                    self.set_env(BootEnvKey::FsckStatus(PartitionName::Boot), Some(payload))
+                    self.set_env(BootEnvKey::FsckStatus(partition), Some(payload))
                 })
             }
-            PartitionName::RootA
-            | PartitionName::RootB
-            | PartitionName::RootCurrent
-            | PartitionName::Factory
-            | PartitionName::Cert
-            | PartitionName::Etc
-            | PartitionName::Data => {
-                // Non-boot partitions: write diagnostic to a file on the boot partition
-                // instead of grubenv. grubenv is a small, fixed-size block — storing multiple
-                // large encoded blobs there would overflow it. Boot is healthy at this point
-                // (its own fsck ran first), so this write is safe regardless of this
-                // partition's exit code.
-                save_fsck_to_file(partition, &encoded)
-            }
-            #[cfg(feature = "dos")]
-            PartitionName::Extended => save_fsck_to_file(partition, &encoded),
+            // Boot is healthy at this point (its own fsck ran first), so this
+            // write is safe regardless of this partition's exit code.
+            FsckChannel::File => save_fsck_to_file(partition, &encoded),
         }
     }
 
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
-        match partition {
-            PartitionName::Boot => Ok(self
-                .get_env(BootEnvKey::FsckStatus(PartitionName::Boot))?
+        match FsckChannel::for_partition(partition) {
+            FsckChannel::Env => Ok(self
+                .get_env(BootEnvKey::FsckStatus(partition))?
                 .and_then(|v| decode_fsck_output(&v))),
-            PartitionName::RootA
-            | PartitionName::RootB
-            | PartitionName::RootCurrent
-            | PartitionName::Factory
-            | PartitionName::Cert
-            | PartitionName::Etc
-            | PartitionName::Data => get_fsck_from_file(partition),
-            #[cfg(feature = "dos")]
-            PartitionName::Extended => get_fsck_from_file(partition),
+            FsckChannel::File => get_fsck_from_file(partition),
         }
     }
 
     fn clear_fsck_status(&mut self, partition: PartitionName) -> Result<()> {
-        match partition {
-            PartitionName::Boot => self.set_env(BootEnvKey::FsckStatus(PartitionName::Boot), None),
-            PartitionName::RootA
-            | PartitionName::RootB
-            | PartitionName::RootCurrent
-            | PartitionName::Factory
-            | PartitionName::Cert
-            | PartitionName::Etc
-            | PartitionName::Data => clear_fsck_file(partition),
-            #[cfg(feature = "dos")]
-            PartitionName::Extended => clear_fsck_file(partition),
+        match FsckChannel::for_partition(partition) {
+            FsckChannel::Env => self.set_env(BootEnvKey::FsckStatus(partition), None),
+            FsckChannel::File => clear_fsck_file(partition),
         }
     }
 }
@@ -252,6 +251,37 @@ impl BootEnv for GrubBootEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_boot_uses_the_env_channel() {
+        assert!(matches!(
+            FsckChannel::for_partition(PartitionName::Boot),
+            FsckChannel::Env
+        ));
+        for partition in [
+            PartitionName::RootA,
+            PartitionName::RootB,
+            PartitionName::RootCurrent,
+            PartitionName::Factory,
+            PartitionName::Cert,
+            PartitionName::Etc,
+            PartitionName::Data,
+        ] {
+            assert!(
+                matches!(FsckChannel::for_partition(partition), FsckChannel::File),
+                "{partition} must use the file channel"
+            );
+        }
+    }
+
+    #[cfg(feature = "dos")]
+    #[test]
+    fn extended_uses_the_file_channel() {
+        assert!(matches!(
+            FsckChannel::for_partition(PartitionName::Extended),
+            FsckChannel::File
+        ));
+    }
 
     fn block_too_small() -> BootEnvError {
         BootEnvError::CommandFailed {

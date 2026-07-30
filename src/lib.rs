@@ -198,40 +198,10 @@ pub fn run_init() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootloader::{BootEnvKey, MockBootEnv};
+    use crate::bootloader::MockBootEnv;
     use crate::error::{BootEnvError, FilesystemError, InitramfsError};
     use crate::filesystem::FsckExitCode;
-    use crate::partition::PartitionName;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    /// Reports which partitions reached `save_fsck_status` through a handle the
-    /// test keeps, since the env itself is dropped on the error path.
-    struct RecordingBootEnv {
-        saved: Arc<Mutex<Vec<PartitionName>>>,
-    }
-
-    impl BootEnv for RecordingBootEnv {
-        fn get_env(&self, _key: BootEnvKey) -> crate::bootloader::Result<Option<String>> {
-            Ok(None)
-        }
-        fn set_env(
-            &mut self,
-            _key: BootEnvKey,
-            _value: Option<&str>,
-        ) -> crate::bootloader::Result<()> {
-            Ok(())
-        }
-        fn save_fsck_status(
-            &mut self,
-            partition: PartitionName,
-            _code: FsckExitCode,
-            _output: &str,
-        ) -> crate::bootloader::Result<()> {
-            self.saved.lock().unwrap().push(partition);
-            Ok(())
-        }
-    }
 
     fn make_available() -> BootEnvDecision {
         BootEnvDecision::Continue(BootEnvState::Available(Box::new(MockBootEnv::new())))
@@ -338,8 +308,7 @@ mod tests {
         // or it is lost across the reboot (mount_core_partitions persist-before-propagate contract).
         //
         // The env is moved into the decision and dropped when the error returns, so
-        // the mock reports through a handle the test keeps.
-        let saved = Arc::new(Mutex::new(Vec::new()));
+        // the call log is read through a handle obtained before the move.
         let mut ods = OdsStatus::new();
         ods.record_fsck_result(
             crate::partition::PartitionName::Boot,
@@ -347,10 +316,9 @@ mod tests {
             "errors corrected on pass 1".into(),
         );
 
-        let decision =
-            BootEnvDecision::Continue(BootEnvState::Available(Box::new(RecordingBootEnv {
-                saved: Arc::clone(&saved),
-            })));
+        let bl = MockBootEnv::new();
+        let saved = bl.saved_fsck_calls();
+        let decision = BootEnvDecision::Continue(BootEnvState::Available(Box::new(bl)));
         let result =
             apply_boot_env_decision(decision, fsck_reboot_err(), &mut ods, Path::new("/tmp"));
 
@@ -363,8 +331,9 @@ mod tests {
             ),
             "FsckRequiresReboot must still propagate"
         );
+        let saved = saved.lock().unwrap();
         assert_eq!(
-            *saved.lock().unwrap(),
+            saved.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(),
             vec![crate::partition::PartitionName::Boot],
             "persist_fsck_results must run before propagating FsckRequiresReboot \
              (mount_core_partitions persist-before-propagate contract)"

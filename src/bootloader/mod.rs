@@ -290,6 +290,14 @@ pub struct MockBootEnv {
     /// When set, `set_env` stores this fixed value instead of the given one,
     /// simulating a bootloader tool that normalizes the written value.
     set_env_normalize: Option<String>,
+    /// Every `save_fsck_status` call, in call order. Shared so a handle
+    /// obtained before the mock is moved (e.g. into a `Box<dyn BootEnv>`) can
+    /// still be read after the mock itself is dropped.
+    saved_fsck_calls: std::sync::Arc<std::sync::Mutex<Vec<(PartitionName, FsckExitCode, String)>>>,
+    /// When true, `save_fsck_status` returns an error instead of recording.
+    save_fsck_errors: bool,
+    /// When true, `get_fsck_status` returns an error instead of looking up the partition.
+    get_fsck_errors: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -321,6 +329,24 @@ impl MockBootEnv {
     pub fn with_set_env_normalize(mut self, stored: &str) -> Self {
         self.set_env_normalize = Some(stored.to_string());
         self
+    }
+
+    pub fn with_save_fsck_error(mut self) -> Self {
+        self.save_fsck_errors = true;
+        self
+    }
+
+    pub fn with_get_fsck_error(mut self) -> Self {
+        self.get_fsck_errors = true;
+        self
+    }
+
+    /// A handle to this mock's `save_fsck_status` call log, readable even
+    /// after the mock has been moved and dropped.
+    pub fn saved_fsck_calls(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<(PartitionName, FsckExitCode, String)>>> {
+        std::sync::Arc::clone(&self.saved_fsck_calls)
     }
 }
 
@@ -368,6 +394,16 @@ impl BootEnv for MockBootEnv {
         code: FsckExitCode,
         output: &str,
     ) -> Result<()> {
+        if self.save_fsck_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected save_fsck_status error".into(),
+            });
+        }
+        self.saved_fsck_calls
+            .lock()
+            .unwrap()
+            .push((partition, code, output.to_string()));
         self.fsck.insert(
             partition,
             FsckRecord {
@@ -379,6 +415,12 @@ impl BootEnv for MockBootEnv {
     }
 
     fn get_fsck_status(&self, partition: PartitionName) -> Result<Option<FsckRecord>> {
+        if self.get_fsck_errors {
+            return Err(crate::error::BootEnvError::CommandFailed {
+                command: "mock".into(),
+                reason: "injected get_fsck_status error".into(),
+            });
+        }
         Ok(self.fsck.get(&partition).cloned())
     }
 

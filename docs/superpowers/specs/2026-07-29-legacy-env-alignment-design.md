@@ -278,6 +278,34 @@ instead of depending on what happens to sync next.
 
 ---
 
+### 6.2 Structural cleanups from a follow-up review pass
+
+A second review pass on the finished change (no new behaviour claim, just
+duplication this branch had grown):
+
+- **`FsckChannel`.** `save_fsck_status`, `get_fsck_status` and
+  `clear_fsck_status` each matched on `PartitionName` to pick grubenv vs. a
+  file — the same rule three times, free to diverge. Replaced with one
+  `FsckChannel::for_partition` and a match on the channel in each method.
+- **`io_err`.** The three file-backed helpers (`save_fsck_to_file`,
+  `get_fsck_from_file`, `clear_fsck_file`) each hand-built
+  `BootEnvError::CommandFailed { command: format!("<verb> {path}"), reason:
+  e.to_string() }`. One helper now takes the verb and the path.
+- **`MockBootEnv` fsck injection.** Four ad-hoc `BootEnv` test doubles
+  (`RecordingBootEnv` in `lib.rs`; `TrackingBootEnv`, `FailingBootEnv`,
+  `FsckReadFailsBootEnv` in `boot_sequence.rs`) existed only because
+  `MockBootEnv` had `with_get_env_error`/`with_set_env_error` but no
+  fsck-specific equivalent. Added `with_save_fsck_error`,
+  `with_get_fsck_error`, and `saved_fsck_calls()` — a shared handle usable
+  even after the mock is moved into a `Box<dyn BootEnv>` and dropped, which is
+  what `RecordingBootEnv` existed to work around.
+
+`sync_filesystems` (§6) predates this pass by one commit and is the same
+category of fix: one definition instead of a duplicate with its own copy of
+the rationale.
+
+---
+
 ## 7. Cross-repo changes
 
 The initramfs change alone does not make the smoke test pass.
