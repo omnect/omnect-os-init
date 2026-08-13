@@ -6,7 +6,7 @@ to the Rust initramfs.
 
 **This spec has a blocking section: [§10 Decisions required from
 reviewers](#10-decisions-required-from-reviewers). Implementation must not start
-before reviewers have answered those five items.**
+before reviewers have answered those six items.**
 
 ## 1. Overview
 
@@ -86,10 +86,15 @@ Relative to the legacy scripts this is partly a match and partly a deviation:
 
 - **matches** — legacy ran the flash modes at `init.d/87`, ahead of `resize-data`
   (88) and `fs-mount` (89);
-- **deviates** — the Rust initramfs mounts the rootfs, and on GRUB the boot
-  partition, in `mount_core_partitions` before dispatch, where legacy mounted the
-  boot partition on demand for environment access only. Each mode unmounts what
-  it needs to before writing;
+- **deviates** — the Rust initramfs mounts the rootfs at `/sysroot` and the boot
+  partition at `/sysroot/boot` in `mount_core_partitions` before dispatch, on both
+  bootloaders. Legacy mounted the boot partition on demand for environment access
+  only (GRUB), and `fs-mount` (89) ran after the flash modes, so the rootfs was
+  never mounted while a flash mode ran. This matters for mode 1, which images the
+  running rootfs: every mode therefore unmounts `/sysroot` completely before
+  writing anything (§4.1 step 5, §5.1). Nothing in any mode needs `/sysroot` —
+  no mode reaches `switch_root`, and `grubenv.in` and `uboot-env.bin` live in the
+  initramfs at `/etc/omnect/`;
 - **deviates** — the extra-bootargs sync step has no legacy counterpart and is
   skipped for flash modes.
 
@@ -151,13 +156,27 @@ Mode 2 adds two through the same mechanism:
 
 | Yocto variable | Constant | Note |
 |---|---|---|
-| `OMNECT_PART_OFFSET_BOOT` + `OMNECT_PART_SIZE_BOOT` | `DD_ZERO_SIZE` | sum, in KB |
-| `OMNECT_FLASH_MODE_2_DIRECT_FLASHING` | `DIRECT_FLASHING` | bool |
+| `OMNECT_PART_OFFSET_BOOT` + `OMNECT_PART_SIZE_BOOT` | `DD_ZERO_SIZE` | `Option<u64>`, sum in KB |
+| `OMNECT_FLASH_MODE_2_DIRECT_FLASHING` | `DIRECT_FLASHING` | `bool`, `1` → `true`, anything else → `false` |
 
-All are `Option<...>` and absent on builds that do not set them, exactly like the
-existing five.
+`DD_ZERO_SIZE` is `Option<u64>` and absent on builds that do not set it, exactly
+like the existing five; mode 2 treats it as a missing required constant.
+`DIRECT_FLASHING` is a plain `bool` defaulting to `false` when the variable is
+absent or is not `1`, matching the legacy
+`oe.utils.conditional('OMNECT_FLASH_MODE_2_DIRECT_FLASHING', '1', 'true', 'false')`.
+The legacy recipe computes the sum with `bc` because bitbake does not evaluate
+shell arithmetic; `build.rs` sums the two values itself and needs only the two
+Yocto variables.
 
 ## 3. Component changes
+
+### 3.0 `build.rs`
+
+Two more `rerun-if-env-changed` lines and two more generated constants for mode 2
+(§2.7): `DD_ZERO_SIZE`, summed from `OMNECT_PART_OFFSET_BOOT` and
+`OMNECT_PART_SIZE_BOOT`, and `DIRECT_FLASHING`. The existing `read_u64_env` helper
+covers the first; the second needs a small boolean reader. The doc-comment table
+at the top of `build.rs` gains both rows.
 
 ### 3.1 `src/bootloader/mod.rs`
 
@@ -204,10 +223,23 @@ pub enum BootMode {
 }
 ```
 
-Detection precedence: flash mode is checked before factory reset. A flash
-replaces the whole disk, so a factory reset queued alongside it is meaningless;
-the flash wins and the `factory-reset` key is left untouched for the boot that
-follows.
+Detection precedence: flash mode is checked before factory reset, so a flash wins
+when both triggers are set. This is a deviation from legacy, which ran
+`init.d/86-factory-reset` before `init.d/87-flash_mode_*` and would therefore have
+run both. It follows from single-mode dispatch — `BootMode` selects exactly one
+handler — and it is the right outcome for modes 2 and 3, where the reset would be
+undone moments later by the whole-disk overwrite.
+
+For mode 1 the legacy behaviour was meaningful: the source disk survives the
+clone, so resetting it first left the operator with a reset source disk *and* a
+fresh clone. Losing that is a real behaviour change, recorded in §9 and raised for
+reviewers in §10.6.
+
+Note also that the queued `factory-reset` key does not survive modes 2 and 3. On
+U-Boot the environment lives at the `UBOOT_ENV1_START`/`UBOOT_ENV2_START` byte
+offsets, and mode 2's own zeroing of the first `DD_ZERO_SIZE` KB reaches through
+that region; on GRUB, `grubenv` sits on the boot partition, which the flash
+overwrites. The reset request is destroyed, not deferred.
 
 ### 3.4 `src/lib.rs`
 
@@ -257,8 +289,12 @@ resolves the current mismatch where the project `CLAUDE.md` feature table lists
 3. Wait for the destination block device, bounded (§7).
 4. Reject an empty destination, a destination that is not a block device, and a
    destination equal to the source.
-5. On GRUB: `sync`, then unmount the boot partition, so the `dd` of the boot
-   partition reads a consistent image.
+5. `sync`, then unmount `/sysroot` completely — the boot partition first, then the
+   rootfs. Both are mounted by `mount_core_partitions` on both bootloaders. The
+   boot unmount is needed so the `dd` of the boot partition reads a consistent
+   image; the rootfs unmount is needed so step 12 does not run `e2image` against a
+   filesystem the kernel currently has mounted, with live superblock and journal
+   state.
 6. Read the source partition-table dump, rewrite it (§4.2), apply it to the
    destination.
 7. Verify every expected destination partition now exists as a block device.
@@ -317,8 +353,9 @@ bring up the network, flash, EFI handling, `sync`, `reboot`.
 
 ### 5.1 Unmounting
 
-On GRUB, `sync` and unmount the boot partition first. Then unmount every other
-mount point backed by the target disk, by sweeping `/proc/mounts`.
+`sync`, then unmount `/sysroot` completely — boot partition first, then rootfs, on
+both bootloaders (§2.3). Then unmount every remaining mount point backed by the
+target disk, by sweeping `/proc/mounts`.
 
 ### 5.2 Network setup (`net.rs`)
 
@@ -500,6 +537,11 @@ Behaviour changes, as opposed to bug fixes:
 
 - unbounded waits become bounded (§7);
 - the extra-bootargs sync step is skipped for flash modes (§2.3);
+- every mode unmounts `/sysroot` fully before writing, because the Rust flow mounts
+  it before dispatch and legacy did not (§2.3). Without this, mode 1 would image a
+  mounted `rootCurrent`;
+- a queued factory reset no longer runs before a flash. Legacy ran both (86 then
+  87); single-mode dispatch runs only the flash (§2.3, §10.6);
 - modes 2 and 3 may persist a log where legacy did not (§8.3, §10.5).
 
 ## 10. Decisions required from reviewers
@@ -547,6 +589,21 @@ where a log would help most.
 **Default: best-effort after success.** Overturning this means kmsg and console
 only, exactly like legacy.
 
+### 10.6 Should a queued factory reset still run before mode 1?
+
+Legacy ran `init.d/86-factory-reset` before `init.d/87-flash_mode_1`, so both
+happened: the source disk was reset, then cloned. Single-mode `BootMode` dispatch
+gives one handler, so the flash wins and the reset is dropped (§2.3, §9).
+
+For modes 2 and 3 this loses nothing — the reset would be overwritten seconds
+later. For mode 1 it does: the source disk survives the clone, and an operator who
+queued both reasonably expects a reset source disk as well as a fresh clone.
+
+**Default: the flash wins, the reset is dropped.** Overturning this for mode 1
+means running the factory-reset sequence first and then continuing into the clone
+instead of into Normal boot — a structural change to dispatch, so it needs to be
+decided before implementation, not after.
+
 ## 11. Testing
 
 Decision logic is pure and unit-tested; command execution is a thin layer that is
@@ -565,7 +622,7 @@ only smoke-tested. Real end-to-end coverage stays in Concourse CI on hardware.
 | `curl` options selected from `MACHINE_FEATURES` `rtc` | unit | `src/mode/flash/url.rs` |
 | scp instruction text includes the acquired IP | unit | `src/mode/flash/scp.rs` |
 | Detection: flash mode takes precedence over factory reset | unit | `src/mode/mod.rs` |
-| Detection: mode 2 flag-file trigger | unit | `src/mode/flash/config.rs` |
+| Detection: mode 2 flag-file trigger, present and absent | integration | `tests/flash_modes.rs` |
 | Clear-first ordering, asserted via `set_env_calls` | integration | `tests/flash_modes.rs` |
 | Boot-env read failure falls back to Normal boot | integration | `tests/flash_modes.rs` |
 
