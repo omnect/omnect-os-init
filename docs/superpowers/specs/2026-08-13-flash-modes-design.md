@@ -168,6 +168,45 @@ The legacy recipe computes the sum with `bc` because bitbake does not evaluate
 shell arithmetic; `build.rs` sums the two values itself and needs only the two
 Yocto variables.
 
+### 2.8 External tools and in-process equivalents
+
+Paths verified against `buildhistory` for a built `omnect-os-initramfs`
+(`raspberrypi4_64`, U-Boot, `flash-mode-2` and `flash-mode-3` both enabled). The
+image is usrmerged — `/bin -> usr/bin` and `/sbin -> usr/sbin` — so the
+`/sbin/...` form the existing code uses resolves correctly.
+
+| Tool | Path | Package | Modes |
+|---|---|---|---|
+| `sfdisk` | `/usr/sbin/sfdisk` | `util-linux-sfdisk` | 1 |
+| `e2image` | `/usr/sbin/e2image` | `e2fsprogs` | 1 |
+| `mkfs.ext4` | `/usr/sbin/mkfs.ext4` | `e2fsprogs-mke2fs` | 1 |
+| `tune2fs` | `/usr/sbin/tune2fs` | `e2fsprogs-tune2fs` | 1 |
+| `uuidgen` | `/usr/bin/uuidgen` | `util-linux-uuidgen` | 1 |
+| `dd` | `/usr/bin/dd` | `coreutils` | 1, 2 |
+| `bmaptool` | `/usr/bin/bmaptool` | `bmaptool` | 2, 3 |
+| `curl` | `/usr/bin/curl` | `curl` | 3 |
+| `dhcpcd` | `/usr/sbin/dhcpcd` | `dhcpcd` | 2, 3 |
+| `dropbear` | `/usr/sbin/dropbear` | `dropbear` | 2 |
+| `efibootmgr` | `/usr/sbin/efibootmgr` | `efibootmgr` | 1, 2, 3, EFI machines only |
+
+`efibootmgr` is absent from the verified image, which has no `efi` in
+`MACHINE_FEATURES` — consistent with the recipe gating and with §6 applying only
+on EFI machines.
+
+Four operations the legacy scripts shell out for are done in-process instead,
+because `nix` is already a dependency with the required features enabled:
+
+| Legacy | In-process |
+|---|---|
+| `mkfifo` | `nix::unistd::mkfifo` |
+| `chown omnect:omnect` | `nix::unistd::chown`, with the uid/gid looked up via the `user` feature |
+| `sync` | `nix::unistd::sync` |
+| `reboot -f` / `poweroff -f` | `nix::sys::reboot::reboot` with `RB_AUTOBOOT` / `RB_POWER_OFF` |
+
+The reboot call follows the existing pattern in `handle_fatal_error`: it returns
+`Result<Infallible>`, so the `Ok` arm is uninhabited and only the error path is
+reachable.
+
 ## 3. Component changes
 
 ### 3.0 `build.rs`
@@ -642,11 +681,12 @@ Implemented separately, listed here so nothing is lost:
   today, and keep the `omnect_user` class inherited for mode 2;
 - retire `init.d/87-flash_mode_{1,2,3}` and the `sed` substitutions in
   `omnect-os-initramfs-scripts.bb` once the Rust path ships;
-- **to verify there, not asserted here:** which package provides `e2image`. Mode 1
-  needs it and ships unconditionally today, which suggests it comes with the
-  installed `e2fsprogs` package, but the image recipe lists only `e2fsprogs`,
-  `e2fsprogs-mke2fs` and `e2fsprogs-tune2fs`, and this was not confirmed against
-  the `e2fsprogs` recipe.
+- **no package changes needed.** Verified against `buildhistory` for a built
+  `omnect-os-initramfs`: every tool the three modes need is already installed
+  (§2.8). In particular `e2image` ships in the base `e2fsprogs` package at
+  `/usr/sbin/e2image`, which `PACKAGE_INSTALL` already pulls in, so the fact that
+  the recipe names only `e2fsprogs`, `e2fsprogs-mke2fs` and `e2fsprogs-tune2fs` is
+  not a gap.
 
 ## 13. Interactions
 
