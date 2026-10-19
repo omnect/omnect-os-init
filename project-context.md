@@ -19,7 +19,7 @@ src/
 │   ├── mod.rs               # BootEnv trait, BootEnvState, classify_boot_env()
 │   ├── grub.rs              # GRUB implementation (grub-editenv)
 │   ├── uboot.rs             # U-Boot implementation (fw_printenv/fw_setenv)
-│   └── types.rs             # BootloaderType enum
+│   └── types.rs             # fsck output encoding for the bootloader env
 ├── config/
 │   └── mod.rs               # /proc/cmdline parser; build-time constants via build.rs
 ├── filesystem/
