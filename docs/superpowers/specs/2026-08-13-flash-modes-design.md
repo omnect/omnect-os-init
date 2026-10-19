@@ -286,8 +286,7 @@ The in-process `bmaptool copy` makes the release binary about 166 KiB larger
 `xz` from the initramfs. The decoder and the parser run in PID 1 with
 `panic = "abort"`, so a panic on a malformed stream is a kernel panic, where a
 crashed `bmaptool` was a failed attempt. `lzma-rust2` and `quick-xml` have no
-`unsafe` code in the features used, and `lzma-rust2` is pinned to an exact
-version until it reaches 1.0, because each 0.x update can change the decoder.
+`unsafe` code in the features used.
 
 Mode 3 adds about 28 KiB on top of that (x86-64, the same features plus
 `flash-mode-3`, build constants set), because it
