@@ -19,8 +19,6 @@ path = "src/main.rs"
 base64 = { version = "0.22", default-features = false, features = ["alloc"], optional = true }
 hex = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 log = { version = "0.4", default-features = false, features = ["std"] }
-# Exact pin: while the crate is not stable, any update can change the decoder
-# that runs in PID 1, so each update needs a review.
 lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"], optional = true }
 nix = { version = "0.29", default-features = false, features = ["fs", "ioctl", "mount", "net", "process", "reboot", "user"] }
 quick-xml = { version = "0.42", default-features = false, features = ["serialize"], optional = true }
