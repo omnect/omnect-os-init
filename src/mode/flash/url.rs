@@ -282,8 +282,8 @@ impl UrlOps for RealUrlOps {
             path: image.to_path_buf(),
             reason,
         };
-        let file = File::open(image).map_err(|e| invalid(e.to_string()))?;
-        xz_uncompressed_size(file).map_err(|e| invalid(format!("reading the xz index: {e}")))
+        let file = File::open(image).map_err(|e| invalid(format!("opening: {e}")))?;
+        xz_uncompressed_size(file).map_err(|e| invalid(format!("not a valid xz file: {e}")))
     }
 
     fn device_len(&mut self, disk: &Path) -> Result<u64, FlashError> {
@@ -584,6 +584,28 @@ mod tests {
         let written = fs::read(&disk).unwrap();
         assert_eq!(written[..IMAGE.len()], *IMAGE);
         assert!(written[IMAGE.len()..].iter().all(|&b| b == 0xff));
+    }
+
+    #[test]
+    fn concatenated_streams_are_written_in_full() {
+        let first: &[u8] = b"first stream";
+        let second: &[u8] = b"second stream";
+        let padding = [0u8; 4];
+        let file = [&xz(first)[..], &padding, &xz(second), &padding].concat();
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join(IMAGE_FILE_NAME);
+        let disk = dir.path().join("sdz");
+        fs::write(&image, &file).unwrap();
+        fs::write(&disk, vec![0xff; usize::try_from(DISK_LEN).unwrap()]).unwrap();
+
+        // The size read and the decoder must agree, or the write fails late.
+        let size = RealUrlOps::default().image_size(&image).unwrap();
+        write_image(&image, &disk, size).unwrap();
+
+        let expected = [first, second].concat();
+        let written = fs::read(&disk).unwrap();
+        assert_eq!(written[..expected.len()], expected[..]);
+        assert!(written[expected.len()..].iter().all(|&b| b == 0xff));
     }
 
     #[test]
@@ -1024,10 +1046,18 @@ mod tests {
     fn a_file_that_is_not_xz_has_no_image_size() {
         let mut cut = xz(IMAGE);
         cut.pop();
-        for file in [Vec::new(), IMAGE.to_vec(), cut] {
+        let trailing = [xz(IMAGE), b"garbage!".to_vec()].concat();
+        for (file, upstream_reason) in [
+            (Vec::new(), "too small"),
+            (IMAGE.to_vec(), "too small"),
+            (cut, "footer"),
+            (trailing, "footer"),
+            (vec![0x5a; 64], "footer"),
+        ] {
             let err = real_image_size(&file).unwrap_err();
             assert!(
-                matches!(&err, FlashError::InvalidImage { reason, .. } if reason.starts_with("reading the xz index")),
+                matches!(&err, FlashError::InvalidImage { reason, .. }
+                    if reason.starts_with("not a valid xz file") && reason.contains(upstream_reason)),
                 "{err}"
             );
         }
