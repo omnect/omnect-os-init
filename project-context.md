@@ -49,7 +49,7 @@ src/
 │       ├── net.rs           # eth0 up, dhcpcd; dropbear for mode 2 (feature = flash-mode-network)
 │       ├── scp.rs           # Mode 2 orchestration: scp upload, flash, retry (feature = flash-mode-2)
 │       ├── url.rs           # Mode 3 orchestration: download, check, flash (feature = flash-mode-3)
-│       ├── xz/              # xz decoder; index size reader for mode 3 (feature = flash-mode-network)
+│       ├── xz/              # xz decoder (feature = flash-mode-network)
 │       ├── bmap/            # In-process bmap flash (feature = flash-mode-2)
 │       │   ├── mod.rs       # Bmap type, read, unmapped gaps
 │       │   ├── parse.rs     # bmap XML parsing and checks
