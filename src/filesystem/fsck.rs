@@ -478,7 +478,7 @@ mod tests {
     }
 
     // `/sbin/fsck -y -t ext4` on an image with a damaged directory block
-    // and the needs_recovery flag set.
+    // and the needs_recovery flag set; exits 0.
     const REPLAY_OUTPUT: &str = "fsck from util-linux 2.39.3
 e2fsck 1.47.0 (5-Feb-2023)
 cert: recovering journal
