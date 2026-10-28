@@ -11,16 +11,16 @@ use std::path::{Path, PathBuf};
 use nix::mount::MsFlags;
 
 use crate::bootloader::BootEnv;
-use crate::error::{FilesystemError, InitramfsError, PartitionError};
+use crate::error::{BootEnvError, FilesystemError, InitramfsError, PartitionError};
 use crate::filesystem::{
-    FsType, FsckExitCode, MountOptions, MountPoint, check_filesystem_lenient, is_path_mounted,
-    mount, mount_points, mount_tmpfs,
+    FsType, FsckExitCode, MountOptions, MountPoint, check_filesystem_lenient, create_root_only_dir,
+    create_root_only_file, is_path_mounted, mount, mount_points, mount_tmpfs,
 };
 use crate::partition::{PartitionLayout, PartitionName};
 use crate::runtime::OdsStatus;
 
 /// Subdirectory within the data partition where fsck logs are written.
-const FSCK_LOG_SUBDIR: &str = "var/log/fsck";
+const FSCK_LOG_SUBDIR: &str = "log/fsck";
 
 /// Every partition passed to `fsck_and_record`, which is what `drain_fsck_env`
 /// looks for in the boot env. Adding a fsck'd partition without listing it here
@@ -38,7 +38,7 @@ const FSCK_PARTITIONS: [PartitionName; 5] = [
 /// Records the result even when fsck reports errors (exit ≥ 4) and does not fail
 /// the boot: proceeding despite fsck errors is preferable to an unrecoverable
 /// brick on an embedded device without physical access. The full fsck result is
-/// persisted via `OdsStatus` (→ boot env + `/data/var/log/fsck/<partition>.log`)
+/// persisted via `OdsStatus` (→ boot env + `/data/log/fsck/<partition>.log`)
 /// so ODS can act on it at runtime — independent of `OdsStatus.degraded_boot`,
 /// which is reserved for the env-unavailable condition.
 ///
@@ -205,7 +205,6 @@ pub fn mount_remaining_partitions(
         }
     }
 
-    // Mount cert partition read-write — initramfs creates ca/ and priv/ subdirs on first boot
     if let Some(cert_dev) = layout.partitions.get(&PartitionName::Cert) {
         let cert_mount = rootfs.join(mount_points::CERT_PARTITION);
         if is_path_mounted(&cert_mount)? {
@@ -279,8 +278,9 @@ fn write_fsck_log(
     partition: PartitionName,
     output: &str,
 ) -> std::io::Result<PathBuf> {
+    create_root_only_dir(log_dir)?;
     let log_path = log_dir.join(format!("{partition}.log"));
-    let mut file = fs::File::create(&log_path)?;
+    let mut file = create_root_only_file(&log_path)?;
     file.write_all(output.as_bytes())?;
     file.sync_all()?;
     // Flushing the file does not make its name durable — that lives in the directory.
@@ -295,8 +295,8 @@ fn write_fsck_log(
 ///   environment (grubenv / uboot-env), so the record survives a reboot that
 ///   happens before the ODS status JSON is written. `drain_fsck_env` consumes it.
 ///   Skipped with a warning when `bootloader` is `None` (env unavailable).
-/// - Writes the full output to `/data/var/log/fsck/<partition>.log` (written
-///   to /rootfs/mnt/data/var/log/fsck/; visible as `/data/var/log/fsck/`
+/// - Writes the full output to `/data/log/fsck/<partition>.log` (written
+///   to /rootfs/mnt/data/log/fsck/; visible as `/data/log/fsck/`
 ///   after switch_root) so ODS and operators can inspect it after boot.
 ///   Written regardless of boot env availability when the data partition is mounted.
 pub fn persist_fsck_results(
@@ -344,13 +344,9 @@ pub fn persist_fsck_results(
                 );
                 continue;
             }
-            if let Err(e) = fs::create_dir_all(&log_dir) {
-                log::warn!("Failed to create fsck log dir {}: {}", log_dir.display(), e);
-            } else {
-                match write_fsck_log(&log_dir, *partition, &fsck.output) {
-                    Ok(path) => log::info!("Wrote fsck log: {}", path.display()),
-                    Err(e) => log::warn!("Failed to write fsck log for {partition}: {e}"),
-                }
+            match write_fsck_log(&log_dir, *partition, &fsck.output) {
+                Ok(path) => log::info!("Wrote fsck log: {}", path.display()),
+                Err(e) => log::warn!("Failed to write fsck log for {partition}: {e}"),
             }
         }
     }
@@ -372,6 +368,14 @@ pub fn drain_fsck_env(ods_status: &mut OdsStatus, bootloader: Option<&mut dyn Bo
     for partition in FSCK_PARTITIONS {
         let record = match bl.get_fsck_status(partition) {
             Ok(r) => r,
+            Err(e @ BootEnvError::InvalidValue { .. }) => {
+                // Otherwise it stays in the env on every later boot.
+                log::warn!("Dropping the fsck record for {partition}: {e}");
+                if let Err(e) = bl.clear_fsck_status(partition) {
+                    log::warn!("Failed to clear fsck record for {partition} in boot env: {e}");
+                }
+                continue;
+            }
             Err(e) => {
                 log::warn!("Failed to read fsck record for {partition} from boot env: {e}");
                 continue;
@@ -428,6 +432,18 @@ mod tests {
     }
 
     #[test]
+    fn write_fsck_log_makes_the_dir_and_file_root_only() {
+        use std::os::unix::fs::MetadataExt;
+        let temp = TempDir::new().unwrap();
+        let log_dir = temp.path().join("fsck");
+
+        let path = write_fsck_log(&log_dir, PartitionName::Data, "errors corrected").unwrap();
+
+        assert_eq!(fs::metadata(&log_dir).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[test]
     fn test_persist_zero_code_not_saved() {
         // Exercises the is_clean() guard: a clean record that bypassed
         // record_fsck_result must still not reach the boot env.
@@ -478,7 +494,7 @@ mod tests {
 
         assert_eq!(bl.saved_fsck_calls().lock().unwrap().len(), 1);
         // No log dir should be created for empty output.
-        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+        assert!(!temp.path().join("mnt/data/log/fsck").exists());
     }
 
     #[test]
@@ -580,6 +596,17 @@ mod tests {
     }
 
     #[test]
+    fn test_drain_clears_an_undecodable_record() {
+        let mut ods = OdsStatus::new();
+        let mut bl = MockBootEnv::new().with_undecodable_fsck(PartitionName::Data);
+
+        drain_fsck_env(&mut ods, Some(&mut bl));
+
+        assert!(ods.fsck.is_empty());
+        assert_eq!(bl.get_fsck_status(PartitionName::Data).unwrap(), None);
+    }
+
+    #[test]
     fn test_drain_read_failure_does_not_abort() {
         let mut ods = OdsStatus::new();
         let mut bl = MockBootEnv::new().with_get_fsck_error();
@@ -617,7 +644,7 @@ mod tests {
         // BootEnv was still called.
         assert_eq!(bl.saved_fsck_calls().lock().unwrap().len(), 1);
         // But log dir must not be created (data not mounted).
-        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+        assert!(!temp.path().join("mnt/data/log/fsck").exists());
     }
 
     #[test]
@@ -642,7 +669,7 @@ mod tests {
         // Must not panic; no boot env write; no log dir (data not mounted).
         persist_fsck_results(&ods, None, temp.path());
         let lines = crate::logging::capture::take_capture();
-        assert!(!temp.path().join("mnt/data/var/log/fsck").exists());
+        assert!(!temp.path().join("mnt/data/log/fsck").exists());
         let line = "[WARN] Bootloader env unavailable; fsck status for boot not saved to it";
         assert!(lines.iter().any(|l| l == line), "{line:?} not in {lines:?}");
     }

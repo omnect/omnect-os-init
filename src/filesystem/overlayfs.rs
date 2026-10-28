@@ -39,6 +39,9 @@ pub(crate) mod paths {
     /// The data partition layout omits the "usr/" prefix.
     pub const DATA_LOCAL_DIR: &str = "local";
     pub const USR_LOCAL: &str = "usr/local";
+    /// Subdirectory on the data partition that is bind-mounted to /var/log.
+    #[cfg(feature = "persistent-var-log")]
+    pub const DATA_LOG_DIR: &str = "log";
     #[cfg(feature = "persistent-var-log")]
     pub const VAR_LOG: &str = "var/log";
 }
@@ -114,7 +117,7 @@ pub(crate) fn setup_etc_overlay_tracked(
 /// - Overlay for /home (rootfs/home lower, data/home/upper upper)
 /// - Bind mount: data/var/lib -> rootfs/var/lib
 /// - Bind mount: data/local -> rootfs/usr/local
-/// - Conditional: data/var/log -> rootfs/var/log (compile-time `persistent-var-log` feature)
+/// - Conditional: data/log -> rootfs/var/log (compile-time `persistent-var-log` feature)
 pub fn setup_data_overlay(rootfs_dir: &Path) -> Result<()> {
     setup_data_overlay_tracked(rootfs_dir, &mut Vec::new())
 }
@@ -149,7 +152,7 @@ pub(crate) fn setup_data_overlay_tracked(
     #[cfg(feature = "persistent-var-log")]
     {
         bind_mount(
-            &data_mount.join(paths::VAR_LOG),
+            &data_mount.join(paths::DATA_LOG_DIR),
             &rootfs_dir.join(paths::VAR_LOG),
         )?;
         mounts.push(rootfs_dir.join(paths::VAR_LOG));

@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::bootloader::{BootEnv, BootEnvKey};
 use crate::error::{InitramfsError, Result};
-use crate::filesystem::FsckExitCode;
+use crate::filesystem::{FsckExitCode, mount_points, paths};
 use crate::partition::PartitionName;
 
 /// Directory for ODS runtime files.
@@ -31,6 +31,9 @@ const UPDATE_VALIDATE_FAILED_FILE: &str = "omnect_validate_update_failed";
 
 /// BootEnv updated marker
 const BOOTLOADER_UPDATED_FILE: &str = "omnect_bootloader_updated";
+
+/// Config of a local update validation, relative to `/var/lib` on the data partition
+const UPDATE_VALIDATION_CONF: &str = "omnect-device-service/update_validation_conf.json";
 
 /// Name of the omnect-device-service user and group in the rootfs
 const ODS_USER: &str = "omnect_device_service";
@@ -296,7 +299,7 @@ pub fn create_ods_runtime_files(
 
     // Skipped if the bootloader failed to initialise at runtime (e.g. corrupted boot partition).
     if let Some(bl) = bootloader {
-        handle_update_validation(ods_dir, bl, uid, gid)?;
+        handle_update_validation(ods_dir, rootfs_dir, bl, uid, gid)?;
     } else {
         log::warn!(
             "update validation skipped — bootloader unavailable; \
@@ -412,6 +415,7 @@ fn clear_update_flag(bootloader: &mut dyn BootEnv, key: BootEnvKey, marker_set: 
 /// validation boot, the boot after the validation runs the first-boot steps.
 fn handle_update_validation(
     ods_dir: &Path,
+    rootfs_dir: &Path,
     bootloader: &mut dyn BootEnv,
     uid: Uid,
     gid: Gid,
@@ -424,6 +428,10 @@ fn handle_update_validation(
     // send ODS down the wrong update path, so refuse to guess.
     if validate_update && validate_update_failed {
         return Err(InitramfsError::ConflictingUpdateFlags);
+    }
+
+    if !validate_update {
+        remove_update_validation_conf(rootfs_dir);
     }
 
     let bootloader_updated = read_flag(bootloader, BootEnvKey::BootloaderUpdated)?;
@@ -466,6 +474,24 @@ fn handle_update_validation(
     }
 
     Ok(())
+}
+
+/// ODS writes the config before the reboot into the validation boot of an
+/// update it runs itself, and removes it after a successful validation. A failed
+/// validation leaves it behind. An ADU update does not write it but its
+/// validation reads it, so a leftover `"local": true` skips the IoT Hub check.
+///
+/// Best-effort: a boot is not aborted for a file ODS treats as optional.
+fn remove_update_validation_conf(rootfs_dir: &Path) {
+    let path = rootfs_dir
+        .join(mount_points::DATA_PARTITION)
+        .join(paths::VAR_LIB)
+        .join(UPDATE_VALIDATION_CONF);
+    match fs::remove_file(&path) {
+        Ok(()) => log::info!("removed stale {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("failed to remove {}: {e}", path.display()),
+    }
 }
 
 /// Look up the UID for a user in the rootfs /etc/passwd.
@@ -553,6 +579,21 @@ fn set_mode(path: &Path, mode: FilePermission) -> Result<()> {
             e
         )))
     })
+}
+
+/// Compares the ODS JSON of `status` with
+/// `tests/contract/status-factory-reset-<name>.json`.
+#[cfg(test)]
+pub(crate) fn assert_factory_reset_contract(name: &str, status: FactoryResetStatus) {
+    let mut ods = OdsStatus::new();
+    ods.set_factory_reset(status);
+    let file = format!(
+        "{}/tests/contract/status-factory-reset-{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let expected: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(&ods).unwrap(), expected, "{file}");
 }
 
 #[cfg(test)]
@@ -711,6 +752,54 @@ mod tests {
         }
     }
 
+    /// The files in `tests/contract` are the factory reset results that
+    /// omnect-device-service must parse. The factory reset module checks the
+    /// files it can build from its own status functions.
+    #[test]
+    fn factory_reset_status_matches_the_contract_files() {
+        use FactoryResetStatusCode::*;
+        let cases = [
+            ("success", Success, None, None, &["/etc/hostname"][..], true),
+            (
+                "invalid",
+                Invalid,
+                Some("unknown factory reset mode 7"),
+                None,
+                &[][..],
+                false,
+            ),
+            (
+                "error-before-wipe",
+                Error,
+                Some("backup of /etc/hostname failed"),
+                None,
+                &[][..],
+                false,
+            ),
+            (
+                "config-error",
+                ConfigError,
+                Some("unknown preserve topic foo"),
+                None,
+                &[][..],
+                false,
+            ),
+        ];
+
+        for (name, status, error, context, paths, data_wiped) in cases {
+            assert_factory_reset_contract(
+                name,
+                FactoryResetStatus {
+                    status,
+                    error: error.map(str::to_string),
+                    context: context.map(str::to_string),
+                    paths: paths.iter().map(|p| p.to_string()).collect(),
+                    data_wiped,
+                },
+            );
+        }
+    }
+
     #[test]
     fn factory_reset_data_wiped_always_serialized() {
         // Absence of the key would itself be a bug (mirrors first_boot_always_serialized) —
@@ -743,13 +832,111 @@ mod tests {
         );
     }
 
+    fn update_validation_conf(rootfs: &Path) -> std::path::PathBuf {
+        rootfs
+            .join(mount_points::DATA_PARTITION)
+            .join(paths::VAR_LIB)
+            .join(UPDATE_VALIDATION_CONF)
+    }
+
+    fn write_update_validation_conf(rootfs: &Path) -> std::path::PathBuf {
+        let conf = update_validation_conf(rootfs);
+        fs::create_dir_all(conf.parent().unwrap()).unwrap();
+        fs::write(&conf, r#"{"local": true}"#).unwrap();
+        conf
+    }
+
+    #[test]
+    fn test_update_validation_conf_removed_without_validation() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = TempDir::new().unwrap();
+        let conf = write_update_validation_conf(rootfs.path());
+        let mut bl = crate::bootloader::create_mock_bootloader();
+
+        handle_update_validation(
+            temp.path(),
+            rootfs.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
+
+        assert!(!conf.exists());
+    }
+
+    #[test]
+    fn test_update_validation_conf_missing_is_not_an_error() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = TempDir::new().unwrap();
+        let mut bl = crate::bootloader::create_mock_bootloader();
+
+        handle_update_validation(
+            temp.path(),
+            rootfs.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
+
+        assert!(!update_validation_conf(rootfs.path()).exists());
+    }
+
+    #[test]
+    fn test_update_validation_conf_kept_on_validation_boot() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = TempDir::new().unwrap();
+        let conf = write_update_validation_conf(rootfs.path());
+        let mut bl =
+            crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
+
+        handle_update_validation(
+            temp.path(),
+            rootfs.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
+
+        assert!(conf.exists());
+    }
+
+    #[test]
+    fn test_update_validation_conf_removed_after_failed_validation() {
+        let temp = TempDir::new().unwrap();
+        let rootfs = TempDir::new().unwrap();
+        let conf = write_update_validation_conf(rootfs.path());
+        let mut bl = crate::bootloader::create_mock_bootloader()
+            .with_env(BootEnvKey::ValidateUpdateFailed, "1");
+
+        handle_update_validation(
+            temp.path(),
+            rootfs.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
+
+        assert!(!conf.exists());
+    }
+
     #[test]
     fn test_handle_update_validation_value_1() {
         let temp = TempDir::new().unwrap();
         let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
@@ -764,7 +951,14 @@ mod tests {
         let mut bl =
             crate::bootloader::create_mock_bootloader().with_env(BootEnvKey::ValidateUpdate, "1");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert_eq!(
             bl.get_env(BootEnvKey::ValidateUpdate).unwrap().as_deref(),
@@ -780,7 +974,14 @@ mod tests {
             let mut bl = crate::bootloader::create_mock_bootloader()
                 .with_env(BootEnvKey::ValidateUpdate, value);
 
-            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(
+                temp.path(),
+                temp.path(),
+                &mut bl,
+                current_uid(),
+                current_gid(),
+            )
+            .unwrap();
 
             assert!(
                 temp.path().join(UPDATE_VALIDATE_FILE).exists(),
@@ -797,7 +998,14 @@ mod tests {
             .with_env(BootEnvKey::ValidateUpdateFailed, "")
             .with_env(BootEnvKey::BootloaderUpdated, "");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
@@ -810,7 +1018,14 @@ mod tests {
         let mut bl = crate::bootloader::create_mock_bootloader()
             .with_env(BootEnvKey::ValidateUpdateFailed, "1");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());
@@ -828,7 +1043,13 @@ mod tests {
             .with_env(BootEnvKey::ValidateUpdate, "1")
             .with_env(BootEnvKey::ValidateUpdateFailed, "1");
 
-        let result = handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid());
+        let result = handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        );
 
         assert!(matches!(
             result,
@@ -845,7 +1066,14 @@ mod tests {
         let mut bl = crate::bootloader::create_mock_bootloader()
             .with_env(BootEnvKey::BootloaderUpdated, "1");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
         assert_eq!(
@@ -866,7 +1094,8 @@ mod tests {
     ) -> (TempDir, Vec<String>) {
         let temp = TempDir::new().unwrap();
         crate::logging::capture::start_capture();
-        handle_update_validation(temp.path(), bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(temp.path(), temp.path(), bl, current_uid(), current_gid())
+            .unwrap();
         (temp, crate::logging::capture::take_capture())
     }
 
@@ -876,7 +1105,14 @@ mod tests {
             let temp = TempDir::new().unwrap();
             let mut bl = crate::bootloader::create_mock_bootloader().with_env(key, "1");
 
-            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(
+                temp.path(),
+                temp.path(),
+                &mut bl,
+                current_uid(),
+                current_gid(),
+            )
+            .unwrap();
 
             assert!(bl.is_first_boot_done().unwrap(), "{} set", key.as_str());
         }
@@ -889,7 +1125,14 @@ mod tests {
             let mut bl = crate::bootloader::create_mock_bootloader().with_env(key, "1");
             let calls = bl.shared_set_env_calls();
 
-            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(
+                temp.path(),
+                temp.path(),
+                &mut bl,
+                current_uid(),
+                current_gid(),
+            )
+            .unwrap();
 
             assert_eq!(*calls.lock().unwrap(), [BootEnvKey::FirstBootDone, key]);
         }
@@ -904,7 +1147,14 @@ mod tests {
             let calls = bl.shared_set_env_calls();
             calls.lock().unwrap().clear();
 
-            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(
+                temp.path(),
+                temp.path(),
+                &mut bl,
+                current_uid(),
+                current_gid(),
+            )
+            .unwrap();
 
             assert_eq!(*calls.lock().unwrap(), [key]);
         }
@@ -919,7 +1169,14 @@ mod tests {
                 .with_env(BootEnvKey::BootloaderUpdated, "1");
             let calls = bl.shared_set_env_calls();
 
-            handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+            handle_update_validation(
+                temp.path(),
+                temp.path(),
+                &mut bl,
+                current_uid(),
+                current_gid(),
+            )
+            .unwrap();
 
             assert_eq!(
                 *calls.lock().unwrap(),
@@ -937,7 +1194,14 @@ mod tests {
             .with_get_env_error_for(BootEnvKey::FirstBootDone);
         let calls = bl.shared_set_env_calls();
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert_eq!(
             *calls.lock().unwrap(),
@@ -951,7 +1215,14 @@ mod tests {
         let mut bl = crate::bootloader::create_mock_bootloader();
         let calls = bl.shared_set_env_calls();
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(calls.lock().unwrap().is_empty());
     }
@@ -996,7 +1267,14 @@ mod tests {
             .with_env(BootEnvKey::ValidateUpdate, "1")
             .with_set_env_error_for(BootEnvKey::FirstBootDone);
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(temp.path().join(UPDATE_VALIDATE_FILE).exists());
     }
@@ -1087,7 +1365,14 @@ mod tests {
             .with_env(BootEnvKey::BootloaderUpdated, "1")
             .with_set_env_error_for(BootEnvKey::BootloaderUpdated);
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(temp.path().join(BOOTLOADER_UPDATED_FILE).exists());
         assert!(bl.is_first_boot_done().unwrap());
@@ -1098,7 +1383,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = crate::bootloader::create_mock_bootloader().with_get_env_error();
 
-        let result = handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid());
+        let result = handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        );
 
         assert!(
             matches!(result, Err(InitramfsError::Bootloader(_))),
@@ -1113,7 +1404,14 @@ mod tests {
             .with_env(BootEnvKey::ValidateUpdate, "1")
             .with_env(BootEnvKey::BootloaderUpdated, "1");
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         let mode = |name: &str| {
             fs::metadata(temp.path().join(name))
@@ -1135,7 +1433,14 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let mut bl = crate::bootloader::create_mock_bootloader();
 
-        handle_update_validation(temp.path(), &mut bl, current_uid(), current_gid()).unwrap();
+        handle_update_validation(
+            temp.path(),
+            temp.path(),
+            &mut bl,
+            current_uid(),
+            current_gid(),
+        )
+        .unwrap();
 
         assert!(!temp.path().join(UPDATE_VALIDATE_FILE).exists());
         assert!(!temp.path().join(UPDATE_VALIDATE_FAILED_FILE).exists());

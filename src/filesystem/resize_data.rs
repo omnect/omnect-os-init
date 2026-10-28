@@ -19,6 +19,8 @@ const SYNC_CMD: &str = "/bin/sync";
 
 #[cfg(feature = "gpt")]
 const SGDISK_MOVE_BACKUP_HEADER: &str = "-e";
+/// Script mode: parted fails instead of waiting for an answer.
+const PARTED_SCRIPT: &str = "-s";
 const PARTED_RESIZEPART: &str = "resizepart";
 const PARTED_RESIZE_FULL: &str = "100%";
 #[cfg(feature = "dos")]
@@ -61,26 +63,13 @@ pub fn resize_if_needed(layout: &crate::partition::PartitionLayout) -> Result<()
     {
         // The logical data partition lives inside an extended container; resize
         // the container first so there is free space to expand the logical partition.
-        let ext_nr = find_extended_partition(rootblk)?;
-        run_cmd(
-            PARTED_CMD,
-            &[
-                rootblk_str,
-                PARTED_RESIZEPART,
-                &ext_nr.to_string(),
-                PARTED_RESIZE_FULL,
-            ],
-        )?;
+        let ext_nr = find_extended_partition(rootblk)?.to_string();
+        run_cmd(PARTED_CMD, &resizepart_args(rootblk_str, &ext_nr))?;
     }
 
     run_cmd(
         PARTED_CMD,
-        &[
-            rootblk_str,
-            PARTED_RESIZEPART,
-            &part_nr.to_string(),
-            PARTED_RESIZE_FULL,
-        ],
+        &resizepart_args(rootblk_str, &part_nr.to_string()),
     )?;
 
     // Run fsck on the (unmounted) data partition before expanding the filesystem.
@@ -120,23 +109,31 @@ fn partition_number(dev: &Path) -> Option<u32> {
     number.parse().ok()
 }
 
+fn resizepart_args<'a>(disk: &'a str, part_nr: &'a str) -> [&'a str; 5] {
+    [
+        PARTED_SCRIPT,
+        disk,
+        PARTED_RESIZEPART,
+        part_nr,
+        PARTED_RESIZE_FULL,
+    ]
+}
+
+#[cfg(feature = "dos")]
+fn print_args(disk: &str) -> [&str; 3] {
+    [PARTED_SCRIPT, disk, PARTED_PRINT]
+}
+
 /// Find the extended partition number on a DOS/MBR disk.
 ///
 /// Invokes `parted print` and scans its output for a line whose type column
 /// contains "extended". Only relevant for `dos` partition layouts.
 #[cfg(feature = "dos")]
 fn find_extended_partition(rootblk: &Path) -> ResizeResult<u32> {
-    let out = Command::new(PARTED_CMD)
-        .args([
-            rootblk
-                .to_str()
-                .ok_or_else(|| ResizeDataError::NonUtf8Path(rootblk.to_path_buf()))?,
-            PARTED_PRINT,
-        ])
-        .output()
-        .map_err(ResizeDataError::Io)?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let disk = rootblk
+        .to_str()
+        .ok_or_else(|| ResizeDataError::NonUtf8Path(rootblk.to_path_buf()))?;
+    let stdout = run_cmd(PARTED_CMD, &print_args(disk))?;
     parse_extended_partition_nr(&stdout)
         .ok_or_else(|| ResizeDataError::ExtendedPartitionNotFound(rootblk.to_path_buf()))
 }
@@ -155,8 +152,8 @@ fn parse_extended_partition_nr(parted_output: &str) -> Option<u32> {
     None
 }
 
-/// Run an external command and return an error if it exits non-zero.
-fn run_cmd(program: &str, args: &[&str]) -> ResizeResult<()> {
+/// Run an external command and return its stdout, or an error if it exits non-zero.
+fn run_cmd(program: &str, args: &[&str]) -> ResizeResult<String> {
     if args.is_empty() {
         log::info!("Running: {}", program);
     } else {
@@ -183,12 +180,20 @@ fn run_cmd(program: &str, args: &[&str]) -> ResizeResult<()> {
         });
     }
 
-    Ok(())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resizepart_runs_parted_in_script_mode() {
+        assert_eq!(
+            resizepart_args("/dev/mmcblk0", "4"),
+            ["-s", "/dev/mmcblk0", "resizepart", "4", "100%"]
+        );
+    }
 
     #[test]
     fn test_partition_number_sata() {
@@ -213,6 +218,12 @@ mod tests {
     #[test]
     fn test_partition_number_no_digits() {
         assert_eq!(partition_number(Path::new("/dev/sda")), None);
+    }
+
+    #[cfg(feature = "dos")]
+    #[test]
+    fn print_runs_parted_in_script_mode() {
+        assert_eq!(print_args("/dev/mmcblk0"), ["-s", "/dev/mmcblk0", "print"]);
     }
 
     #[cfg(feature = "dos")]

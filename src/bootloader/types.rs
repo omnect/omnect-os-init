@@ -13,16 +13,15 @@ const BASE64_CMD: &str = "/bin/base64";
 /// Encode fsck result for storage in the bootloader environment.
 ///
 /// Produces `base64(gzip("{code}\n{output}"))` using the busybox `gzip` and
-/// `base64` applets in the initramfs. [`decode_fsck_output`] is the only reader,
-/// so the format is internal — but both ends have to change together.
+/// `base64` applets in the initramfs. The format is internal, but
+/// [`unpack_fsck_text`] and [`parse_fsck_text`] have to change with it.
 ///
-/// Returns an empty string if either applet fails. `get_fsck_status` then reports
-/// `Ok(None)`, which is also what an absent record looks like, so the failure is
-/// visible only in the warning logged here. What that costs is the record's trip
-/// across a reboot: this boot's copy stays in `OdsStatus`, because
-/// `apply_boot_env_decision` no longer clears it, so the ODS JSON still carries it.
-/// `/data/var/log/fsck/<partition>.log` does not close the gap on the
-/// `FsckRequiresReboot` path, where the data partition is not mounted.
+/// Returns an empty string if either applet fails, so the record does not
+/// survive a reboot. This boot's copy stays
+/// in `OdsStatus`, because `apply_boot_env_decision` does not clear it, so the
+/// ODS JSON still carries it. `/data/log/fsck/<partition>.log` does not
+/// close the gap on the `FsckRequiresReboot` path, where the data partition is
+/// not mounted.
 pub fn encode_fsck_output(code: i32, output: &str) -> String {
     let raw = format!("{code}\n{output}");
 
@@ -98,7 +97,14 @@ pub fn encode_fsck_output(code: i32, output: &str) -> String {
 /// Decode a fsck result previously encoded with [`encode_fsck_output`].
 ///
 /// Returns a `FsckRecord` on success, or `None` if decoding fails.
+#[cfg(any(feature = "grub", test))]
 pub fn decode_fsck_output(encoded: &str) -> Option<super::FsckRecord> {
+    parse_fsck_text(&unpack_fsck_text(encoded).ok().flatten()?)
+}
+
+/// Undo base64 and gzip. `Ok(None)` if the value does not unpack, `Err` if an
+/// applet cannot run.
+pub(crate) fn unpack_fsck_text(encoded: &str) -> std::io::Result<Option<String>> {
     // Decode base64 → compressed bytes.
     let b64_out = Command::new(BASE64_CMD)
         .args(["-d"])
@@ -113,9 +119,10 @@ pub fn decode_fsck_output(encoded: &str) -> Option<super::FsckRecord> {
             stdin.write_all(encoded.as_bytes())?;
             drop(stdin);
             child.wait_with_output()
-        })
-        .ok()
-        .filter(|out| out.status.success())?;
+        })?;
+    if !b64_out.status.success() {
+        return Ok(None);
+    }
 
     // Decompress gzip → raw text.
     let gz_out = Command::new(GUNZIP_CMD)
@@ -131,11 +138,15 @@ pub fn decode_fsck_output(encoded: &str) -> Option<super::FsckRecord> {
             stdin.write_all(&b64_out.stdout)?;
             drop(stdin);
             child.wait_with_output()
-        })
-        .ok()
-        .filter(|out| out.status.success())?;
+        })?;
+    if !gz_out.status.success() {
+        return Ok(None);
+    }
 
-    let raw = String::from_utf8_lossy(&gz_out.stdout);
+    Ok(Some(String::from_utf8_lossy(&gz_out.stdout).into_owned()))
+}
+
+pub(crate) fn parse_fsck_text(raw: &str) -> Option<super::FsckRecord> {
     let (code_str, output) = raw.split_once('\n')?;
     let code = code_str.trim().parse::<i32>().ok()?;
     Some(super::FsckRecord {
@@ -177,6 +188,77 @@ mod tests {
             crate::filesystem::FsckExitCode::from(code)
         );
         assert_eq!(record.output, output);
+    }
+
+    /// Has only the env; the fsck methods are the trait defaults.
+    struct EnvOnly(Option<String>);
+
+    impl crate::bootloader::BootEnv for EnvOnly {
+        fn get_env(
+            &self,
+            _key: crate::bootloader::BootEnvKey,
+        ) -> crate::bootloader::Result<Option<String>> {
+            Ok(self.0.clone())
+        }
+
+        fn set_env(
+            &mut self,
+            _key: crate::bootloader::BootEnvKey,
+            value: Option<&str>,
+        ) -> crate::bootloader::Result<()> {
+            self.0 = value.map(str::to_string);
+            Ok(())
+        }
+    }
+
+    fn read_fsck_env(
+        value: &str,
+    ) -> crate::bootloader::Result<Option<crate::bootloader::FsckRecord>> {
+        use crate::bootloader::BootEnv;
+        EnvOnly(Some(value.to_string())).get_fsck_status(crate::partition::PartitionName::Data)
+    }
+
+    #[test]
+    fn get_fsck_status_decodes_the_env_value() {
+        assert!(commands_available());
+        let encoded = encode_fsck_output(1, "Errors corrected.");
+
+        let record = read_fsck_env(&encoded).unwrap().unwrap();
+
+        assert_eq!(record.exit_code, FsckExitCode::from(1));
+        assert_eq!(record.output, "Errors corrected.");
+    }
+
+    #[test]
+    fn get_fsck_status_rejects_a_record_without_exit_code() {
+        assert!(commands_available());
+        let output = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                &format!("printf 'Pass 1\\nErrors corrected.' | {GZIP_CMD} -c | {BASE64_CMD} -w0"),
+            ])
+            .output()
+            .unwrap();
+        let encoded = String::from_utf8(output.stdout).unwrap();
+
+        assert!(matches!(
+            read_fsck_env(&encoded),
+            Err(crate::error::BootEnvError::InvalidValue { .. })
+        ));
+    }
+
+    #[test]
+    fn get_fsck_status_rejects_a_value_that_does_not_unpack() {
+        assert!(commands_available());
+        for value in ["not-valid-base64!!!", ""] {
+            assert!(
+                matches!(
+                    read_fsck_env(value),
+                    Err(crate::error::BootEnvError::InvalidValue { .. })
+                ),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

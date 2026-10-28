@@ -20,7 +20,7 @@ Implemented functionality:
 - **Filesystem operations**: fsck, mount manager, overlayfs for `/etc` and `/home`, bind mounts
 - **Logging**: kernel ring buffer (`/dev/kmsg`) with log level prefixes
 - **ODS integration**: status file and update validation files for `omnect-device-service`
-- **fs-links**: symlinks from `etc/omnect/fs-link.json` and `etc/omnect/fs-link.d/`
+- **fs-links**: symlinks from `etc/omnect/fs-link.json`, `etc/omnect/fs-link.d/` and the one-time list `etc/omnect/create-fs-links.txt`
 - **switch\_root**: MS_MOVE + chroot + exec systemd
 - [**Factory reset (modes 1-3)**](docs/usage.md#factory-reset) (feature `factory-reset`)
 - [**Flash modes 1-3**](docs/usage.md#flash-modes) (features `flash-mode-1`, `flash-mode-2`, `flash-mode-3`)
@@ -264,7 +264,7 @@ cargo build --release --features grub,gpt,factory-reset,persistent-var-log
 | `flash-mode-2-direct` | Implies `flash-mode-2`; no verify pass, flashes straight from the `scp` stream | Implemented |
 | `flash-mode-3` | Flash a `wic.xz` downloaded from a URL | Implemented |
 | `flash-mode-network` | Shared layer of modes 2 and 3: network, unmount sweep, xz decoding. Pulled in by a mode feature, never selected on its own | Implemented |
-| `rtc` | The machine has a reliable real-time clock, so mode 3 checks TLS certificates | Implemented |
+| `rtc` | The machine has a reliable real-time clock, so mode 3 checks TLS certificates; without it, mode 3 does not authenticate the server | Implemented |
 
 > **Note:** `grub` and `uboot` are mutually exclusive, and so are `gpt` and `dos`.
 > Exactly one of each pair must be set at build time — `build.rs` panics otherwise.
@@ -353,6 +353,10 @@ cargo test --features grub,gpt,resize-data,test-utils
 cargo test --features grub,dos,resize-data,test-utils
 cargo test --features uboot,gpt,resize-data,test-utils
 cargo test --features uboot,dos,resize-data,test-utils
+
+# With persistent-var-log feature
+cargo test --features grub,gpt,persistent-var-log,test-utils
+cargo test --features uboot,dos,persistent-var-log,factory-reset,test-utils
 
 # With early-modules feature
 cargo test --features grub,gpt,early-modules,test-utils
