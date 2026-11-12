@@ -182,6 +182,15 @@ scp -O image.wic.bmap omnect@<target-ip>:wic.bmap
 scp -O image.wic.xz omnect@<target-ip>:wic.xz
 ```
 
+Use the bmap file the Yocto build creates next to the image
+(`<image>.wic.bmap`), or the one omnect-cli 0.29.0 or later keeps up to date
+with `-b` when it changes the image. The init writes the blocks the bmap file
+lists and zeroes the rest of the disk up to the end of the boot partition; all
+other blocks keep their old data. A bmap created with `bmaptool create` from a
+decompressed image lists no blocks that hold only zeros, because `xz -d` and
+`xzcat` write a sparse file. Old data then stays in those blocks, e.g. old
+ext4 journal blocks that a mount after a power cut can replay.
+
 - The initramfs has no SFTP server, and OpenSSH 9.0 and later uses SFTP by
   default, so pass `-O` (legacy SCP protocol).
 - The SSH host key is created new on every run, so the host warns about a
